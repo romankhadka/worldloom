@@ -278,6 +278,14 @@ defmodule WorldloomWeb.WorldLiveTest do
   test "renders a gesture only from its committed broadcast and exposes cooldown safely", %{
     conn: conn
   } do
+    peer_id = System.unique_integer([:positive, :monotonic])
+
+    peer_address =
+      {127, rem(div(peer_id, 65_536), 256), rem(div(peer_id, 256), 256), rem(peer_id, 256)}
+
+    conn =
+      Plug.Test.put_peer_data(conn, %{address: peer_address, port: 40_000, ssl_cert: nil})
+
     {:ok, live_view, _html} = live(conn, "/")
 
     render_hook(live_view, "gesture", %{"gesture" => "illuminate", "lane" => 0.72})
@@ -291,8 +299,10 @@ defmodule WorldloomWeb.WorldLiveTest do
 
     assert {:ok, stored_event} = Store.fetch(sequence)
     assert stored_event.payload["summary"] == "A visitor illuminated a thread"
-    refute inspect(stored_event.payload) =~ "visitor_identity"
-    refute inspect(stored_event.payload) =~ "127"
+    assert Enum.sort(Map.keys(stored_event.payload)) == ["summary", "visual"]
+    assert Enum.sort(Map.keys(stored_event.payload["visual"])) == ["bend", "pulse", "spread"]
+    refute Map.has_key?(stored_event.payload, "visitor_identity")
+    refute Map.has_key?(stored_event.payload, "peer_address")
     refute_push_event live_view, "worldloom:event", _duplicate
 
     render_hook(live_view, "gesture", %{"gesture" => "illuminate", "lane" => 0.72})
