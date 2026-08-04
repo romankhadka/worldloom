@@ -1,11 +1,3 @@
-# Script for populating the database. You can run it as:
-#
-#     mix run priv/repo/seeds.exs
-#
-# Inside the script, you can read and write to any of your
-# repositories directly:
-#
-#     HelloLive.Repo.insert!(%HelloLive.SomeSchema{})
-#
-# We recommend using the bang functions (`insert!`, `update!`
-# and so on) as they will fail if something goes wrong.
+if Mix.env() == :dev do
+  Mix.Task.run("worldloom.seed_demo")
+end

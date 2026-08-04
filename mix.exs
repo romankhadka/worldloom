@@ -1,11 +1,11 @@
-defmodule HelloLive.MixProject do
+defmodule Worldloom.MixProject do
   use Mix.Project
 
   def project do
     [
-      app: :hello_live,
-      version: "0.1.0",
-      elixir: "~> 1.15",
+      app: :worldloom,
+      version: "1.0.0",
+      elixir: "~> 1.20",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
@@ -20,8 +20,8 @@ defmodule HelloLive.MixProject do
   # Type `mix help compile.app` for more information.
   def application do
     [
-      mod: {HelloLive.Application, []},
-      extra_applications: [:logger, :runtime_tools]
+      mod: {Worldloom.Application, []},
+      extra_applications: [:logger, :runtime_tools, :crypto]
     ]
   end
 
@@ -40,13 +40,13 @@ defmodule HelloLive.MixProject do
   # Type `mix help deps` for examples and options.
   defp deps do
     [
-      {:phoenix, "~> 1.8.1"},
+      {:phoenix, "~> 1.8.9"},
       {:phoenix_ecto, "~> 4.5"},
       {:ecto_sql, "~> 3.13"},
       {:postgrex, ">= 0.0.0"},
       {:phoenix_html, "~> 4.1"},
       {:phoenix_live_reload, "~> 1.2", only: :dev},
-      {:phoenix_live_view, "~> 1.1.0"},
+      {:phoenix_live_view, "~> 1.2.8"},
       {:lazy_html, ">= 0.1.0", only: :test},
       {:phoenix_live_dashboard, "~> 0.8.3"},
       {:esbuild, "~> 0.10", runtime: Mix.env() == :dev},
@@ -59,11 +59,12 @@ defmodule HelloLive.MixProject do
        compile: false,
        depth: 1},
       {:swoosh, "~> 1.16"},
-      {:req, "~> 0.5"},
+      {:req, "~> 0.6.3"},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
       {:gettext, "~> 0.26"},
       {:jason, "~> 1.2"},
+      {:logger_json, "~> 7.0.4"},
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"}
     ]
@@ -82,10 +83,10 @@ defmodule HelloLive.MixProject do
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
       "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
-      "assets.build": ["compile", "tailwind hello_live", "esbuild hello_live"],
+      "assets.build": ["compile", "tailwind worldloom", "esbuild worldloom"],
       "assets.deploy": [
-        "tailwind hello_live --minify",
-        "esbuild hello_live --minify",
+        "tailwind worldloom --minify",
+        "esbuild worldloom --minify",
         "phx.digest"
       ],
       precommit: ["compile --warning-as-errors", "deps.unlock --unused", "format", "test"]

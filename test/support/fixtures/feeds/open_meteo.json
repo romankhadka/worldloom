@@ -1,0 +1,29 @@
+[
+  {
+    "current": {
+      "time": "2026-08-03T12:00",
+      "temperature_2m": 14.0,
+      "precipitation": 0.0,
+      "wind_speed_10m": 10.0,
+      "is_day": 1
+    }
+  },
+  {
+    "current": {
+      "time": "2026-08-03T12:00",
+      "temperature_2m": 28.0,
+      "precipitation": 0.4,
+      "wind_speed_10m": 25.0,
+      "is_day": 0
+    }
+  },
+  {
+    "current": {
+      "time": "2026-08-03T12:00",
+      "temperature_2m": 22.0,
+      "precipitation": 0.0,
+      "wind_speed_10m": 15.0,
+      "is_day": 1
+    }
+  }
+]

@@ -1,0 +1,221 @@
+<Layouts.app flash={@flash}>
+  <section
+    id="worldloom"
+    data-mode={@mode}
+    data-event-window-size={map_size(@trusted_events)}
+    class="worldloom-shell"
+  >
+    <div
+      id="loom-canvas"
+      phx-hook="Worldloom"
+      phx-update="ignore"
+      data-instructions={Jason.encode!(@instructions)}
+      data-instruction-count={length(@instructions)}
+      data-ambient={@ambient && Jason.encode!(Instruction.from_event(@ambient))}
+      role="img"
+      aria-label="A living public tapestry woven from public signals. Use arrow keys to inspect formations."
+      tabindex="0"
+      class="loom-stage"
+    >
+      <canvas aria-hidden="true"></canvas>
+    </div>
+
+    <header class="worldloom-header">
+      <.link id="wordmark" navigate={~p"/"} class="wordmark" aria-label="Worldloom live weave">
+        <span class="wordmark-glyph" aria-hidden="true"></span> Worldloom
+      </.link>
+
+      <div class="header-context">
+        <span id="utc-chapter" class="utc-chapter">{@utc_chapter} UTC</span>
+        <span id="viewer-count" class="viewer-count">
+          <span class="viewer-pulse" aria-hidden="true"></span>
+          {@viewer_count} viewing
+        </span>
+        <nav class="worldloom-nav" aria-label="Worldloom">
+          <.link id="archive-link" navigate={~p"/chapters"}>Archive</.link>
+          <.link id="about-link" navigate={~p"/about"}>About</.link>
+          <button id="share-worldloom" type="button" phx-click="share">Share</button>
+        </nav>
+      </div>
+    </header>
+
+    <div id="live-edge" class="live-edge" aria-label="Live edge">
+      <span>Live</span>
+    </div>
+
+    <aside
+      id="signal-legend"
+      data-wikimedia-state={@feed_health.wikimedia.state}
+      data-usgs-state={@feed_health.usgs.state}
+      data-weather-state={@feed_health.open_meteo.state}
+      class="signal-legend"
+      aria-label="Signal legend"
+    >
+      <span class="legend-item legend-wikimedia" data-family="wikimedia">
+        <i aria-hidden="true"></i> Wikimedia
+      </span>
+      <span class="legend-item legend-usgs" data-family="usgs">
+        <i aria-hidden="true"></i>
+        Earth <small :if={@feed_health.usgs.state == :quiet}>quiet</small>
+      </span>
+      <span class="legend-item legend-weather" data-family="open_meteo">
+        <i aria-hidden="true"></i>
+        Weather <small :if={@feed_health.open_meteo.state == :stale}>stale</small>
+      </span>
+      <span class="legend-item legend-visitor" data-family="visitor">
+        <i aria-hidden="true"></i> Visitors
+      </span>
+    </aside>
+
+    <div
+      id="gesture-dock"
+      aria-disabled={to_string(not @live? or not @at_live_edge or not is_nil(@cooldown_until))}
+      class="gesture-dock"
+    >
+      <form
+        id="gesture-lane-form"
+        phx-change="lane-change"
+        phx-submit="weave-gesture"
+        class="gesture-form"
+      >
+        <div class="gesture-actions" role="group" aria-label="Weave a visitor gesture">
+          <button
+            :for={
+              {gesture, label} <- [{"tug", "Tug"}, {"knot", "Knot"}, {"illuminate", "Illuminate"}]
+            }
+            id={"gesture-#{gesture}"}
+            type="submit"
+            name="gesture"
+            value={gesture}
+            class="gesture-button"
+            data-gesture={gesture}
+            phx-disable-with="Weaving…"
+            disabled={not @live? or not @at_live_edge or not is_nil(@cooldown_until)}
+          >
+            <span class="gesture-mark" aria-hidden="true"></span>
+            {label}
+          </button>
+        </div>
+
+        <div class="lane-control">
+          <label for="gesture-lane">Vertical lane</label>
+          <input
+            id="gesture-lane"
+            name="lane"
+            type="range"
+            min="0"
+            max="1"
+            step="0.05"
+            value={@gesture_lane}
+            disabled={not @live? or not @at_live_edge}
+            aria-label="Gesture vertical lane"
+          />
+        </div>
+      </form>
+
+      <p id="gesture-status" class="gesture-status" aria-live="polite">
+        {@gesture_status}
+      </p>
+    </div>
+
+    <.link
+      :if={not @live? or not @at_live_edge}
+      id="return-live"
+      navigate={~p"/"}
+      class="return-live"
+    >
+      Return live
+    </.link>
+
+    <div id="timeline" class="timeline" aria-label="UTC timeline">
+      <span>Earlier</span>
+      <i aria-hidden="true"></i>
+      <span>Now</span>
+    </div>
+
+    <aside id="signal-detail" class="signal-detail" aria-live="polite">
+      <div id="mobile-detail-sheet">
+        <p class="eyebrow">Formation detail</p>
+        <p :if={is_nil(@selected_detail)} class="detail-empty">
+          Select a formation to inspect its public detail.
+        </p>
+        <div :if={@selected_detail}>
+          <p class="detail-summary">{@selected_detail.summary}</p>
+          <p class="detail-meta">{@selected_detail.source} · {@selected_detail.occurred_at}</p>
+        </div>
+        <label class="share-field" for="share-link">
+          Permalink <input id="share-link" type="url" readonly value={@permalink || "/"} />
+        </label>
+      </div>
+    </aside>
+
+    <section id="archive-panel" data-active={@mode == :archive || nil} class="worldloom-panel">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">Persistent public record</p>
+          <h1>UTC chapters</h1>
+        </div>
+        <.link navigate={~p"/"}>Close</.link>
+      </div>
+      <ol id="archive-rows" phx-update="stream" class="chapter-list">
+        <li :for={{dom_id, chapter} <- @streams.archive_rows} id={dom_id}>
+          <.link navigate={
+            ~p"/chapters/#{Date.to_iso8601(chapter.date)}/#{chapter.first_sequence}"
+          }>
+            <span>{chapter.date}</span>
+            <small>{chapter.count} formations</small>
+          </.link>
+        </li>
+      </ol>
+    </section>
+
+    <section
+      id="about-panel"
+      data-active={@mode == :about || nil}
+      class="worldloom-panel about-panel"
+    >
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">A shared instrument</p>
+          <h1>About Worldloom</h1>
+        </div>
+        <.link navigate={~p"/"}>Close</.link>
+      </div>
+      <p class="about-lede">
+        Public change becomes a shared, persistent fabric. No accounts, names, chat, uploads,
+        or visitor tracking enter the weave.
+      </p>
+      <div id="source-attribution" class="source-attribution">
+        <h2>Public signals</h2>
+        <a href="https://stream.wikimedia.org/" rel="noreferrer">Wikimedia EventStreams</a>
+        <a href="https://earthquake.usgs.gov/" rel="noreferrer">USGS Earthquake Hazards</a>
+        <a href="https://open-meteo.com/" rel="noreferrer">Open-Meteo</a>
+      </div>
+    </section>
+
+    <p id="live-summary" class="sr-only" aria-live="polite">
+      {@viewer_count} people are viewing. Latest public formation sequence: {List.last(
+        @instructions
+      )["sequence"] || 0}.
+    </p>
+
+    <div id="accessible-formations" phx-update="stream" class="sr-only">
+      <button
+        :for={{dom_id, formation} <- @streams.accessible_formations}
+        id={dom_id}
+        type="button"
+        phx-click="select-formation"
+        phx-value-sequence={formation["sequence"]}
+      >
+        {formation["summary"]}
+      </button>
+    </div>
+
+    <noscript>
+      <p class="noscript-note">
+        Worldloom needs JavaScript to draw its living Canvas. The public archive remains available
+        when JavaScript is enabled.
+      </p>
+    </noscript>
+  </section>
+</Layouts.app>

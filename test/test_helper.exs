@@ -1,2 +1,2 @@
 ExUnit.start()
-Ecto.Adapters.SQL.Sandbox.mode(HelloLive.Repo, :manual)
+Ecto.Adapters.SQL.Sandbox.mode(Worldloom.Repo, :manual)

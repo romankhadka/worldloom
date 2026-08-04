@@ -1,0 +1,24 @@
+{
+  "type": "FeatureCollection",
+  "metadata": {"generated": 1785758400000, "count": 3},
+  "features": [
+    {
+      "type": "Feature",
+      "id": "us-test-alpha",
+      "properties": {"mag": 5.2, "place": "South Sandwich Islands region", "time": 1785758401000},
+      "geometry": {"type": "Point", "coordinates": [-26.42, -57.81, 34.2]}
+    },
+    {
+      "type": "Feature",
+      "id": "us-test-beta",
+      "properties": {"mag": -1.5, "place": "Northern California", "time": 1785758402000},
+      "geometry": {"type": "Point", "coordinates": [-122.73, 38.81, 2.1]}
+    },
+    {
+      "type": "Feature",
+      "id": "us-test-gamma",
+      "properties": {"mag": 11.2, "place": "Southern Pacific Ocean", "time": 1785758403000},
+      "geometry": {"type": "Point", "coordinates": [-120.5, -32.25, 10.0]}
+    }
+  ]
+}

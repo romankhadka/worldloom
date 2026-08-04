@@ -1,0 +1,20 @@
+[
+  {
+    "meta": {"dt": "2026-08-03T12:00:00Z"},
+    "type": "edit",
+    "wiki": "enwiki",
+    "length": {"old": 120, "new": 150}
+  },
+  {
+    "meta": {"dt": "2026-08-03T12:00:00Z"},
+    "type": "edit",
+    "wiki": "dewiki",
+    "length": {"old": 80, "new": 70}
+  },
+  {
+    "meta": {"dt": "2026-08-03T12:00:00Z"},
+    "type": "new",
+    "wiki": "enwiki",
+    "length": {"old": 0, "new": 5}
+  }
+]

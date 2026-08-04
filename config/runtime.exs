@@ -12,15 +12,61 @@ import Config
 # If you use `mix release`, you need to explicitly enable the server
 # by passing the PHX_SERVER=true when you start it:
 #
-#     PHX_SERVER=true bin/hello_live start
+#     PHX_SERVER=true bin/worldloom start
 #
 # Alternatively, you can use `mix phx.gen.release` to generate a `bin/server`
 # script that automatically sets the env var above.
 if System.get_env("PHX_SERVER") do
-  config :hello_live, HelloLiveWeb.Endpoint, server: true
+  config :worldloom, WorldloomWeb.Endpoint, server: true
 end
 
+signal_config = Application.fetch_env!(:worldloom, Worldloom.Signals)
+
+signal_config =
+  case System.get_env("WORLDLOOM_FEEDS_ENABLED") do
+    nil ->
+      signal_config
+
+    enabled when enabled in ["true", "false"] ->
+      Keyword.put(signal_config, :enabled, enabled == "true")
+
+    _invalid ->
+      raise "environment variable WORLDLOOM_FEEDS_ENABLED must be true or false"
+  end
+
+config :worldloom, Worldloom.Signals, signal_config
+
 if config_env() == :prod do
+  rate_limit_salt =
+    System.get_env("WORLDLOOM_RATE_LIMIT_SALT") ||
+      raise "environment variable WORLDLOOM_RATE_LIMIT_SALT is missing"
+
+  config :worldloom, :rate_limit_salt, rate_limit_salt
+
+  signal_config =
+    [
+      wikimedia_url: "WORLDLOOM_WIKIMEDIA_URL",
+      usgs_url: "WORLDLOOM_USGS_URL",
+      open_meteo_url: "WORLDLOOM_OPEN_METEO_URL"
+    ]
+    |> Enum.reduce(signal_config, fn {config_key, environment_key}, configured_signals ->
+      case System.get_env(environment_key) do
+        nil ->
+          configured_signals
+
+        override_url ->
+          case URI.parse(override_url) do
+            %URI{scheme: "https", host: host} when is_binary(host) and host != "" ->
+              Keyword.put(configured_signals, config_key, override_url)
+
+            _invalid_url ->
+              raise "environment variable #{environment_key} must be an HTTPS URL"
+          end
+      end
+    end)
+
+  config :worldloom, Worldloom.Signals, signal_config
+
   database_url =
     System.get_env("DATABASE_URL") ||
       raise """
@@ -30,7 +76,7 @@ if config_env() == :prod do
 
   maybe_ipv6 = if System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: []
 
-  config :hello_live, HelloLive.Repo,
+  config :worldloom, Worldloom.Repo,
     # ssl: true,
     url: database_url,
     pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
@@ -50,13 +96,17 @@ if config_env() == :prod do
       You can generate one by calling: mix phx.gen.secret
       """
 
-  host = System.get_env("PHX_HOST") || "example.com"
+  host =
+    System.get_env("PHX_HOST") ||
+      raise "environment variable PHX_HOST is missing"
+
   port = String.to_integer(System.get_env("PORT") || "4000")
 
-  config :hello_live, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
+  config :worldloom, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
-  config :hello_live, HelloLiveWeb.Endpoint,
+  config :worldloom, WorldloomWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
+    check_origin: ["https://#{host}"],
     http: [
       # Enable IPv6 and bind on all interfaces.
       # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.
@@ -72,7 +122,7 @@ if config_env() == :prod do
   # To get SSL working, you will need to add the `https` key
   # to your endpoint configuration:
   #
-  #     config :hello_live, HelloLiveWeb.Endpoint,
+  #     config :worldloom, WorldloomWeb.Endpoint,
   #       https: [
   #         ...,
   #         port: 443,
@@ -94,7 +144,7 @@ if config_env() == :prod do
   # We also recommend setting `force_ssl` in your config/prod.exs,
   # ensuring no data is ever sent via http, always redirecting to https:
   #
-  #     config :hello_live, HelloLiveWeb.Endpoint,
+  #     config :worldloom, WorldloomWeb.Endpoint,
   #       force_ssl: [hsts: true]
   #
   # Check `Plug.SSL` for all available options in `force_ssl`.
@@ -104,7 +154,7 @@ if config_env() == :prod do
   # In production you need to configure the mailer to use a different adapter.
   # Here is an example configuration for Mailgun:
   #
-  #     config :hello_live, HelloLive.Mailer,
+  #     config :worldloom, Worldloom.Mailer,
   #       adapter: Swoosh.Adapters.Mailgun,
   #       api_key: System.get_env("MAILGUN_API_KEY"),
   #       domain: System.get_env("MAILGUN_DOMAIN")

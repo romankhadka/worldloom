@@ -7,19 +7,29 @@
 # General application configuration
 import Config
 
-config :hello_live,
-  ecto_repos: [HelloLive.Repo],
-  generators: [timestamp_type: :utc_datetime]
+config :worldloom,
+  ecto_repos: [Worldloom.Repo],
+  generators: [timestamp_type: :utc_datetime],
+  secure_cookies: false,
+  rate_limit_salt: "worldloom-development-only-rate-limit-salt"
+
+config :worldloom, Worldloom.Signals,
+  enabled: true,
+  wikimedia_url: "https://stream.wikimedia.org/v2/stream/recentchange",
+  usgs_url: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson",
+  open_meteo_url: "https://api.open-meteo.com/v1/forecast",
+  earthquake_interval_ms: 60_000,
+  weather_interval_ms: 600_000
 
 # Configures the endpoint
-config :hello_live, HelloLiveWeb.Endpoint,
+config :worldloom, WorldloomWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Bandit.PhoenixAdapter,
   render_errors: [
-    formats: [html: HelloLiveWeb.ErrorHTML, json: HelloLiveWeb.ErrorJSON],
+    formats: [html: WorldloomWeb.ErrorHTML, json: WorldloomWeb.ErrorJSON],
     layout: false
   ],
-  pubsub_server: HelloLive.PubSub,
+  pubsub_server: Worldloom.PubSub,
   live_view: [signing_salt: "0ughJWQ/"]
 
 # Configures the mailer
@@ -29,12 +39,12 @@ config :hello_live, HelloLiveWeb.Endpoint,
 #
 # For production it's recommended to configure a different adapter
 # at the `config/runtime.exs`.
-config :hello_live, HelloLive.Mailer, adapter: Swoosh.Adapters.Local
+config :worldloom, Worldloom.Mailer, adapter: Swoosh.Adapters.Local
 
 # Configure esbuild (the version is required)
 config :esbuild,
   version: "0.25.4",
-  hello_live: [
+  worldloom: [
     args:
       ~w(js/app.js --bundle --target=es2022 --outdir=../priv/static/assets/js --external:/fonts/* --external:/images/* --alias:@=.),
     cd: Path.expand("../assets", __DIR__),
@@ -44,7 +54,7 @@ config :esbuild,
 # Configure tailwind (the version is required)
 config :tailwind,
   version: "4.1.7",
-  hello_live: [
+  worldloom: [
     args: ~w(
       --input=assets/css/app.css
       --output=priv/static/assets/css/app.css

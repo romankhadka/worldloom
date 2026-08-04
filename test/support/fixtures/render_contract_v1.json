@@ -1,0 +1,74 @@
+[
+  {
+    "sequence": 101,
+    "kind": "wikimedia",
+    "source": "wikimedia",
+    "occurred_at": "2026-08-03T12:00:00.000000Z",
+    "render_version": 1,
+    "seed": 1470300345,
+    "lane": 0.18,
+    "intensity": 0.42,
+    "visual": {"spread": 0.75469, "bend": 0.638649, "pulse": 0.9962},
+    "summary": "18 edits moved through 7 languages"
+  },
+  {
+    "sequence": 102,
+    "kind": "earthquake",
+    "source": "usgs",
+    "occurred_at": "2026-08-03T12:00:01.000000Z",
+    "render_version": 1,
+    "seed": 1242253602,
+    "lane": 0.61,
+    "intensity": 0.78,
+    "visual": {"spread": 0.276551, "bend": -0.696548, "pulse": 0.923923},
+    "summary": "Magnitude 5.2 near South Sandwich Islands"
+  },
+  {
+    "sequence": 103,
+    "kind": "weather",
+    "source": "open_meteo",
+    "occurred_at": "2026-08-03T12:00:02.000000Z",
+    "render_version": 1,
+    "seed": 32054040,
+    "lane": 0.35,
+    "intensity": 0.55,
+    "visual": {"spread": 0.45232, "bend": -0.20772, "pulse": 0.336925},
+    "summary": "A mild, windy pattern crosses twelve cities"
+  },
+  {
+    "sequence": 104,
+    "kind": "tug",
+    "source": "visitor",
+    "occurred_at": "2026-08-03T12:00:03.000000Z",
+    "render_version": 1,
+    "seed": 1219534469,
+    "lane": 0.25,
+    "intensity": 0.4,
+    "visual": {"spread": 0.216346, "bend": -0.470283, "pulse": 0.600913},
+    "summary": "A visitor tugged the living edge"
+  },
+  {
+    "sequence": 105,
+    "kind": "knot",
+    "source": "visitor",
+    "occurred_at": "2026-08-03T12:00:04.000000Z",
+    "render_version": 1,
+    "seed": 341566140,
+    "lane": 0.5,
+    "intensity": 0.6,
+    "visual": {"spread": 0.412209, "bend": 0.113593, "pulse": 0.997638},
+    "summary": "A visitor tied a knot in the weave"
+  },
+  {
+    "sequence": 106,
+    "kind": "illuminate",
+    "source": "visitor",
+    "occurred_at": "2026-08-03T12:00:05.000000Z",
+    "render_version": 1,
+    "seed": 261862363,
+    "lane": 0.75,
+    "intensity": 0.8,
+    "visual": {"spread": 0.273392, "bend": -0.107693, "pulse": 0.747545},
+    "summary": "A visitor illuminated a thread"
+  }
+]

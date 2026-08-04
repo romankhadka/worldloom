@@ -1,27 +1,33 @@
 import Config
 
+config :worldloom, Worldloom.Signals, enabled: false
+
+e2e? = System.get_env("WORLDLOOM_E2E") == "true"
+
 # Configure your database
 #
 # The MIX_TEST_PARTITION environment variable can be used
 # to provide built-in test partitioning in CI environment.
 # Run `mix help test` for more information.
-config :hello_live, HelloLive.Repo,
+config :worldloom, Worldloom.Repo,
   username: "postgres",
   password: "postgres",
   hostname: "localhost",
-  database: "hello_live_test#{System.get_env("MIX_TEST_PARTITION")}",
-  pool: Ecto.Adapters.SQL.Sandbox,
+  database:
+    if(e2e?, do: "worldloom_e2e", else: "worldloom_test#{System.get_env("MIX_TEST_PARTITION")}"),
+  pool: if(e2e?, do: DBConnection.ConnectionPool, else: Ecto.Adapters.SQL.Sandbox),
   pool_size: System.schedulers_online() * 2
 
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
-config :hello_live, HelloLiveWeb.Endpoint,
+config :worldloom, WorldloomWeb.Endpoint,
+  url: [host: "localhost", port: 4002],
   http: [ip: {127, 0, 0, 1}, port: 4002],
   secret_key_base: "CvUZrdJ8hBxL2+rKbevnebnowgVi6IMZO4mEPODfyexphR4GAAnaQcmMqMyN9SoY",
-  server: false
+  server: e2e?
 
 # In test we don't send emails
-config :hello_live, HelloLive.Mailer, adapter: Swoosh.Adapters.Test
+config :worldloom, Worldloom.Mailer, adapter: Swoosh.Adapters.Test
 
 # Disable swoosh api client as it is only required for production adapters
 config :swoosh, :api_client, false
