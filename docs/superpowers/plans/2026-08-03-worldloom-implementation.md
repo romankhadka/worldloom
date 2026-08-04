@@ -1348,8 +1348,8 @@ Unknown render versions must produce a static fallback marker and readable detai
 - [ ] Create a one-year app-scoped deploy token and pipe it directly into the existing GitHub repository secret without printing/capturing it. Verify only the secret name/timestamp:
 
   ```bash
-  rtk proxy zsh -c 'fly tokens create deploy --config fly.toml --expiry 8760h | gh secret set FLY_API_TOKEN --repo romankhadka/hello_phoenix'
-  rtk gh secret list --repo romankhadka/hello_phoenix
+  rtk proxy zsh -c 'fly tokens create deploy --config fly.toml --expiry 8760h | gh secret set FLY_API_TOKEN --repo romankhadka/worldloom'
+  rtk gh secret list --repo romankhadka/worldloom
   ```
 
   Expected: `FLY_API_TOKEN` is listed; its value never appears in output, files, shell history, or docs.
@@ -1394,19 +1394,17 @@ Unknown render versions must produce a static fallback marker and readable detai
   rtk proxy zsh -c 'worldloom_run_id=$(gh run list --branch roman/worldloom --workflow ci.yml --limit 1 --json databaseId --jq ".[0].databaseId"); gh run watch "$worldloom_run_id" --exit-status; unset worldloom_run_id'
   ```
 
-- [ ] Only after branch CI is green, confirm `romankhadka/worldloom` still does not exist and the current remote resolves to the public `romankhadka/hello_phoenix` repository:
+- [ ] Only after branch CI is green, confirm the current remote resolves to the public `romankhadka/worldloom` repository:
 
   ```bash
-  rtk gh repo view romankhadka/worldloom --json name,url,visibility
-  rtk gh repo view romankhadka/hello_phoenix --json name,url,visibility,defaultBranchRef
+  rtk gh repo view romankhadka/worldloom --json name,url,visibility,defaultBranchRef
   ```
 
-  Expected: first command reports not found; second reports `PUBLIC`.
+  Expected: the repository reports `PUBLIC` with `master` as its default branch.
 
-- [ ] Rename the existing public repository rather than creating a second history, then update and verify the remote:
+- [ ] Keep the existing public repository history under the final `worldloom` identity, then update and verify the remote:
 
   ```bash
-  rtk gh repo rename worldloom --repo romankhadka/hello_phoenix --yes
   rtk git remote set-url origin git@github.com:romankhadka/worldloom.git
   rtk gh repo view romankhadka/worldloom --json name,url,visibility
   rtk git remote -v

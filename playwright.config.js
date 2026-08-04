@@ -26,10 +26,10 @@ export default defineConfig({
     ? undefined
     : {
         command:
-          "rtk proxy env MIX_ENV=test WORLDLOOM_E2E=true WORLDLOOM_FEEDS_ENABLED=false mix ecto.reset && " +
-          "rtk proxy env MIX_ENV=test WORLDLOOM_E2E=true WORLDLOOM_FEEDS_ENABLED=false mix worldloom.seed_demo && " +
-          "rtk proxy env MIX_ENV=test WORLDLOOM_E2E=true WORLDLOOM_FEEDS_ENABLED=false mix assets.build && " +
-          "rtk proxy env MIX_ENV=test WORLDLOOM_E2E=true WORLDLOOM_FEEDS_ENABLED=false mix phx.server",
+          "env MIX_ENV=test WORLDLOOM_E2E=true WORLDLOOM_FEEDS_ENABLED=false mix ecto.reset && " +
+          "env MIX_ENV=test WORLDLOOM_E2E=true WORLDLOOM_FEEDS_ENABLED=false mix worldloom.seed_demo && " +
+          "env MIX_ENV=test WORLDLOOM_E2E=true WORLDLOOM_FEEDS_ENABLED=false mix assets.build && " +
+          "env MIX_ENV=test WORLDLOOM_E2E=true WORLDLOOM_FEEDS_ENABLED=false mix phx.server",
         url: `${localBaseURL}/healthz`,
         reuseExistingServer: !process.env.CI,
         timeout: 120_000,
