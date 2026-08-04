@@ -1,6 +1,8 @@
 import http from "k6/http"
 import ws from "k6/ws"
 
+import {liveViewEventValue, socketCloseError} from "./live_view_protocol.js"
+
 const phoenixProtocolVersion = "2.0.0"
 const heartbeatIntervalMs = 25_000
 
@@ -64,6 +66,13 @@ export function connectLiveView({
         outcome.errors.push(safeError)
         onError(safeError, outcome)
       })
+
+      socket.on("close", () => {
+        const safeError = socketCloseError(client.leaving)
+        if (!safeError) return
+        outcome.errors.push(safeError)
+        onError(safeError, outcome)
+      })
     },
   )
 
@@ -115,7 +124,7 @@ export function pushLiveViewEvent(client, event, value = {}, type = "click") {
   return push(client, client.topic, "event", {
     type,
     event,
-    value,
+    value: liveViewEventValue(value, type),
     cid: null,
   })
 }

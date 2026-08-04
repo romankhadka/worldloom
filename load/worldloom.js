@@ -191,6 +191,35 @@ function optionsFor(selectedProfile) {
     }
   }
 
+  if (selectedProfile === "local-100") {
+    return {
+      scenarios: {
+        viewers: {
+          executor: "ramping-vus",
+          exec: "viewer",
+          startVUs: 0,
+          stages: [
+            {duration: "20s", target: 100},
+            {duration: "2m", target: 100},
+            {duration: "20s", target: 0},
+          ],
+          gracefulRampDown: "15s",
+        },
+        gestures: {
+          executor: "constant-arrival-rate",
+          exec: "gesture",
+          startTime: "20s",
+          duration: "60s",
+          rate: 10,
+          timeUnit: "1s",
+          preAllocatedVUs: 50,
+          maxVUs: 100,
+        },
+      },
+      thresholds: launchOptions().thresholds,
+    }
+  }
+
   return {
     vus: 1,
     duration: __ENV.WORLDLOOM_DURATION ?? "10s",

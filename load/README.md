@@ -13,6 +13,7 @@ bypassed.
 | --- | --- | --- |
 | `smoke` | Protocol development | One connected viewer for 10 seconds |
 | `gesture-smoke` | Persistence and policy classification | One or more fresh anonymous identities |
+| `local-100` | Local LiveView capacity profile | 100 viewers; 10 gesture attempts/second for 60 seconds |
 | `local` | Five-minute capacity rehearsal | 200 viewers; 20 gesture attempts/second for 60 seconds |
 | `launch` | Exact launch gate | Two-minute ramp to 200, 30-minute hold, two-minute ramp-down; 20 gesture attempts/second for the first 60 seconds of the hold |
 
@@ -31,6 +32,20 @@ Then run the protocol smoke:
 
 ```sh
 k6 run --vus 1 --duration 10s load/worldloom.js
+```
+
+Run the one-gesture profile to verify that a real LiveView form event is
+classified and its committed sequence is observed:
+
+```sh
+rtk env WORLDLOOM_PROFILE=gesture-smoke k6 run load/worldloom.js
+```
+
+Run the explicit 100-viewer profile to exercise concurrent LiveView joins and
+a 10-per-second gesture stream under the launch thresholds:
+
+```sh
+rtk env WORLDLOOM_PROFILE=local-100 k6 run load/worldloom.js
 ```
 
 Exercise both durable commits and expected peer-rate rejections with fresh
