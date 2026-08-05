@@ -5,6 +5,7 @@ const maximumSequenceGap = 12
 
 export function buildTopology(instructions) {
   const topology = {
+    spine: [],
     anchors: [],
     edges: [],
     formations: [],
@@ -20,6 +21,7 @@ export function buildTopology(instructions) {
 
     switch (instruction.kind) {
       case "wikimedia":
+        extendSpine(topology, instruction)
         extendFiber(topology, instruction)
         break
       case "earthquake":
@@ -51,9 +53,16 @@ function attachEarthquake(topology, instruction) {
 }
 
 function applyTug(topology, instruction) {
+  const spineTug = tugSpine(topology, instruction)
   const target = nearestAnchor(topology.anchors, instruction)
   if (!target) {
-    topology.formations.push({...formationFor(instruction), affectedAnchorIds: [], beforeLanes: [], afterLanes: []})
+    topology.formations.push({
+      ...formationFor(instruction),
+      affectedAnchorIds: [],
+      beforeLanes: [],
+      afterLanes: [],
+      ...spineTug,
+    })
     return
   }
 
@@ -76,7 +85,31 @@ function applyTug(topology, instruction) {
     affectedAnchorIds: affected.map(anchor => anchor.id),
     beforeLanes,
     afterLanes: affected.map(anchor => anchor.lane),
+    ...spineTug,
   })
+}
+
+function tugSpine(topology, instruction) {
+  const target = nearestAnchor(topology.spine, instruction)
+  if (!target) {
+    return {affectedSpineIds: [], beforeSpineLanes: [], afterSpineLanes: []}
+  }
+
+  const targetIndex = topology.spine.findIndex(point => point.id === target.id)
+  const affected = topology.spine.slice(Math.max(0, targetIndex - 1), targetIndex + 2)
+  const beforeSpineLanes = affected.map(point => point.lane)
+
+  for (const point of affected) {
+    const neighborWeight = point.id === target.id ? 1 : 0.45
+    const strength = (0.16 + instruction.intensity * 0.28) * neighborWeight
+    point.lane = clampLane(point.lane + (instruction.lane - point.lane) * strength)
+  }
+
+  return {
+    affectedSpineIds: affected.map(point => point.id),
+    beforeSpineLanes,
+    afterSpineLanes: affected.map(point => point.lane),
+  }
 }
 
 function applyKnot(topology, instruction) {
@@ -149,6 +182,26 @@ function formationFor(instruction) {
 
 function clampLane(lane) {
   return Math.min(1, Math.max(0, Number(lane.toFixed(6))))
+}
+
+function extendSpine(topology, instruction) {
+  const previous = topology.spine.at(-1)
+  const lane = previous
+    ? clampLane(
+        previous.lane * 0.76 +
+          instruction.lane * 0.24 +
+          instruction.visual.bend * 0.012,
+      )
+    : instruction.lane
+
+  topology.spine.push({
+    id: `spine:${instruction.sequence}`,
+    sequence: instruction.sequence,
+    lane,
+    source: instruction.source,
+    intensity: instruction.intensity,
+    visual: instruction.visual,
+  })
 }
 
 function extendFiber(topology, instruction) {

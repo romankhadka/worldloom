@@ -36,6 +36,36 @@ test("builds the same bounded topology regardless of input order and duplicates"
   assert.ok(first.edges.every(edge => first.anchors.some(anchor => anchor.id === edge.to)))
 })
 
+test("derives one calm primary spine through a busy public window", () => {
+  const instructions = Array.from({length: 48}, (_item, index) =>
+    instruction(index + 1, "wikimedia", {
+      lane: index % 2 === 0 ? 0.08 : 0.92,
+      visual: {spread: 0.5, bend: index % 3 === 0 ? 0.8 : -0.8, pulse: 0.75},
+    }),
+  )
+
+  const topology = buildTopology(instructions)
+
+  assert.equal(topology.spine.length, 48)
+  assert.deepEqual(
+    topology.spine.map(point => point.sequence),
+    instructions.map(item => item.sequence),
+  )
+  for (let index = 1; index < topology.spine.length; index++) {
+    assert.ok(Math.abs(topology.spine[index].lane - topology.spine[index - 1].lane) <= 0.25)
+  }
+})
+
+test("keeps spine derivation deterministic, bounded, and viewport independent", () => {
+  const instructions = Array.from({length: 700}, (_item, index) => instruction(index + 1))
+  const first = buildTopology(instructions)
+  const second = buildTopology([...instructions].reverse().concat(instructions[500]))
+
+  assert.deepEqual(second.spine, first.spine)
+  assert.equal(first.spine.length, 600)
+  assert.equal(first.spine[0].sequence, 101)
+})
+
 test("derives structural tug, knot, and illuminate effects", () => {
   const fibers = Array.from({length: 18}, (_item, index) => instruction(index + 1))
   const topology = buildTopology([
@@ -51,6 +81,12 @@ test("derives structural tug, knot, and illuminate effects", () => {
 
   assert.ok(tug.affectedAnchorIds.length >= 1)
   assert.ok(tug.beforeLanes.some((lane, index) => lane !== tug.afterLanes[index]))
+  assert.ok(tug.affectedSpineIds.length >= 1)
+  assert.ok(
+    tug.beforeSpineLanes.some(
+      (lane, index) => lane !== tug.afterSpineLanes[index],
+    ),
+  )
   assert.ok(knot.edgeId || knot.loopAnchorId)
   assert.ok(illuminate.anchorId)
 })
