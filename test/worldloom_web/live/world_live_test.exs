@@ -135,6 +135,41 @@ defmodule WorldloomWeb.WorldLiveTest do
     assert has_element?(live_view, "#formation-#{broadcast_event.id}")
   end
 
+  test "subscribes before taking the live snapshot after browser Back", %{conn: conn} do
+    [selected_event] = seed_events(1, ~U[2026-08-03 15:00:00.000000Z])
+    {:ok, live_view, _html} = live(conn, "/")
+
+    render_hook(live_view, "select-formation", %{"sequence" => selected_event.id})
+    assert_patch live_view, "/chapters/2026-08-03/#{selected_event.id}"
+
+    calls =
+      trace_route_calls(live_view.pid, fn ->
+        render_patch(live_view, "/")
+      end)
+
+    assert calls == [
+             {Phoenix.PubSub, :subscribe, [Worldloom.PubSub, Worldloom.Loom.Coordinator.topic()]},
+             {Store, :latest, [400]}
+           ]
+  end
+
+  test "loads each initial live lifecycle event window once", %{conn: conn} do
+    {{:ok, _live_view, _html}, latest_call_count} =
+      count_function_calls({Store, :latest, 1}, fn -> live(conn, "/") end)
+
+    assert latest_call_count == 2
+  end
+
+  test "loads each initial chapter lifecycle event window once", %{conn: conn} do
+    [selected_event] = seed_events(1, ~U[2026-08-03 15:00:00.000000Z])
+    chapter_path = "/chapters/2026-08-03/#{selected_event.id}"
+
+    {{:ok, _live_view, _html}, around_call_count} =
+      count_function_calls({Store, :around, 2}, fn -> live(conn, chapter_path) end)
+
+    assert around_call_count == 2
+  end
+
   test "tracks only the aggregate connected viewer count", %{conn: conn} do
     {:ok, first_view, _html} = live(conn, "/")
     {:ok, second_view, _html} = live(recycle(conn), "/about")
@@ -309,6 +344,60 @@ defmodule WorldloomWeb.WorldLiveTest do
              Enum.all?(["tug", "knot", "illuminate"], fn gesture ->
                has_element?(live_view, "#gesture-#{gesture}[disabled]")
              end)
+           end)
+  end
+
+  test "keeps cooldown feedback truthful across live and chapter routes", %{conn: conn} do
+    [selected_event] = seed_events(1, ~U[2026-08-03 17:00:00.000000Z])
+    {:ok, live_view, _html} = live(conn, "/")
+
+    live_view
+    |> form("#gesture-lane-form", %{"lane" => "0.6"})
+    |> render_submit(%{"gesture" => "tug"})
+
+    assert has_element?(live_view, "#gesture-status", "Gesture controls return in 30 seconds.")
+
+    chapter_path = "/chapters/2026-08-03/#{selected_event.id}"
+    render_hook(live_view, "select-formation", %{"sequence" => selected_event.id})
+    assert_patch live_view, chapter_path
+
+    assert has_element?(live_view, "#gesture-status", "Return to the live edge to contribute.")
+    refute has_element?(live_view, "#gesture-cooldown-ring")
+    refute has_element?(live_view, "#gesture-status", "Gesture controls return in")
+
+    Process.sleep(1_100)
+    render_patch(live_view, "/")
+
+    assert has_element?(live_view, "#worldloom[data-mode='live']")
+    assert has_element?(live_view, "#gesture-dock[aria-disabled='true']")
+
+    document = live_view |> render() |> LazyHTML.from_fragment()
+
+    [remaining_text] =
+      document
+      |> LazyHTML.query("#gesture-cooldown-ring")
+      |> LazyHTML.attribute("data-seconds")
+
+    remaining_seconds = String.to_integer(remaining_text)
+    assert remaining_seconds in 1..29
+
+    assert has_element?(
+             live_view,
+             "#gesture-status",
+             "Gesture controls return in #{remaining_seconds} seconds."
+           )
+
+    render_patch(live_view, chapter_path)
+    send(live_view.pid, :gesture_ready)
+
+    assert eventually(fn ->
+             has_element?(
+               live_view,
+               "#gesture-status",
+               "Return to the live edge to contribute."
+             ) and
+               not has_element?(live_view, "#gesture-cooldown-ring") and
+               not has_element?(live_view, "#gesture-status", "Gesture controls return in")
            end)
   end
 
@@ -556,6 +645,44 @@ defmodule WorldloomWeb.WorldLiveTest do
     else
       Process.sleep(10)
       eventually(assertion, attempts - 1)
+    end
+  end
+
+  defp trace_route_calls(pid, route_change) do
+    traced_functions = [
+      {Phoenix.PubSub, :subscribe, 2},
+      {Store, :latest, 1}
+    ]
+
+    Enum.each(traced_functions, &:erlang.trace_pattern(&1, true, []))
+    :erlang.trace(pid, true, [:call, {:tracer, self()}])
+
+    try do
+      route_change.()
+
+      Enum.map(traced_functions, fn _function ->
+        receive do
+          {:trace, ^pid, :call, {module, function, arguments}} ->
+            {module, function, arguments}
+        after
+          1_000 -> flunk("expected traced live-route call")
+        end
+      end)
+    after
+      :erlang.trace(pid, false, [:call])
+      Enum.each(traced_functions, &:erlang.trace_pattern(&1, false, []))
+    end
+  end
+
+  defp count_function_calls(traced_function, load_route) do
+    :erlang.trace_pattern(traced_function, true, [:call_count])
+
+    try do
+      route = load_route.()
+      {:call_count, latest_call_count} = :erlang.trace_info(traced_function, :call_count)
+      {route, latest_call_count}
+    after
+      :erlang.trace_pattern(traced_function, false, [:call_count])
     end
   end
 end

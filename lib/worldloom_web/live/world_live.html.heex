@@ -101,7 +101,7 @@
     >
       <h2>Touch the loom</h2>
       <span
-        :if={@cooldown_seconds}
+        :if={@live? and @cooldown_seconds}
         id="gesture-cooldown-ring"
         class="gesture-cooldown-ring"
         data-seconds={@cooldown_seconds}
@@ -156,7 +156,7 @@
 
       <p id="gesture-status" class="gesture-status" aria-live="polite">
         {@gesture_status}
-        <span :if={@cooldown_seconds} class="sr-only">
+        <span :if={@live? and @cooldown_seconds} class="sr-only">
           Gesture controls return in {@cooldown_seconds} seconds.
         </span>
       </p>

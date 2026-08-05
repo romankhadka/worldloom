@@ -17,45 +17,41 @@ defmodule WorldloomWeb.WorldLive do
   @accessible_limit 20
 
   @impl true
-  def mount(params, session, socket) do
+  def mount(_params, session, socket) do
     action = socket.assigns.live_action
-    {events, selected_event} = load_events(action, params)
-    instructions = Enum.map(events, &Instruction.from_event/1)
-    chapters = if action == :archive, do: Store.chapters(), else: []
     feed_health = HealthMonitor.current()
 
     socket =
       socket
       |> assign(:page_title, page_title(action))
-      |> assign(:utc_chapter, utc_chapter(events, selected_event))
+      |> assign(:utc_chapter, utc_chapter([], nil))
       |> assign(:live?, action == :live)
       |> assign(:mode, action)
-      |> assign(:instructions, instructions)
-      |> assign(:ambient, ambient_event(events, selected_event))
-      |> assign(:trusted_events, trusted_event_map(events))
-      |> assign(:oldest_loaded_sequence, oldest_sequence(events))
+      |> assign(:instructions, [])
+      |> assign(:ambient, nil)
+      |> assign(:trusted_events, %{})
+      |> assign(:oldest_loaded_sequence, nil)
       |> assign(:history_requested_at, nil)
-      |> assign(:selected_event, selected_event)
-      |> assign(:selected_detail, safe_detail(selected_event))
+      |> assign(:selected_event, nil)
+      |> assign(:selected_detail, nil)
       |> assign(:gesture_lane, 0.5)
-      |> assign(:gesture_status, "Choose an action for the live edge.")
+      |> assign(:gesture_status, route_gesture_status(action))
       |> assign(:cooldown_until, nil)
       |> assign(:cooldown_token, nil)
       |> assign(:cooldown_seconds, nil)
-      |> assign(:at_live_edge, true)
-      |> assign(:permalink, event_permalink(selected_event))
+      |> assign(:cooldown_status, nil)
+      |> assign(:at_live_edge, action == :live)
+      |> assign(:permalink, nil)
       |> assign(:current_url, nil)
       |> assign(:feed_health, feed_health)
       |> assign(:viewer_count, Presence.viewer_count())
       |> assign(:visitor_identity, session["visitor_identity"] || session[:visitor_identity])
       |> assign(:peer_address, peer_address(socket))
-      |> stream(:archive_rows, chapters, dom_id: &chapter_dom_id/1)
-      |> stream(:accessible_formations, Enum.take(instructions, -@accessible_limit),
-        dom_id: &formation_dom_id/1
-      )
+      |> stream(:archive_rows, [], dom_id: &chapter_dom_id/1)
+      |> stream(:accessible_formations, [], dom_id: &formation_dom_id/1)
 
     if connected?(socket) do
-      subscribe(socket.assigns.live?)
+      subscribe(action == :live)
       presence_key = random_presence_key()
       {:ok, _metadata} = Presence.track(self(), Presence.topic(), presence_key, %{})
       {:ok, assign(socket, :viewer_count, Presence.viewer_count())}
@@ -334,7 +330,8 @@ defmodule WorldloomWeb.WorldLive do
       gesture_status: status,
       cooldown_until: DateTime.add(DateTime.utc_now(), seconds, :second),
       cooldown_token: token,
-      cooldown_seconds: seconds
+      cooldown_seconds: seconds,
+      cooldown_status: status
     )
   end
 
@@ -343,7 +340,8 @@ defmodule WorldloomWeb.WorldLive do
       cooldown_until: nil,
       cooldown_token: nil,
       cooldown_seconds: nil,
-      gesture_status: "Choose an action for the live edge."
+      cooldown_status: nil,
+      gesture_status: route_gesture_status(socket.assigns.mode)
     )
   end
 
@@ -358,16 +356,14 @@ defmodule WorldloomWeb.WorldLive do
     end
   end
 
-  defp load_events(_action, _params), do: {Store.latest(@initial_history_limit), nil}
-
   defp enter_live_route(socket, uri) do
+    socket = transition_coordinator_subscription(socket, true)
     events = Store.latest(@initial_history_limit)
     instructions = Enum.map(events, &Instruction.from_event/1)
     route_changed? = route_changed?(socket, uri)
 
     socket =
       socket
-      |> transition_coordinator_subscription(true)
       |> assign(:page_title, page_title(:live))
       |> assign(:live?, true)
       |> assign(:mode, :live)
@@ -376,7 +372,7 @@ defmodule WorldloomWeb.WorldLive do
       |> assign(:selected_detail, nil)
       |> assign(:permalink, URI.parse(uri).path || "/")
       |> assign(:current_url, uri)
-      |> assign(:gesture_status, live_gesture_status(socket))
+      |> restore_live_gesture_state()
       |> assign_event_window(events, nil)
 
     if route_changed? do
@@ -390,17 +386,18 @@ defmodule WorldloomWeb.WorldLive do
   end
 
   defp enter_chapter_route(socket, params, uri) do
+    socket = transition_coordinator_subscription(socket, false)
     {events, selected_event} = load_events(:chapter, params)
     instructions = Enum.map(events, &Instruction.from_event/1)
     route_changed? = route_changed?(socket, uri)
 
     socket =
       socket
-      |> transition_coordinator_subscription(false)
       |> assign(:page_title, page_title(:chapter))
       |> assign(:live?, false)
       |> assign(:mode, :chapter)
       |> assign(:at_live_edge, false)
+      |> assign(:gesture_status, route_gesture_status(:chapter))
       |> assign(:selected_event, selected_event)
       |> assign(:selected_detail, safe_detail(selected_event))
       |> assign(:permalink, event_permalink(selected_event))
@@ -418,11 +415,34 @@ defmodule WorldloomWeb.WorldLive do
   end
 
   defp enter_panel_route(socket, action, uri) do
-    socket
-    |> assign(:page_title, page_title(action))
-    |> assign(:mode, action)
-    |> assign(:current_url, uri)
-    |> assign(:permalink, socket.assigns.permalink || URI.parse(uri).path)
+    socket = transition_coordinator_subscription(socket, false)
+    events = Store.latest(@initial_history_limit)
+    instructions = Enum.map(events, &Instruction.from_event/1)
+    chapters = if action == :archive, do: Store.chapters(), else: []
+    route_changed? = route_changed?(socket, uri)
+
+    socket =
+      socket
+      |> assign(:page_title, page_title(action))
+      |> assign(:live?, false)
+      |> assign(:mode, action)
+      |> assign(:at_live_edge, false)
+      |> assign(:gesture_status, route_gesture_status(action))
+      |> assign(:selected_event, nil)
+      |> assign(:selected_detail, nil)
+      |> assign(:current_url, uri)
+      |> assign(:permalink, URI.parse(uri).path)
+      |> assign_event_window(events, nil)
+      |> stream(:archive_rows, chapters, reset: true)
+
+    if route_changed? do
+      push_event(socket, "worldloom:reload", %{
+        instructions: instructions,
+        watermark: instruction_watermark(instructions)
+      })
+    else
+      socket
+    end
   end
 
   defp assign_event_window(socket, events, selected_event) do
@@ -460,10 +480,34 @@ defmodule WorldloomWeb.WorldLive do
       URI.parse(socket.assigns.current_url).path != URI.parse(uri).path
   end
 
-  defp live_gesture_status(%{assigns: %{cooldown_seconds: nil}}),
-    do: "Choose an action for the live edge."
+  defp restore_live_gesture_state(socket) do
+    case remaining_cooldown_seconds(socket.assigns.cooldown_until) do
+      nil ->
+        assign(socket,
+          cooldown_until: nil,
+          cooldown_token: nil,
+          cooldown_seconds: nil,
+          cooldown_status: nil,
+          gesture_status: route_gesture_status(:live)
+        )
 
-  defp live_gesture_status(socket), do: socket.assigns.gesture_status
+      remaining_seconds ->
+        assign(socket,
+          cooldown_seconds: remaining_seconds,
+          gesture_status: socket.assigns.cooldown_status
+        )
+    end
+  end
+
+  defp remaining_cooldown_seconds(nil), do: nil
+
+  defp remaining_cooldown_seconds(cooldown_until) do
+    remaining_milliseconds = DateTime.diff(cooldown_until, DateTime.utc_now(), :millisecond)
+
+    if remaining_milliseconds > 0 do
+      div(remaining_milliseconds + 999, 1_000)
+    end
+  end
 
   defp instruction_watermark([]), do: 0
   defp instruction_watermark(instructions), do: List.last(instructions)["sequence"]
@@ -523,6 +567,8 @@ defmodule WorldloomWeb.WorldLive do
   defp page_title(:archive), do: "UTC chapters"
   defp page_title(:chapter), do: "Historical formation"
   defp page_title(:about), do: "About Worldloom"
+  defp route_gesture_status(:live), do: "Choose an action for the live edge."
+  defp route_gesture_status(_action), do: "Return to the live edge to contribute."
 
   defp utc_chapter([], _selected_event), do: Date.utc_today() |> Date.to_iso8601()
 
