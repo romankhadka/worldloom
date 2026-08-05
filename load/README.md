@@ -38,13 +38,21 @@ Run the one-gesture profile to verify that a real LiveView form event is
 classified and its committed sequence is observed:
 
 ```sh
-rtk env WORLDLOOM_PROFILE=gesture-smoke k6 run load/worldloom.js
+k6 run -e WORLDLOOM_PROFILE=gesture-smoke load/worldloom.js
 ```
 
 Run the explicit 100-viewer profile to exercise concurrent LiveView joins and
 a 10-per-second gesture stream under the launch thresholds:
 
 ```sh
+k6 run -e WORLDLOOM_PROFILE=local-100 load/worldloom.js
+```
+
+Contributors with the optional RTK output wrapper can run the equivalent
+commands as:
+
+```sh
+rtk env WORLDLOOM_PROFILE=gesture-smoke k6 run load/worldloom.js
 rtk env WORLDLOOM_PROFILE=local-100 k6 run load/worldloom.js
 ```
 

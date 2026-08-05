@@ -9,15 +9,11 @@ import {
   liveViewReply,
   pushLiveViewEvent,
 } from "./phoenix_live_view.js"
+import {viewerHoldMsFor} from "./viewer_profile.js"
 
 const baseURL = __ENV.WORLDLOOM_BASE_URL ?? "http://localhost:4000"
 const profile = __ENV.WORLDLOOM_PROFILE ?? "smoke"
-const viewerHoldMs =
-  profile === "launch"
-    ? 35 * 60 * 1_000
-    : profile === "local"
-      ? 6 * 60 * 1_000
-      : 2_000
+const viewerHoldMs = viewerHoldMsFor(profile)
 
 const liveViewJoinFailed = new Rate("worldloom_live_view_join_failed")
 const protocolErrors = new Counter("worldloom_protocol_errors")

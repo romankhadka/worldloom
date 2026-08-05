@@ -20,6 +20,10 @@ test("preserves click values and already encoded form text", () => {
   assert.equal(liveViewEventValue("gesture=knot&lane=0.25", "form"), "gesture=knot&lane=0.25")
 })
 
+test("percent-encodes reserved form delimiters", () => {
+  assert.equal(liveViewEventValue({note: "&=+%"}, "form"), "note=%26%3D%2B%25")
+})
+
 test("classifies only a close before client leave as unexpected", () => {
   assert.equal(socketCloseError(true), null)
   assert.equal(socketCloseError(false), "websocket closed before the LiveView client left")
