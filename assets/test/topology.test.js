@@ -56,6 +56,55 @@ test("derives one calm primary spine through a busy public window", () => {
   }
 })
 
+test("bounds primary spine transitions at opposing lane and bend extrema", () => {
+  const transitions = [
+    [
+      instruction(1, "wikimedia", {lane: 0}),
+      instruction(2, "wikimedia", {
+        lane: 1,
+        visual: {spread: 0.5, bend: 1, pulse: 0.75},
+      }),
+    ],
+    [
+      instruction(1, "wikimedia", {lane: 1}),
+      instruction(2, "wikimedia", {
+        lane: 0,
+        visual: {spread: 0.5, bend: -1, pulse: 0.75},
+      }),
+    ],
+    [
+      instruction(1, "wikimedia", {lane: 0.0000006}),
+      instruction(2, "wikimedia", {
+        lane: 1,
+        visual: {spread: 0.5, bend: 1, pulse: 0.75},
+      }),
+    ],
+    [
+      instruction(1, "wikimedia", {lane: 0.9999994}),
+      instruction(2, "wikimedia", {
+        lane: 0,
+        visual: {spread: 0.5, bend: -1, pulse: 0.75},
+      }),
+    ],
+  ]
+
+  for (const instructions of transitions) {
+    const topology = buildTopology(instructions)
+
+    assert.deepEqual(
+      topology.spine.map(point => point.sequence),
+      instructions.map(item => item.sequence),
+    )
+    for (let index = 1; index < topology.spine.length; index++) {
+      const laneDelta = Math.abs(topology.spine[index].lane - topology.spine[index - 1].lane)
+      assert.ok(
+        laneDelta <= 0.25,
+        `expected adjacent spine delta ${laneDelta} to be at most 0.25`,
+      )
+    }
+  }
+})
+
 test("keeps spine derivation deterministic, bounded, and viewport independent", () => {
   const instructions = Array.from({length: 700}, (_item, index) => instruction(index + 1))
   const first = buildTopology(instructions)

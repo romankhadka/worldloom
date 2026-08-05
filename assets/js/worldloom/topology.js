@@ -2,6 +2,7 @@ const supportedRenderVersion = 1
 const maximumInstructions = 600
 const laneReach = 0.34
 const maximumSequenceGap = 12
+const maximumSpineLaneDelta = 0.25
 
 export function buildTopology(instructions) {
   const topology = {
@@ -184,15 +185,25 @@ function clampLane(lane) {
   return Math.min(1, Math.max(0, Number(lane.toFixed(6))))
 }
 
+function boundedSpineLane(previousLane, candidateLane) {
+  return clampLane(
+    Math.min(
+      previousLane + maximumSpineLaneDelta,
+      Math.max(previousLane - maximumSpineLaneDelta, candidateLane),
+    ),
+  )
+}
+
 function extendSpine(topology, instruction) {
   const previous = topology.spine.at(-1)
   const lane = previous
-    ? clampLane(
+    ? boundedSpineLane(
+        previous.lane,
         previous.lane * 0.76 +
           instruction.lane * 0.24 +
           instruction.visual.bend * 0.012,
       )
-    : instruction.lane
+    : clampLane(instruction.lane)
 
   topology.spine.push({
     id: `spine:${instruction.sequence}`,
