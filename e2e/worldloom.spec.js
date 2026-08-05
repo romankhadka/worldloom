@@ -73,6 +73,140 @@ test("two visitors converge on a persisted gesture and reconstruct it after relo
   }
 })
 
+test("the opening composition prioritizes unobstructed artwork", async ({page}) => {
+  await page.goto("/")
+  const introduction = page.locator("#worldloom-introduction")
+  await expect(introduction).toBeVisible()
+  const introductionBounds = await introduction.boundingBox()
+  expect(introductionBounds).not.toBeNull()
+
+  const canvas = await waitForCanvas(page)
+  await expect(page.locator("#signal-detail")).toHaveCount(0)
+  await expect(page.locator("#gesture-dock")).toContainText("Touch the loom")
+
+  const headerStyle = await page.locator(".worldloom-header").evaluate(element => {
+    const style = getComputedStyle(element)
+    return {position: style.position, border: style.borderBottomWidth}
+  })
+  expect(headerStyle.position).toBe("absolute")
+  expect(headerStyle.border).toBe("0px")
+
+  const canvasBounds = await canvas.boundingBox()
+  const dockBounds = await page.locator("#gesture-dock").boundingBox()
+  expect(canvasBounds).not.toBeNull()
+  expect(dockBounds).not.toBeNull()
+  expect(introductionBounds.y + introductionBounds.height).toBeLessThanOrEqual(
+    dockBounds.y,
+  )
+  expect(dockBounds.width).toBeLessThanOrEqual(canvasBounds.width * 0.55)
+  expect(dockBounds.height).toBeLessThanOrEqual(canvasBounds.height * 0.25)
+  expect(dockBounds.y).toBeGreaterThanOrEqual(
+    canvasBounds.y + canvasBounds.height * 0.65,
+  )
+  expect(dockBounds.y + dockBounds.height).toBeLessThanOrEqual(
+    canvasBounds.y + canvasBounds.height,
+  )
+})
+
+test("quiet labels retain localized contrast over weather", async ({browser}) => {
+  const baseURL = process.env.WORLDLOOM_BASE_URL ?? "http://localhost:4002"
+  const contrastContracts = [
+    {
+      container: "#worldloom-introduction",
+      minimumTextCount: 3,
+      text: [
+        "#worldloom-introduction > .eyebrow",
+        "#worldloom-introduction > p:last-of-type",
+        "#worldloom-introduction > span",
+      ],
+    },
+    {
+      container: "#signal-legend",
+      minimumTextCount: 4,
+      text: [
+        "#signal-legend .legend-item",
+        "#signal-legend .legend-item small",
+      ],
+    },
+    {
+      container: "#timeline > span:first-child",
+      minimumTextCount: 1,
+      text: ["#timeline > span:first-child"],
+    },
+    {
+      container: "#timeline > span:last-child",
+      minimumTextCount: 1,
+      text: ["#timeline > span:last-child"],
+    },
+  ]
+  const viewports = [
+    {name: "desktop", size: {width: 1440, height: 900}},
+    {name: "mobile", size: {width: 390, height: 844}},
+  ]
+
+  for (const viewport of viewports) {
+    const context = await browser.newContext({
+      baseURL,
+      viewport: viewport.size,
+      hasTouch: viewport.name === "mobile",
+      isMobile: viewport.name === "mobile",
+    })
+    const page = await context.newPage()
+
+    try {
+      await page.goto("/")
+      const activeContracts =
+        viewport.name === "mobile" ? contrastContracts.slice(0, 1) : contrastContracts
+
+      for (const selectors of activeContracts) {
+        const contract = await localContrastContract(
+          page,
+          selectors.container,
+          selectors.text,
+        )
+        const contractName = `${viewport.name} ${selectors.container}`
+
+        expect.soft(contract.backgroundImage, contractName).toBe("none")
+        expect.soft(contract.backingColor.rgb, contractName).toEqual([3, 8, 6])
+        expect.soft(contract.backingColor.alpha, contractName).toBeGreaterThanOrEqual(0.72)
+        expect.soft(contract.position, contractName).toBe("absolute")
+        expect.soft(contract.pointerEvents, contractName).toBe("none")
+        expect.soft(contract.coverageMargin, contractName).toBeGreaterThanOrEqual(0)
+        expect(contract.protectedText.length, contractName).toBeGreaterThanOrEqual(
+          selectors.minimumTextCount,
+        )
+
+        for (const protectedText of contract.protectedText) {
+          expect.soft(
+            protectedText.withinContainer,
+            `${contractName} ${protectedText.text}`,
+          ).toBe(true)
+          expect.soft(
+            protectedText.contrastRatio,
+            `${contractName} ${protectedText.text}`,
+          ).toBeGreaterThanOrEqual(4.5)
+        }
+      }
+    } finally {
+      await context.close()
+    }
+  }
+})
+
+test("the curatorial source link has an accessible target", async ({page}) => {
+  await openWorldloom(page)
+  await page.getByRole("link", {name: "About", exact: true}).click()
+
+  const sourceLink = page.getByRole("link", {
+    name: "Read the public source",
+    exact: true,
+  })
+  await expect(sourceLink).toBeVisible()
+  const sourceLinkBounds = await sourceLink.boundingBox()
+  expect(sourceLinkBounds).not.toBeNull()
+  expect(sourceLinkBounds.height).toBeGreaterThanOrEqual(44)
+})
+
 test("a keyboard-only visitor positions and directly weaves a gesture", async ({
   page,
 }) => {
@@ -260,6 +394,37 @@ test("touch visitors can inspect formations without clipped mobile controls", as
   }
 })
 
+test("mobile gesture copy remains readable", async ({browser}) => {
+  const context = await browser.newContext({
+    baseURL: process.env.WORLDLOOM_BASE_URL ?? "http://localhost:4002",
+    viewport: {width: 390, height: 844},
+    hasTouch: true,
+    isMobile: true,
+  })
+  const page = await context.newPage()
+
+  try {
+    await openWorldloom(page)
+    const descriptionSizes = await page.locator(".gesture-copy small").evaluateAll(
+      elements => elements.map(element => parseFloat(getComputedStyle(element).fontSize)),
+    )
+    const statusSize = await page.locator("#gesture-status").evaluate(element =>
+      parseFloat(getComputedStyle(element).fontSize),
+    )
+    const dockBounds = await page.locator("#gesture-dock").boundingBox()
+
+    expect(descriptionSizes).toHaveLength(3)
+    expect.soft(Math.min(...descriptionSizes)).toBeGreaterThanOrEqual(11)
+    expect.soft(statusSize).toBeGreaterThanOrEqual(11)
+    expect(dockBounds).not.toBeNull()
+    expect(dockBounds.x).toBeGreaterThanOrEqual(0)
+    expect(dockBounds.x + dockBounds.width).toBeLessThanOrEqual(390)
+    expect(dockBounds.y + dockBounds.height).toBeLessThanOrEqual(844)
+  } finally {
+    await context.close()
+  }
+})
+
 async function openWorldloom(page) {
   await page.goto("/")
   return waitForCanvas(page)
@@ -276,21 +441,102 @@ async function renderedSequence(canvas) {
   return Number(await canvas.getAttribute("data-rendered-sequence"))
 }
 
+async function localContrastContract(page, containerSelector, textSelectors) {
+  return page.evaluate(
+    ({containerSelector, textSelectors}) => {
+      const container = document.querySelector(containerSelector)
+      const backing = getComputedStyle(container, "::before")
+      const backingColor = parseColor(backing.backgroundColor)
+      const blurRadius = Number(backing.filter.match(/blur\(([\d.]+)px\)/)?.[1] ?? 0)
+      const insets = [backing.top, backing.right, backing.bottom, backing.left].map(
+        inset => Number.parseFloat(inset),
+      )
+      const protectedElements = textSelectors.flatMap(selector =>
+        [...document.querySelectorAll(selector)],
+      )
+      const containerBounds = container.getBoundingClientRect()
+      const worstWeather = [139, 132, 82]
+      const backedWeather = blend(
+        backingColor.rgb,
+        worstWeather,
+        backingColor.alpha,
+      )
+
+      return {
+        backgroundImage: backing.backgroundImage,
+        backingColor,
+        position: backing.position,
+        pointerEvents: backing.pointerEvents,
+        coverageMargin: Math.min(...insets.map(inset => -inset - blurRadius)),
+        protectedText: protectedElements.map(element => {
+          const textColor = parseColor(getComputedStyle(element).color)
+          const effectiveText = blend(
+            textColor.rgb,
+            backedWeather,
+            textColor.alpha,
+          )
+          const textBounds = element.getBoundingClientRect()
+
+          return {
+            text: element.textContent.trim(),
+            contrastRatio: contrast(effectiveText, backedWeather),
+            withinContainer:
+              textBounds.top >= containerBounds.top &&
+              textBounds.right <= containerBounds.right &&
+              textBounds.bottom <= containerBounds.bottom &&
+              textBounds.left >= containerBounds.left,
+          }
+        }),
+      }
+
+      function parseColor(color) {
+        const channels = color.match(/[\d.]+/g).map(Number)
+        return {rgb: channels.slice(0, 3), alpha: channels[3] ?? 1}
+      }
+
+      function blend(foreground, background, alpha) {
+        return foreground.map((channel, index) =>
+          channel * alpha + background[index] * (1 - alpha),
+        )
+      }
+
+      function contrast(first, second) {
+        const brighter = Math.max(luminance(first), luminance(second))
+        const darker = Math.min(luminance(first), luminance(second))
+        return (brighter + 0.05) / (darker + 0.05)
+      }
+
+      function luminance(color) {
+        const [red, green, blue] = color.map(channel => {
+          const normalized = channel / 255
+          return normalized <= 0.04045
+            ? normalized / 12.92
+            : ((normalized + 0.055) / 1.055) ** 2.4
+        })
+        return red * 0.2126 + green * 0.7152 + blue * 0.0722
+      }
+    },
+    {containerSelector, textSelectors},
+  )
+}
+
 async function tapVisibleFormation(page, canvas, gestureDock, detailSheet) {
   const instructions = JSON.parse(
     (await canvas.getAttribute("data-instructions")) ?? "[]",
   )
   const canvasBounds = await canvas.boundingBox()
   const dockBounds = await gestureDock.boundingBox()
-  const detailBounds = await detailSheet.boundingBox()
-  const maximumSequence = Math.max(
-    ...instructions.map((instruction) => instruction.sequence),
-  )
+  const detailBounds =
+    (await detailSheet.count()) > 0 ? await detailSheet.boundingBox() : null
+  expect(canvasBounds).not.toBeNull()
+  expect(dockBounds).not.toBeNull()
+  const maximumSequence = await renderedSequence(canvas)
   const formations = [...instructions].reverse().filter((instruction) => {
     const x =
       canvasBounds.width - 40 - (maximumSequence - instruction.sequence) * 28
     const y = 40 + Number(instruction.lane) * (canvasBounds.height - 80)
     const behindDetail =
+      detailBounds !== null &&
       x >= detailBounds.x - canvasBounds.x &&
       x <= detailBounds.x - canvasBounds.x + detailBounds.width &&
       y >= detailBounds.y - canvasBounds.y &&
