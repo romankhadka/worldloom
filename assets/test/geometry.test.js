@@ -99,7 +99,9 @@ test("projects long connected paths with continuous shared tangents", () => {
   }))
   const denseViewport = {...viewport, maxSequence: 40}
   const paths = commandsForScene(instructions, denseViewport).filter(
-    command => command.type === "fiber-path",
+    command => command.type === "fiber-path" &&
+      command.role !== "spine" &&
+      command.role !== "capillary",
   )
 
   assert.ok(paths.length >= 2)
@@ -113,6 +115,39 @@ test("projects long connected paths with continuous shared tangents", () => {
     assert.deepEqual(previous.to, current.from)
     assert.ok(tangentDifference(previous, current) < 1e-6)
   }
+})
+
+test("projects a viewport-spanning primary spine with bounded material", () => {
+  const instructions = Array.from({length: 40}, (_item, index) => ({
+    ...contract[0],
+    sequence: index + 1,
+    lane: index % 2 === 0 ? 0.1 : 0.9,
+  }))
+  const scene = commandsForScene(instructions, {...viewport, maxSequence: 40})
+  const spine = scene.find(
+    command => command.type === "fiber-path" && command.role === "spine",
+  )
+
+  assert.ok(spine)
+  assert.ok(spine.segments.length > 20)
+  assert.deepEqual(Object.keys(spine.material), ["glow", "body", "core"])
+  assert.ok(spine.material.glow.width > spine.material.body.width)
+  assert.ok(spine.material.body.width > spine.material.core.width)
+  assert.ok(spine.material.glow.alpha <= 0.18)
+})
+
+test("derives cosmetic fiber layers from one structural command", () => {
+  const instructions = Array.from({length: 60}, (_item, index) => ({
+    ...contract[0],
+    sequence: index + 1,
+    lane: 0.5 + Math.sin(index / 8) * 0.2,
+  }))
+  const scene = commandsForScene(instructions, {...viewport, maxSequence: 60})
+  const structuralPaths = scene.filter(command => command.type === "fiber-path")
+
+  assert.ok(structuralPaths.every(command => command.material))
+  assert.ok(scene.length <= 4000)
+  assert.equal(scene.some(command => command.type === "fiber-glow-copy"), false)
 })
 
 test("projects earthquakes and visitor gestures as distinct structural commands", () => {

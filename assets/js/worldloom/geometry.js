@@ -93,6 +93,8 @@ export function commandsForScene(instructions, viewport, {ambient = null} = {}) 
   return [
     ...ambientCommands,
     ...chapterSeams(ordered, projectedViewport),
+    ...spineCommands(topology, projectedViewport),
+    ...capillaryCommands(topology, projectedViewport),
     ...fiberCommands(topology, projectedViewport),
     ...formationCommands(topology, projectedViewport),
     ...topology.fallbacks.map(fallback => fallbackCommand(fallback, projectedViewport)),
@@ -134,6 +136,79 @@ export function cubicPrefix(curve, progress) {
   }
 }
 
+function spineCommands(topology, viewport) {
+  if (topology.spine.length < 2) return []
+
+  const points = topology.spine.map(point => projectAnchor(point, viewport))
+  const segments = topology.spine.slice(1).map((point, index) => {
+    const previous = points[Math.max(0, index - 1)]
+    const from = points[index]
+    const to = points[index + 1]
+    const next = points[Math.min(points.length - 1, index + 2)]
+    const curve = clampCurve(catmullRomToBezier(previous, from, to, next), viewport)
+
+    return {
+      id: `spine-edge:${point.sequence}`,
+      sequence: point.sequence,
+      transitionSequence: point.sequence,
+      curve,
+      length: approximateCurveLength(curve),
+      intensity: point.intensity,
+      visual: point.visual,
+    }
+  })
+  const intensity = average(segments.map(segment => segment.intensity))
+
+  return [{
+    type: "fiber-path",
+    id: `path:spine:${topology.spine[0].sequence}:${topology.spine.at(-1).sequence}`,
+    role: "spine",
+    sequence: topology.spine.at(-1).sequence,
+    segments,
+    stroke: signalPalette.wikimedia.stroke,
+    glow: signalPalette.wikimedia.glow,
+    intensity,
+    material: materialFor("spine", intensity),
+  }]
+}
+
+function capillaryCommands(topology, viewport) {
+  const spineBySequence = new Map(topology.spine.map(point => [point.sequence, point]))
+
+  return topology.anchors.flatMap(anchor => {
+    const spinePoint = spineBySequence.get(anchor.sequence)
+    if (!spinePoint || Math.abs(anchor.lane - spinePoint.lane) < 0.06) return []
+
+    const curve = connectorCurve(
+      projectAnchor(spinePoint, viewport),
+      projectAnchor(anchor, viewport),
+      anchor.visual,
+      viewport,
+    )
+    const segment = {
+      id: `capillary:${anchor.sequence}`,
+      sequence: anchor.sequence,
+      transitionSequence: anchor.sequence,
+      curve,
+      length: approximateCurveLength(curve),
+      intensity: anchor.intensity,
+      visual: anchor.visual,
+    }
+
+    return [{
+      type: "fiber-path",
+      id: `path:capillary:${anchor.sequence}`,
+      role: "capillary",
+      sequence: anchor.sequence,
+      segments: [segment],
+      stroke: signalPalette.wikimedia.stroke,
+      glow: signalPalette.wikimedia.glow,
+      intensity: anchor.intensity,
+      material: materialFor("capillary", anchor.intensity),
+    }]
+  })
+}
+
 function fiberCommands(topology, viewport) {
   const anchorsById = new Map(topology.anchors.map(anchor => [anchor.id, anchor]))
   const fiberEdges = topology.edges.filter(edge => edge.role === "fiber")
@@ -168,6 +243,7 @@ function fiberCommands(topology, viewport) {
     for (const chunk of chunkSegments(segments, viewport.width)) {
       const target = anchorsById.get(orderedEdges.find(edge => edge.id === chunk.at(-1).id).to)
       const palette = signalPalette[target.source] ?? signalPalette.wikimedia
+      const intensity = average(chunk.map(segment => segment.intensity))
       paths.push({
         type: "fiber-path",
         id: `path:${branchId}:${chunk[0].sequence}:${chunk.at(-1).sequence}`,
@@ -177,7 +253,8 @@ function fiberCommands(topology, viewport) {
         width: pathWidth(chunk),
         stroke: palette.stroke,
         glow: palette.glow,
-        intensity: average(chunk.map(segment => segment.intensity)),
+        intensity,
+        material: materialFor("fiber", intensity),
       })
     }
   }
@@ -225,6 +302,7 @@ function connectorCommands(topology, anchorsById, viewport) {
         stroke: palette.stroke,
         glow: palette.glow,
         intensity: segment.intensity,
+        material: materialFor(edge.role, segment.intensity),
       }
     })
 }
@@ -515,6 +593,17 @@ function normalizeVector(vector) {
 
 function average(numbers) {
   return numbers.reduce((sum, number) => sum + number, 0) / Math.max(1, numbers.length)
+}
+
+function materialFor(role, intensity) {
+  const strength = Math.min(1, Math.max(0, intensity))
+  const scale = role === "spine" ? 1.45 : role === "capillary" ? 0.58 : 1
+
+  return {
+    glow: {width: (7 + strength * 8) * scale, alpha: 0.08 + strength * 0.08},
+    body: {width: (2.6 + strength * 2.8) * scale, alpha: 0.28 + strength * 0.22},
+    core: {width: (0.7 + strength * 0.9) * scale, alpha: 0.72 + strength * 0.2},
+  }
 }
 
 function visualParameters(instruction) {
