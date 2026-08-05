@@ -15,7 +15,7 @@ defmodule WorldloomWeb.WorldLive do
   @history_page_limit 400
   @history_throttle_ms 500
   @accessible_limit 20
-  @public_scaffold_limit 2
+  @public_scaffold_limit 12
 
   @impl true
   def mount(_params, session, socket) do
@@ -130,6 +130,7 @@ defmodule WorldloomWeb.WorldLive do
       events = Store.latest(@initial_history_limit)
       instructions = Enum.map(events, &Instruction.from_event/1)
       scaffold = public_scaffold(events, nil)
+      ambient = ambient_instruction(events, nil)
 
       {:noreply,
        socket
@@ -137,6 +138,7 @@ defmodule WorldloomWeb.WorldLive do
        |> push_event("worldloom:reload", %{
          instructions: instructions,
          scaffold: scaffold,
+         ambient: ambient,
          watermark: Store.highest_sequence()
        })}
     else
@@ -177,6 +179,7 @@ defmodule WorldloomWeb.WorldLive do
        |> assign(:trusted_events, bounded_events(socket.assigns.trusted_events, events))
        |> push_event("worldloom:history", %{
          instructions: instructions,
+         scaffold: public_scaffold(events, nil),
          archive_start?: length(events) < @history_page_limit
        })}
     else
@@ -237,6 +240,7 @@ defmodule WorldloomWeb.WorldLive do
     events = Store.latest(@initial_history_limit)
     instructions = Enum.map(events, &Instruction.from_event/1)
     scaffold = public_scaffold(events, nil)
+    ambient = ambient_instruction(events, nil)
 
     {:noreply,
      socket
@@ -245,6 +249,7 @@ defmodule WorldloomWeb.WorldLive do
      |> push_event("worldloom:return-live", %{
        instructions: instructions,
        scaffold: scaffold,
+       ambient: ambient,
        watermark: Store.highest_sequence()
      })}
   end
@@ -384,6 +389,7 @@ defmodule WorldloomWeb.WorldLive do
       push_event(socket, "worldloom:return-live", %{
         instructions: socket.assigns.instructions,
         scaffold: socket.assigns.scaffold,
+        ambient: encode_ambient(socket.assigns.ambient),
         watermark: instruction_watermark(socket.assigns.instructions)
       })
     else
@@ -413,6 +419,7 @@ defmodule WorldloomWeb.WorldLive do
       push_event(socket, "worldloom:reload", %{
         instructions: socket.assigns.instructions,
         scaffold: socket.assigns.scaffold,
+        ambient: encode_ambient(socket.assigns.ambient),
         watermark: instruction_watermark(socket.assigns.instructions),
         selected_sequence: selected_event.id
       })
@@ -445,6 +452,7 @@ defmodule WorldloomWeb.WorldLive do
       push_event(socket, "worldloom:reload", %{
         instructions: socket.assigns.instructions,
         scaffold: socket.assigns.scaffold,
+        ambient: encode_ambient(socket.assigns.ambient),
         watermark: instruction_watermark(socket.assigns.instructions)
       })
     else
@@ -473,6 +481,15 @@ defmodule WorldloomWeb.WorldLive do
     |> Store.wikimedia_before(@public_scaffold_limit)
     |> Enum.map(&Instruction.from_event/1)
   end
+
+  defp ambient_instruction(events, selected_event) do
+    events
+    |> ambient_event(selected_event)
+    |> encode_ambient()
+  end
+
+  defp encode_ambient(nil), do: nil
+  defp encode_ambient(event), do: Instruction.from_event(event)
 
   defp transition_coordinator_subscription(socket, live?) do
     if connected?(socket) do

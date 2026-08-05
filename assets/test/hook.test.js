@@ -239,29 +239,52 @@ test("outside dismissal clears local selection before one trusted server push", 
 test("reload and return-live server events reconcile local selection", t => {
   const harness = hookHarness(t)
   const scaffold = [{sequence: 3}, {sequence: 7}]
+  const ambient = {sequence: 11, source: "open_meteo", kind: "weather"}
 
   harness.serverEvents.get("worldloom:reload")({
     instructions: [{sequence: 17}],
     scaffold,
+    ambient,
     watermark: 17,
     selected_sequence: 17,
   })
   assert.deepEqual(
     harness.renderer.lifecycle[0],
-    ["reload", [{sequence: 17}], 17, {scaffold}],
+    ["reload", [{sequence: 17}], 17, {scaffold, ambient}],
   )
   assert.deepEqual(harness.renderer.selections, [17])
 
   harness.serverEvents.get("worldloom:reload")({instructions: [], watermark: 18})
   assert.equal(harness.renderer.clearSelections, 1)
 
-  harness.serverEvents.get("worldloom:return-live")({instructions: [], scaffold, watermark: 19})
+  harness.serverEvents.get("worldloom:return-live")({
+    instructions: [],
+    scaffold,
+    ambient,
+    watermark: 19,
+  })
   assert.equal(harness.renderer.clearSelections, 2)
   assert.deepEqual(
     harness.renderer.lifecycle.at(-3),
-    ["reload", [], 19, {scaffold}],
+    ["reload", [], 19, {scaffold, ambient}],
   )
   assert.deepEqual(harness.renderer.lifecycle.slice(-2), ["returnLive", "clearSelection"])
+})
+
+test("history paging forwards a scaffold for the retained historical window", t => {
+  const harness = hookHarness(t)
+  const instructions = [{sequence: 1}, {sequence: 2}]
+  const scaffold = [{sequence: 1}]
+
+  harness.serverEvents.get("worldloom:history")({
+    instructions,
+    scaffold,
+    "archive_start?": true,
+  })
+
+  assert.deepEqual(harness.renderer.lifecycle, [
+    ["prependHistory", instructions, {archiveStart: true, scaffold}],
+  ])
 })
 
 test("updated reapplies introduction dismissal to replacement nodes", t => {
@@ -821,7 +844,9 @@ function fakeRenderer(effects = []) {
     returnLive() { this.lifecycle.push("returnLive") },
     receiveEvent() {},
     applyCatchUp() {},
-    prependHistory() {},
+    prependHistory(instructions, options) {
+      this.lifecycle.push(["prependHistory", instructions, options])
+    },
     setViewerCount() {},
     destroy() { this.destroyed = true },
   }

@@ -130,7 +130,7 @@ defmodule Worldloom.Loom.Store do
   end
 
   @spec wikimedia_before(pos_integer(), pos_integer()) :: [Event.t()]
-  def wikimedia_before(sequence, limit \\ 2)
+  def wikimedia_before(sequence, limit \\ 12)
 
   def wikimedia_before(sequence, limit)
       when is_integer(sequence) and sequence > 0 and is_integer(limit) and

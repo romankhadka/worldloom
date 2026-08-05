@@ -60,13 +60,13 @@ defmodule WorldloomWeb.WorldLiveTest do
   end
 
   test "supplies a separate public scaffold behind an all-visitor live window", %{conn: conn} do
-    public_events = seed_events(2)
+    public_events = seed_events(12)
     visitor_events = seed_visitor_events(405)
 
     {:ok, live_view, _html} = live(conn, "/")
 
     assert has_element?(live_view, "#loom-canvas[data-instruction-count='400']")
-    assert has_element?(live_view, "#loom-canvas[data-scaffold-count='2']")
+    assert has_element?(live_view, "#loom-canvas[data-scaffold-count='12']")
     assert has_element?(live_view, "#worldloom[data-event-window-size='400']")
 
     render_hook(live_view, "sequence-gap", %{
@@ -260,16 +260,54 @@ defmodule WorldloomWeb.WorldLiveTest do
     assert reload_watermark >= second.id
   end
 
+  test "reload and return-live payloads refresh held ambient weather", %{conn: conn} do
+    _old_weather = seed_weather_event(~U[2026-08-03 11:00:00.000000Z])
+    {:ok, live_view, _html} = live(conn, "/")
+    new_weather = seed_weather_event(~U[2026-08-03 12:00:00.000000Z])
+
+    render_hook(live_view, "sequence-gap", %{
+      "after" => new_weather.id,
+      "through" => new_weather.id + 601
+    })
+
+    assert_push_event live_view, "worldloom:reload", %{
+      ambient: %{
+        "sequence" => reload_ambient_sequence,
+        "source" => "open_meteo",
+        "kind" => "weather"
+      }
+    }
+
+    assert reload_ambient_sequence == new_weather.id
+
+    render_hook(live_view, "return-live", %{})
+
+    assert_push_event live_view, "worldloom:return-live", %{
+      ambient: %{
+        "sequence" => live_ambient_sequence,
+        "source" => "open_meteo",
+        "kind" => "weather"
+      }
+    }
+
+    assert live_ambient_sequence == new_weather.id
+  end
+
   test "uses a server-owned cursor for throttled bounded history", %{conn: conn} do
-    seed_events(5)
+    events = seed_events(405)
     {:ok, live_view, _html} = live(conn, "/")
 
     render_hook(live_view, "history-before", %{"sequence" => 999_999_999})
 
     assert_push_event live_view, "worldloom:history", %{
-      instructions: [],
+      instructions: instructions,
+      scaffold: scaffold,
       archive_start?: true
     }
+
+    expected_sequences = events |> Enum.take(5) |> Enum.map(& &1.id)
+    assert Enum.map(instructions, & &1["sequence"]) == expected_sequences
+    assert Enum.map(scaffold, & &1["sequence"]) == expected_sequences
 
     render_hook(live_view, "history-before", %{"sequence" => 1})
     refute_push_event live_view, "worldloom:history", _throttled
@@ -693,6 +731,32 @@ defmodule WorldloomWeb.WorldLiveTest do
 
       event
     end)
+  end
+
+  defp seed_weather_event(occurred_at) do
+    unique = System.unique_integer([:positive, :monotonic])
+
+    weather =
+      SourceEvent.new!(%{
+        kind: :weather,
+        source: :open_meteo,
+        external_id: "world-live-weather-#{unique}",
+        occurred_at: occurred_at,
+        lane: 0.5,
+        intensity: 0.6,
+        payload: %{"summary" => "Weather formation #{unique}"}
+      })
+
+    assert {:ok, [event]} =
+             Store.commit_external([weather], %{
+               source: "open_meteo",
+               cursor: "world-live-weather-cursor-#{unique}",
+               etag: nil,
+               last_successful_at: occurred_at,
+               metadata: %{}
+             })
+
+    event
   end
 
   defp eventually(assertion, attempts \\ 20)

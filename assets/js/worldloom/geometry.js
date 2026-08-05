@@ -11,6 +11,7 @@ export const signalPalette = Object.freeze({
 const supportedRenderVersion = 1
 const defaultSpacing = 28
 const maximumVisitorBandSpan = 8
+const maximumDurableDisplayStep = 8
 
 export function sequenceToX(sequence, viewport) {
   const padding = viewport.padding ?? 40
@@ -651,7 +652,8 @@ function displayPositionsFor(instructions) {
   for (let index = 1; index < instructions.length;) {
     if (instructions[index].source !== "visitor") {
       const instruction = instructions[index]
-      previousPosition += instruction.sequence - previousSequence
+      const rawStep = instruction.sequence - previousSequence
+      previousPosition += Math.min(maximumDurableDisplayStep, rawStep)
       previousSequence = instruction.sequence
       positions.set(instruction.sequence, previousPosition)
       index++

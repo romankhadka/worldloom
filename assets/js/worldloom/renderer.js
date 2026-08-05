@@ -4,7 +4,7 @@ const maximumEvents = 600
 const maximumCommands = 4000
 const maximumViewerPulses = 12
 const maximumActiveTransitions = 8
-const maximumScaffoldEvents = 2
+const maximumScaffoldEvents = 12
 const defaultSpacing = 28
 const animatedKinds = new Set(["wikimedia", "earthquake", "tug", "knot", "illuminate"])
 
@@ -59,7 +59,7 @@ export class Renderer {
   setEvents(instructions, {ambient = this.ambient, scaffold = []} = {}) {
     this.events = boundedInstructions(instructions, "newest")
     this.scaffold = scaffoldInstructions([...scaffold, ...this.events])
-    this.ambient = ambient
+    this.ambient = latestAmbientInstruction([ambient, ...this.events])
     this.watermark = this.events.at(-1)?.sequence ?? 0
     this.queuedEvents.clear()
     this.activeTransitions.clear()
@@ -165,21 +165,22 @@ export class Renderer {
     this.drainQueuedEvents(false)
   }
 
-  reload(instructions, watermark = null, {scaffold = []} = {}) {
+  reload(instructions, watermark = null, {ambient = this.ambient, scaffold = []} = {}) {
     this.panOffset = 0
     this.returningToLive = false
-    this.setEvents(instructions, {scaffold})
+    this.setEvents(instructions, {ambient, scaffold})
     if (Number.isSafeInteger(watermark)) this.watermark = watermark
     this.newerEventsDropped = false
     this.notifyViewport()
   }
 
-  prependHistory(instructions, {archiveStart = false} = {}) {
+  prependHistory(instructions, {archiveStart = false, scaffold = []} = {}) {
     this.activeTransitions.clear()
     const combined = [...instructions, ...this.events]
     const preference = this.atLiveEdge() ? "newest" : "oldest"
     this.newerEventsDropped = preference === "oldest" && uniqueCount(combined) > maximumEvents
     this.events = boundedInstructions(combined, preference)
+    this.scaffold = scaffoldInstructions([...scaffold, ...this.events])
     this.archiveStart = Boolean(archiveStart)
     this.historyInFlight = false
     this.rebuild()
@@ -424,6 +425,9 @@ export class Renderer {
     if (instruction.source === "wikimedia") {
       this.scaffold = scaffoldInstructions([...this.scaffold, instruction])
     }
+    if (instruction.source === "open_meteo" && instruction.kind === "weather") {
+      this.ambient = instruction
+    }
     this.watermark = Math.max(this.watermark, instruction.sequence)
     if (animate && animatedKinds.has(instruction.kind)) {
       this.activeTransitions.set(instruction.sequence, {
@@ -621,6 +625,17 @@ function scaffoldInstructions(instructions) {
     instructions.filter(instruction => instruction?.source === "wikimedia"),
     "newest",
   ).slice(-maximumScaffoldEvents)
+}
+
+function latestAmbientInstruction(instructions) {
+  return instructions
+    .filter(instruction =>
+      instruction?.source === "open_meteo" &&
+      instruction.kind === "weather" &&
+      Number.isSafeInteger(instruction.sequence)
+    )
+    .sort((left, right) => left.sequence - right.sequence)
+    .at(-1) ?? null
 }
 
 function drawCommand(context, command, width, height) {

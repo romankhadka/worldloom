@@ -109,12 +109,14 @@ export const Worldloom = {
     this.handleEvent("worldloom:history", payload => {
       this.renderer.prependHistory(payload.instructions ?? [], {
         archiveStart: payload["archive_start?"] ?? payload.archive_start ?? false,
+        scaffold: payload.scaffold ?? [],
       })
       this.syncRenderedSequence()
     })
 
     this.handleEvent("worldloom:reload", payload => {
       this.renderer.reload(payload.instructions ?? [], payload.watermark, {
+        ambient: payload.ambient ?? null,
         scaffold: payload.scaffold ?? [],
       })
       if (Number.isSafeInteger(payload.selected_sequence) && payload.selected_sequence > 0) {
@@ -128,6 +130,7 @@ export const Worldloom = {
     this.handleEvent("worldloom:return-live", payload => {
       if (payload?.instructions) {
         this.renderer.reload(payload.instructions, payload.watermark, {
+          ambient: payload.ambient ?? null,
           scaffold: payload.scaffold ?? [],
         })
       }

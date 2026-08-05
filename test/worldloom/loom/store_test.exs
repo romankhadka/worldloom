@@ -120,7 +120,7 @@ defmodule Worldloom.Loom.StoreTest do
   end
 
   test "latest Wikimedia scaffold remains available behind a visitor-only window" do
-    wikimedia = Enum.map(1..4, &source_event/1)
+    wikimedia = Enum.map(1..16, &source_event/1)
 
     assert {:ok, stored_wikimedia} =
              Store.commit_external(wikimedia, checkpoint("scaffold-wikimedia"))
@@ -140,11 +140,32 @@ defmodule Worldloom.Loom.StoreTest do
       assert {:ok, _event} = Store.commit_visitor(visitor, "scaffold-visitor-#{index}")
     end
 
-    assert Enum.map(Store.wikimedia_before(Store.highest_sequence(), 2), & &1.id) ==
-             stored_wikimedia |> Enum.take(-2) |> Enum.map(& &1.id)
+    assert Enum.map(Store.wikimedia_before(Store.highest_sequence()), & &1.id) ==
+             stored_wikimedia |> Enum.take(-12) |> Enum.map(& &1.id)
 
     assert_raise ArgumentError, fn -> Store.wikimedia_before(0, 2) end
     assert_raise ArgumentError, fn -> Store.wikimedia_before(Store.highest_sequence(), 601) end
+  end
+
+  test "Wikimedia scaffold lookups degrade gracefully before a full public germ" do
+    assert Store.wikimedia_before(1) == []
+
+    assert {:ok, [wikimedia]} =
+             Store.commit_external([source_event(1)], checkpoint("single-scaffold"))
+
+    assert Store.wikimedia_before(wikimedia.id) == [wikimedia]
+  end
+
+  test "source and sequence lookups have a supporting database index" do
+    index =
+      Repo.query!("""
+      SELECT indexdef
+      FROM pg_indexes
+      WHERE schemaname = 'public' AND indexname = 'loom_events_source_id_index'
+      """)
+
+    assert [[definition]] = index.rows
+    assert definition =~ "USING btree (source, id)"
   end
 
   test "around, after, before, ambient, fetch, and highest sequence are bounded and ordered" do

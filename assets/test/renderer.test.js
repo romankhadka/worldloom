@@ -220,12 +220,12 @@ test("retains a bounded public scaffold through all-visitor reloads and live app
     reducedMotion: true,
   })
   const scaffold = Array.from(
-    {length: 2},
-    (_entry, index) => publicInstruction(index + 1),
+    {length: 12},
+    (_entry, index) => publicInstruction(index * 4 + 1),
   )
   const visitorKinds = ["tug", "knot", "illuminate"]
   const visitors = Array.from({length: 600}, (_entry, index) => ({
-    ...instruction(index + 3),
+    ...instruction(index + 46),
     kind: visitorKinds[index % visitorKinds.length],
     source: "visitor",
     lane: 0.5,
@@ -240,11 +240,11 @@ test("retains a bounded public scaffold through all-visitor reloads and live app
     visitors.map(visitor => visitor.sequence),
   )
   assert.equal(renderer.events.length, 600)
-  assert.equal(renderer.watermark, 602)
+  assert.equal(renderer.watermark, 645)
   assert.ok(renderer.commands.length <= 4000)
 
-  renderer.reload(visitors, 602, {scaffold})
-  for (let sequence = 603; sequence <= 672; sequence++) {
+  renderer.reload(visitors, 645, {scaffold})
+  for (let sequence = 646; sequence <= 715; sequence++) {
     renderer.receiveEvent({
       ...instruction(sequence),
       kind: visitorKinds[sequence % visitorKinds.length],
@@ -255,9 +255,130 @@ test("retains a bounded public scaffold through all-visitor reloads and live app
 
   assertVisibleScaffold(renderer)
   assert.equal(renderer.events.length, 600)
-  assert.equal(renderer.events[0].sequence, 73)
-  assert.equal(renderer.watermark, 672)
+  assert.equal(renderer.events[0].sequence, 116)
+  assert.equal(renderer.watermark, 715)
   assert.ok(renderer.commands.length <= 4000)
+})
+
+test("replaces future scaffold anchors when historical paging drops newer events", () => {
+  const renderer = new Renderer(null, {
+    width: 1000,
+    height: 600,
+    padding: 50,
+    reducedMotion: true,
+  })
+  const liveVisitors = Array.from({length: 600}, (_entry, index) => ({
+    ...instruction(index + 951),
+    kind: "illuminate",
+    source: "visitor",
+  }))
+  renderer.setEvents(liveVisitors, {
+    scaffold: [publicInstruction(900), publicInstruction(950)],
+  })
+  renderer.panBy(100)
+
+  const historicalEvents = Array.from({length: 600}, (_entry, index) => {
+    const sequence = index + 1
+    if (sequence === 100 || sequence === 200) return publicInstruction(sequence)
+    return {...instruction(sequence), kind: "illuminate", source: "visitor"}
+  })
+  const historicalScaffold = [publicInstruction(100), publicInstruction(200)]
+
+  renderer.prependHistory(historicalEvents, {
+    archiveStart: true,
+    scaffold: historicalScaffold,
+  })
+
+  const spine = renderer.commands.find(
+    command => command.type === "fiber-path" && command.role === "spine",
+  )
+  assert.ok(spine.segments.every(segment => segment.sequence <= 600))
+  assert.deepEqual(
+    renderer.commands
+      .filter(command => command.type === "anchor-hit")
+      .map(command => command.sequence),
+    historicalEvents.map(event => event.sequence),
+  )
+  assert.equal(renderer.events[0].sequence, 1)
+  assert.equal(renderer.events.at(-1).sequence, 600)
+  assert.equal(renderer.watermark, 1550)
+  assert.equal(renderer.newerEventsDropped, true)
+})
+
+test("handles zero or one real public scaffold instruction as an intentional germ state", () => {
+  const visitors = Array.from({length: 600}, (_entry, index) => ({
+    ...instruction(index + 2),
+    kind: "illuminate",
+    source: "visitor",
+  }))
+
+  for (const scaffold of [[], [publicInstruction(1)]]) {
+    const renderer = new Renderer(null, {
+      width: 1000,
+      height: 600,
+      padding: 50,
+      reducedMotion: true,
+    })
+    renderer.setEvents(visitors, {scaffold})
+
+    assert.equal(
+      renderer.commands.some(
+        command => command.type === "fiber-path" && command.role === "spine",
+      ),
+      false,
+    )
+    assert.deepEqual(
+      renderer.commands
+        .filter(command => command.type === "anchor-hit")
+        .map(command => command.sequence),
+      visitors.map(visitor => visitor.sequence),
+    )
+    assert.equal(renderer.events.length, 600)
+    assert.equal(renderer.watermark, 601)
+    assert.ok(renderer.commands.length <= 4000)
+  }
+})
+
+test("retains newer ambient weather after it ages out of the live window", () => {
+  const renderer = new Renderer(null, {
+    width: 1000,
+    height: 600,
+    padding: 50,
+    reducedMotion: true,
+  })
+  const oldAmbient = {
+    ...instruction(2),
+    kind: "weather",
+    source: "open_meteo",
+  }
+  const initialVisitors = Array.from({length: 598}, (_entry, index) => ({
+    ...instruction(index + 3),
+    kind: "illuminate",
+    source: "visitor",
+  }))
+  renderer.setEvents([publicInstruction(1), oldAmbient, ...initialVisitors], {
+    ambient: oldAmbient,
+  })
+
+  const newAmbient = {
+    ...instruction(601),
+    kind: "weather",
+    source: "open_meteo",
+  }
+  renderer.receiveEvent(newAmbient)
+  for (let sequence = 602; sequence <= 1201; sequence++) {
+    renderer.receiveEvent({
+      ...instruction(sequence),
+      kind: "illuminate",
+      source: "visitor",
+    })
+  }
+
+  const ambientCommands = renderer.commands.filter(command => command.type === "ambient")
+  assert.equal(renderer.events.length, 600)
+  assert.equal(renderer.events[0].sequence, 602)
+  assert.equal(renderer.watermark, 1201)
+  assert.deepEqual(ambientCommands.map(command => command.sequence), [601])
 })
 
 test("requests a fresh live window when history panning dropped newer events", () => {
@@ -782,9 +903,14 @@ function assertVisibleScaffold(renderer) {
     command => command.type === "fiber-path" && command.role === "spine",
   )
   assert.ok(spine)
-  assert.ok(spine.segments.length >= 1)
+  assert.ok(spine.segments.length >= 10)
   assert.ok(spine.segments.at(-1).curve.to.x >= renderer.padding)
   assert.ok(spine.segments.at(-1).curve.to.x <= renderer.width - renderer.padding)
+  const visibleXs = spine.segments.flatMap(segment => [
+    Math.max(renderer.padding, Math.min(renderer.width - renderer.padding, segment.curve.from.x)),
+    Math.max(renderer.padding, Math.min(renderer.width - renderer.padding, segment.curve.to.x)),
+  ])
+  assert.ok(Math.max(...visibleXs) - Math.min(...visibleXs) >= renderer.width * 0.65)
 }
 
 function cachedCallsFor(command) {

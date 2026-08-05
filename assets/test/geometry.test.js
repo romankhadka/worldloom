@@ -26,6 +26,32 @@ test("projects sequence horizontally and lane vertically", () => {
   assert.equal(laneToY(1, viewport), 550)
 })
 
+test("caps sparse durable sequence gaps without changing normal public cadence", () => {
+  const publicTemplate = contract.find(instruction => instruction.kind === "wikimedia")
+  const publicPair = sequences => sequences.map(sequence => ({
+    ...publicTemplate,
+    sequence,
+  }))
+  const hitXs = instructions => commandsForScene(
+    instructions,
+    {...viewport, maxSequence: instructions.at(-1).sequence},
+  )
+    .filter(command => command.type === "anchor-hit")
+    .map(command => command.x)
+
+  const normalXs = hitXs(publicPair([1, 5]))
+  const sparseXs = hitXs(publicPair([1, 1000]))
+
+  assert.equal(normalXs[1] - normalXs[0], viewport.spacing * 4)
+  assert.equal(sparseXs[1] - sparseXs[0], viewport.spacing * 8)
+  assert.deepEqual(
+    commandsForScene(publicPair([1, 1000]), {...viewport, maxSequence: 1000})
+      .filter(command => command.type === "anchor-hit")
+      .map(command => command.sequence),
+    [1, 1000],
+  )
+})
+
 test("generates stable commands and hit regions for every signal and gesture", () => {
   const expectedTypes = {
     wikimedia: "fiber",
@@ -167,6 +193,48 @@ test("projects a viewport-spanning primary spine with bounded material", () => {
   assert.ok(spine.material.glow.width > spine.material.body.width)
   assert.ok(spine.material.body.width > spine.material.core.width)
   assert.ok(spine.material.glow.alpha <= 0.18)
+})
+
+test("projects a bounded public scaffold as a coherent viewport-spanning spine", () => {
+  const publicTemplate = contract.find(instruction => instruction.kind === "wikimedia")
+  const visitorTemplate = contract.find(instruction => instruction.source === "visitor")
+  const scaffold = Array.from({length: 12}, (_entry, index) => ({
+    ...publicTemplate,
+    sequence: index * 4 + 1,
+    lane: 0.5 + Math.sin(index / 3) * 0.16,
+  }))
+  const visitors = Array.from({length: 600}, (_entry, index) => ({
+    ...visitorTemplate,
+    sequence: index + 46,
+    lane: 0.5,
+  }))
+  const topologyInstructions = [...scaffold, ...visitors.slice(-588)]
+
+  const scene = commandsForScene(
+    topologyInstructions,
+    {...viewport, maxSequence: 645, spacing: 28},
+    {
+      projectionInstructions: [...scaffold, ...visitors],
+      hitInstructions: visitors,
+    },
+  )
+  const spine = scene.find(
+    command => command.type === "fiber-path" && command.role === "spine",
+  )
+  const visibleXs = spine.segments.flatMap(segment => [
+    Math.max(viewport.padding, Math.min(viewport.width - viewport.padding, segment.curve.from.x)),
+    Math.max(viewport.padding, Math.min(viewport.width - viewport.padding, segment.curve.to.x)),
+  ])
+
+  assert.equal(spine.segments.length, 11)
+  assert.ok(Math.max(...visibleXs) - Math.min(...visibleXs) >= viewport.width * 0.65)
+  assert.deepEqual(
+    scene
+      .filter(command => command.type === "anchor-hit")
+      .map(command => command.sequence),
+    visitors.map(visitor => visitor.sequence),
+  )
+  assert.ok(scene.length <= 4000)
 })
 
 test("derives cosmetic fiber layers from one structural command", () => {
