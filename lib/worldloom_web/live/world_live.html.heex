@@ -12,6 +12,7 @@
       data-instructions={Jason.encode!(@instructions)}
       data-instruction-count={length(@instructions)}
       data-ambient={@ambient && Jason.encode!(Instruction.from_event(@ambient))}
+      data-gesture-lane={@gesture_lane}
       role="img"
       aria-label="A living public tapestry woven from public signals. Use arrow keys to inspect formations."
       tabindex="0"

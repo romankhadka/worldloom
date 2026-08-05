@@ -14,6 +14,7 @@ defmodule WorldloomWeb.WorldLiveTest do
     {:ok, live_view, html} = live(conn, "/")
 
     assert html =~ "data-instruction-count=\"1\""
+    assert has_element?(live_view, "#loom-canvas[data-gesture-lane='0.5']")
 
     for selector <- [
           "#worldloom",
