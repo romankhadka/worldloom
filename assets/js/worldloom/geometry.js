@@ -83,16 +83,19 @@ export function chapterSeams(instructions, viewport) {
   })
 }
 
-export function commandsForScene(instructions, viewport, {ambient = null} = {}) {
+export function commandsForScene(
+  instructions,
+  viewport,
+  {ambient = null, projectionInstructions = instructions, hitInstructions = instructions} = {},
+) {
   const ordered = uniqueInstructions(instructions)
+  const projectionOrdered = uniqueInstructions(projectionInstructions)
+  const hitOrdered = uniqueInstructions(hitInstructions)
   const maxSequence = viewport.maxSequence ?? ordered.at(-1)?.sequence ?? ambient?.sequence ?? 0
-  const projectionInstructions = ambient
-    ? uniqueInstructions([...ordered, ambient])
-    : ordered
   const projectedViewport = {
     ...viewport,
     maxSequence,
-    displayPositions: displayPositionsFor(projectionInstructions),
+    displayPositions: displayPositionsFor(projectionOrdered),
   }
   const topology = buildTopology(ordered)
   const ambientInstruction = topology.ambient ?? ambient
@@ -108,7 +111,7 @@ export function commandsForScene(instructions, viewport, {ambient = null} = {}) 
     ...fiberCommands(topology, projectedViewport),
     ...formationCommands(topology, projectedViewport),
     ...topology.fallbacks.map(fallback => fallbackCommand(fallback, projectedViewport)),
-    ...ordered.map(instruction => hitCommand(instruction, projectedViewport)),
+    ...hitOrdered.map(instruction => hitCommand(instruction, projectedViewport)),
   ]
 }
 

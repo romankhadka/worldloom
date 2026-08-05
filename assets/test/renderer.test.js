@@ -147,6 +147,29 @@ test("keeps the living spine visible through a trailing visitor surge", () => {
   assert.deepEqual(selected, [190])
 })
 
+test("hit tests the nearest formation center inside a dense visitor band", () => {
+  const renderer = new Renderer(null, {
+    width: 1000,
+    height: 600,
+    padding: 50,
+    reducedMotion: true,
+  })
+  renderer.setEvents(visitorSurgeInstructions({visitorLane: 0.5}))
+
+  const visitorHits = renderer.commands.filter(
+    command => command.type === "anchor-hit" && command.sequence >= 121,
+  )
+  for (const hit of visitorHits) {
+    assert.equal(renderer.hitTest(hit.x, hit.y), hit.sequence)
+  }
+
+  const [first, second] = visitorHits
+  assert.equal(
+    renderer.hitTest((first.x + second.x) / 2, first.y),
+    second.sequence,
+  )
+})
+
 test("extends the visible spine when public activity resumes after a visitor surge", () => {
   const renderer = new Renderer(null, {
     width: 1000,
@@ -187,6 +210,54 @@ test("bounds archive panning to the compressed visitor projection", () => {
   assert.equal(archivedHits.at(-1).sequence, 190)
   assert.ok(archivedHits.slice(1).every((hit, index) => hit.x > archivedHits[index].x))
   assert.equal(archivedHits[0].x, renderer.width - renderer.padding)
+})
+
+test("retains a bounded public scaffold through all-visitor reloads and live appends", () => {
+  const renderer = new Renderer(null, {
+    width: 1000,
+    height: 600,
+    padding: 50,
+    reducedMotion: true,
+  })
+  const scaffold = Array.from(
+    {length: 2},
+    (_entry, index) => publicInstruction(index + 1),
+  )
+  const visitorKinds = ["tug", "knot", "illuminate"]
+  const visitors = Array.from({length: 600}, (_entry, index) => ({
+    ...instruction(index + 3),
+    kind: visitorKinds[index % visitorKinds.length],
+    source: "visitor",
+    lane: 0.5,
+  }))
+
+  renderer.setEvents(visitors, {scaffold})
+  assertVisibleScaffold(renderer)
+  assert.deepEqual(
+    renderer.commands
+      .filter(command => command.type === "anchor-hit")
+      .map(command => command.sequence),
+    visitors.map(visitor => visitor.sequence),
+  )
+  assert.equal(renderer.events.length, 600)
+  assert.equal(renderer.watermark, 602)
+  assert.ok(renderer.commands.length <= 4000)
+
+  renderer.reload(visitors, 602, {scaffold})
+  for (let sequence = 603; sequence <= 672; sequence++) {
+    renderer.receiveEvent({
+      ...instruction(sequence),
+      kind: visitorKinds[sequence % visitorKinds.length],
+      source: "visitor",
+      lane: 0.5,
+    })
+  }
+
+  assertVisibleScaffold(renderer)
+  assert.equal(renderer.events.length, 600)
+  assert.equal(renderer.events[0].sequence, 73)
+  assert.equal(renderer.watermark, 672)
+  assert.ok(renderer.commands.length <= 4000)
 })
 
 test("requests a fresh live window when history panning dropped newer events", () => {
@@ -690,7 +761,7 @@ function publicInstruction(sequence) {
   return {...instruction(sequence), kind: "wikimedia", source: "wikimedia"}
 }
 
-function visitorSurgeInstructions() {
+function visitorSurgeInstructions({visitorLane = null} = {}) {
   const publicInstructions = Array.from(
     {length: 120},
     (_entry, index) => publicInstruction(index + 1),
@@ -700,9 +771,20 @@ function visitorSurgeInstructions() {
     ...instruction(index + 121),
     kind: visitorKinds[index % visitorKinds.length],
     source: "visitor",
+    ...(visitorLane === null ? {} : {lane: visitorLane}),
   }))
 
   return [...publicInstructions, ...visitorInstructions]
+}
+
+function assertVisibleScaffold(renderer) {
+  const spine = renderer.commands.find(
+    command => command.type === "fiber-path" && command.role === "spine",
+  )
+  assert.ok(spine)
+  assert.ok(spine.segments.length >= 1)
+  assert.ok(spine.segments.at(-1).curve.to.x >= renderer.padding)
+  assert.ok(spine.segments.at(-1).curve.to.x <= renderer.width - renderer.padding)
 }
 
 function cachedCallsFor(command) {

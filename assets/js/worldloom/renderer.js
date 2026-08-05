@@ -4,6 +4,7 @@ const maximumEvents = 600
 const maximumCommands = 4000
 const maximumViewerPulses = 12
 const maximumActiveTransitions = 8
+const maximumScaffoldEvents = 2
 const defaultSpacing = 28
 const animatedKinds = new Set(["wikimedia", "earthquake", "tug", "knot", "illuminate"])
 
@@ -27,6 +28,7 @@ export class Renderer {
     this.onSelect = options.onSelect ?? (() => {})
     this.onReloadRequest = options.onReloadRequest ?? (() => {})
     this.events = []
+    this.scaffold = []
     this.commands = []
     this.ambient = null
     this.panOffset = 0
@@ -54,8 +56,9 @@ export class Renderer {
     this.resize(this.width, this.height, this.dpr)
   }
 
-  setEvents(instructions, {ambient = this.ambient} = {}) {
+  setEvents(instructions, {ambient = this.ambient, scaffold = []} = {}) {
     this.events = boundedInstructions(instructions, "newest")
+    this.scaffold = scaffoldInstructions([...scaffold, ...this.events])
     this.ambient = ambient
     this.watermark = this.events.at(-1)?.sequence ?? 0
     this.queuedEvents.clear()
@@ -108,9 +111,20 @@ export class Renderer {
 
   rebuild() {
     const viewport = this.viewport()
-    this.commands = this.projectScene(this.events, viewport, {ambient: this.ambient}).slice(
-      -maximumCommands,
+    const eventSequences = new Set(this.events.map(instruction => instruction.sequence))
+    const scaffoldOnly = this.scaffold.filter(
+      instruction => !eventSequences.has(instruction.sequence),
     )
+    const topologyCapacity = maximumEvents - scaffoldOnly.length
+    const topologyInstructions = [
+      ...scaffoldOnly,
+      ...this.events.slice(-topologyCapacity),
+    ]
+    this.commands = this.projectScene(topologyInstructions, viewport, {
+      ambient: this.ambient,
+      projectionInstructions: [...scaffoldOnly, ...this.events],
+      hitInstructions: this.events,
+    }).slice(-maximumCommands)
     const availableTransitions = transitionSequences(this.commands)
     for (const sequence of this.activeTransitions.keys()) {
       if (!availableTransitions.has(sequence)) this.activeTransitions.delete(sequence)
@@ -151,10 +165,10 @@ export class Renderer {
     this.drainQueuedEvents(false)
   }
 
-  reload(instructions, watermark = null) {
+  reload(instructions, watermark = null, {scaffold = []} = {}) {
     this.panOffset = 0
     this.returningToLive = false
-    this.setEvents(instructions)
+    this.setEvents(instructions, {scaffold})
     if (Number.isSafeInteger(watermark)) this.watermark = watermark
     this.newerEventsDropped = false
     this.notifyViewport()
@@ -254,11 +268,21 @@ export class Renderer {
 
   hitTest(x, y) {
     const sceneX = x - this.viewTranslationX()
-    const command = [...this.commands].reverse().find(item => {
+    const candidates = this.commands.filter(item => {
       const hit = item.hit
       return hit && sceneX >= hit.x && sceneX <= hit.x + hit.width && y >= hit.y && y <= hit.y + hit.height
     })
-    return command?.sequence ?? null
+    const nearest = candidates.reduce((closest, command) => {
+      const centerX = Number.isFinite(command.x) ? command.x : command.hit.x + command.hit.width / 2
+      const centerY = Number.isFinite(command.y) ? command.y : command.hit.y + command.hit.height / 2
+      const distance = (sceneX - centerX) ** 2 + (y - centerY) ** 2
+      if (!closest || distance < closest.distance - 1e-9) return {command, distance}
+      if (Math.abs(distance - closest.distance) <= 1e-9 && command.sequence > closest.command.sequence) {
+        return {command, distance}
+      }
+      return closest
+    }, null)
+    return nearest?.command.sequence ?? null
   }
 
   selectNext(direction) {
@@ -318,6 +342,7 @@ export class Renderer {
     if (this.frameHandle !== null) this.cancelFrame(this.frameHandle)
     this.frameHandle = null
     this.activeTransitions.clear()
+    this.scaffold = []
     this.cacheCanvas = null
     this.cacheContext = null
   }
@@ -396,6 +421,9 @@ export class Renderer {
 
   appendCommitted(instruction, rebuild = true, animate = !this.reducedMotion) {
     this.events = boundedInstructions([...this.events, instruction], "newest")
+    if (instruction.source === "wikimedia") {
+      this.scaffold = scaffoldInstructions([...this.scaffold, instruction])
+    }
     this.watermark = Math.max(this.watermark, instruction.sequence)
     if (animate && animatedKinds.has(instruction.kind)) {
       this.activeTransitions.set(instruction.sequence, {
@@ -586,6 +614,13 @@ function boundedInstructions(instructions, preference) {
   }
   const ordered = [...bySequence.values()].sort((left, right) => left.sequence - right.sequence)
   return preference === "oldest" ? ordered.slice(0, maximumEvents) : ordered.slice(-maximumEvents)
+}
+
+function scaffoldInstructions(instructions) {
+  return boundedInstructions(
+    instructions.filter(instruction => instruction?.source === "wikimedia"),
+    "newest",
+  ).slice(-maximumScaffoldEvents)
 }
 
 function drawCommand(context, command, width, height) {

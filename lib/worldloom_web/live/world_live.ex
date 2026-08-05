@@ -15,6 +15,7 @@ defmodule WorldloomWeb.WorldLive do
   @history_page_limit 400
   @history_throttle_ms 500
   @accessible_limit 20
+  @public_scaffold_limit 2
 
   @impl true
   def mount(_params, session, socket) do
@@ -28,6 +29,7 @@ defmodule WorldloomWeb.WorldLive do
       |> assign(:live?, action == :live)
       |> assign(:mode, action)
       |> assign(:instructions, [])
+      |> assign(:scaffold, [])
       |> assign(:ambient, nil)
       |> assign(:trusted_events, %{})
       |> assign(:oldest_loaded_sequence, nil)
@@ -127,12 +129,14 @@ defmodule WorldloomWeb.WorldLive do
     if through_sequence - after_sequence > @maximum_window do
       events = Store.latest(@initial_history_limit)
       instructions = Enum.map(events, &Instruction.from_event/1)
+      scaffold = public_scaffold(events, nil)
 
       {:noreply,
        socket
        |> assign(:trusted_events, trusted_event_map(events))
        |> push_event("worldloom:reload", %{
          instructions: instructions,
+         scaffold: scaffold,
          watermark: Store.highest_sequence()
        })}
     else
@@ -232,6 +236,7 @@ defmodule WorldloomWeb.WorldLive do
   def handle_event("return-live", _payload, socket) do
     events = Store.latest(@initial_history_limit)
     instructions = Enum.map(events, &Instruction.from_event/1)
+    scaffold = public_scaffold(events, nil)
 
     {:noreply,
      socket
@@ -239,6 +244,7 @@ defmodule WorldloomWeb.WorldLive do
      |> assign(:trusted_events, trusted_event_map(events))
      |> push_event("worldloom:return-live", %{
        instructions: instructions,
+       scaffold: scaffold,
        watermark: Store.highest_sequence()
      })}
   end
@@ -359,7 +365,6 @@ defmodule WorldloomWeb.WorldLive do
   defp enter_live_route(socket, uri) do
     socket = transition_coordinator_subscription(socket, true)
     events = Store.latest(@initial_history_limit)
-    instructions = Enum.map(events, &Instruction.from_event/1)
     route_changed? = route_changed?(socket, uri)
 
     socket =
@@ -377,8 +382,9 @@ defmodule WorldloomWeb.WorldLive do
 
     if route_changed? do
       push_event(socket, "worldloom:return-live", %{
-        instructions: instructions,
-        watermark: instruction_watermark(instructions)
+        instructions: socket.assigns.instructions,
+        scaffold: socket.assigns.scaffold,
+        watermark: instruction_watermark(socket.assigns.instructions)
       })
     else
       socket
@@ -388,7 +394,6 @@ defmodule WorldloomWeb.WorldLive do
   defp enter_chapter_route(socket, params, uri) do
     socket = transition_coordinator_subscription(socket, false)
     {events, selected_event} = load_events(:chapter, params)
-    instructions = Enum.map(events, &Instruction.from_event/1)
     route_changed? = route_changed?(socket, uri)
 
     socket =
@@ -406,8 +411,9 @@ defmodule WorldloomWeb.WorldLive do
 
     if route_changed? do
       push_event(socket, "worldloom:reload", %{
-        instructions: instructions,
-        watermark: instruction_watermark(instructions),
+        instructions: socket.assigns.instructions,
+        scaffold: socket.assigns.scaffold,
+        watermark: instruction_watermark(socket.assigns.instructions),
         selected_sequence: selected_event.id
       })
     else
@@ -418,7 +424,6 @@ defmodule WorldloomWeb.WorldLive do
   defp enter_panel_route(socket, action, uri) do
     socket = transition_coordinator_subscription(socket, false)
     events = Store.latest(@initial_history_limit)
-    instructions = Enum.map(events, &Instruction.from_event/1)
     chapters = if action == :archive, do: Store.chapters(), else: []
     route_changed? = route_changed?(socket, uri)
 
@@ -438,8 +443,9 @@ defmodule WorldloomWeb.WorldLive do
 
     if route_changed? do
       push_event(socket, "worldloom:reload", %{
-        instructions: instructions,
-        watermark: instruction_watermark(instructions)
+        instructions: socket.assigns.instructions,
+        scaffold: socket.assigns.scaffold,
+        watermark: instruction_watermark(socket.assigns.instructions)
       })
     else
       socket
@@ -452,11 +458,20 @@ defmodule WorldloomWeb.WorldLive do
     socket
     |> assign(:utc_chapter, utc_chapter(events, selected_event))
     |> assign(:instructions, instructions)
+    |> assign(:scaffold, public_scaffold(events, selected_event))
     |> assign(:ambient, ambient_event(events, selected_event))
     |> assign(:trusted_events, trusted_event_map(events))
     |> assign(:oldest_loaded_sequence, oldest_sequence(events))
     |> assign(:history_requested_at, nil)
     |> stream(:accessible_formations, Enum.take(instructions, -@accessible_limit), reset: true)
+  end
+
+  defp public_scaffold([], _selected_event), do: []
+
+  defp public_scaffold(events, selected_event) do
+    (selected_event || List.last(events)).id
+    |> Store.wikimedia_before(@public_scaffold_limit)
+    |> Enum.map(&Instruction.from_event/1)
   end
 
   defp transition_coordinator_subscription(socket, live?) do

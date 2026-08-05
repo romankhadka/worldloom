@@ -11,6 +11,8 @@
       phx-update="ignore"
       data-instructions={Jason.encode!(@instructions)}
       data-instruction-count={length(@instructions)}
+      data-scaffold={Jason.encode!(@scaffold)}
+      data-scaffold-count={length(@scaffold)}
       data-ambient={@ambient && Jason.encode!(Instruction.from_event(@ambient))}
       data-gesture-lane={@gesture_lane}
       data-live={to_string(@live?)}

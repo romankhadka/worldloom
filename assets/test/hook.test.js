@@ -238,19 +238,29 @@ test("outside dismissal clears local selection before one trusted server push", 
 
 test("reload and return-live server events reconcile local selection", t => {
   const harness = hookHarness(t)
+  const scaffold = [{sequence: 3}, {sequence: 7}]
 
   harness.serverEvents.get("worldloom:reload")({
     instructions: [{sequence: 17}],
+    scaffold,
     watermark: 17,
     selected_sequence: 17,
   })
+  assert.deepEqual(
+    harness.renderer.lifecycle[0],
+    ["reload", [{sequence: 17}], 17, {scaffold}],
+  )
   assert.deepEqual(harness.renderer.selections, [17])
 
   harness.serverEvents.get("worldloom:reload")({instructions: [], watermark: 18})
   assert.equal(harness.renderer.clearSelections, 1)
 
-  harness.serverEvents.get("worldloom:return-live")({instructions: [], watermark: 19})
+  harness.serverEvents.get("worldloom:return-live")({instructions: [], scaffold, watermark: 19})
   assert.equal(harness.renderer.clearSelections, 2)
+  assert.deepEqual(
+    harness.renderer.lifecycle.at(-3),
+    ["reload", [], 19, {scaffold}],
+  )
   assert.deepEqual(harness.renderer.lifecycle.slice(-2), ["returnLive", "clearSelection"])
 })
 
@@ -805,8 +815,8 @@ function fakeRenderer(effects = []) {
       this.lifecycle.push("clearSelection")
       effects.push("renderer.clearSelection")
     },
-    reload(instructions, watermark) {
-      this.lifecycle.push(["reload", instructions, watermark])
+    reload(instructions, watermark, options) {
+      this.lifecycle.push(["reload", instructions, watermark, options])
     },
     returnLive() { this.lifecycle.push("returnLive") },
     receiveEvent() {},

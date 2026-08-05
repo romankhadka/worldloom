@@ -77,8 +77,9 @@ All paths exposed to bursts have explicit limits:
 - A LiveView initially loads 400 events, historical permalinks load 500 around the
   requested sequence, and every server-side event window is capped at 600.
 - History pages contain at most 400 events and are throttled to one request per 500 ms.
-- The renderer retains at most 600 events, 4,000 drawing commands, 600 queued
-  out-of-order instructions, eight active transitions, and 12 aggregate viewer pulses.
+- The renderer retains at most 600 ordered events plus two real Wikimedia scaffold
+  instructions, 4,000 drawing commands, 600 queued out-of-order instructions, eight
+  active transitions, and 12 aggregate viewer pulses.
   Settled geometry lives in one detached canvas whose dimensions track the visible
   canvas rather than growing with history.
 - The accessible formation stream retains the latest 20 textual controls.
@@ -107,13 +108,18 @@ or rendering contract.
 
 `WorldloomWeb.WorldLive` owns navigation, a bounded trusted-event map, aggregate
 Presence, safe formation details, gestures, catch-up, and history requests. It sends
-compact drawing instructions to the `Worldloom` hook.
+compact drawing instructions to the `Worldloom` hook. A separate two-instruction
+Wikimedia scaffold preserves a real public backbone when the ordered live window is
+entirely visitor activity; it never changes the trusted window, watermark, or archive
+cursor.
 
 `topology.js` turns the bounded instruction window into stable anchors, branches,
 connectors, and visitor formations without access to the viewport, canvas, clock, or
 DOM. `geometry.js` projects that graph through centripetal Catmull-Rom splines converted
-to cubic Bézier segments. Replaying the same stored instruction set therefore yields
-the same graph relationships at any viewport size.
+to cubic Bézier segments. Consecutive visitor events share a bounded monotonic display
+band while retaining their raw sequence identities, and held ambient weather does not
+participate in horizontal spacing. Replaying the same stored instruction set therefore
+yields the same graph relationships at any viewport size.
 
 The Canvas 2D renderer owns hit testing, focus traversal, panning, resize, and local
 animation timestamps. It composites a detached cache of settled fibers and durable

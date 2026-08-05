@@ -119,6 +119,34 @@ defmodule Worldloom.Loom.StoreTest do
     assert_raise ArgumentError, ~r/limit must be between 1 and 600/, fn -> Store.latest(601) end
   end
 
+  test "latest Wikimedia scaffold remains available behind a visitor-only window" do
+    wikimedia = Enum.map(1..4, &source_event/1)
+
+    assert {:ok, stored_wikimedia} =
+             Store.commit_external(wikimedia, checkpoint("scaffold-wikimedia"))
+
+    for index <- 1..10 do
+      visitor =
+        SourceEvent.new!(%{
+          kind: :illuminate,
+          source: :visitor,
+          external_id: nil,
+          occurred_at: DateTime.add(~U[2026-08-03 13:00:00.000000Z], index, :second),
+          lane: 0.5,
+          intensity: 0.6,
+          payload: %{"summary" => "Visitor formation #{index}"}
+        })
+
+      assert {:ok, _event} = Store.commit_visitor(visitor, "scaffold-visitor-#{index}")
+    end
+
+    assert Enum.map(Store.wikimedia_before(Store.highest_sequence(), 2), & &1.id) ==
+             stored_wikimedia |> Enum.take(-2) |> Enum.map(& &1.id)
+
+    assert_raise ArgumentError, fn -> Store.wikimedia_before(0, 2) end
+    assert_raise ArgumentError, fn -> Store.wikimedia_before(Store.highest_sequence(), 601) end
+  end
+
   test "around, after, before, ambient, fetch, and highest sequence are bounded and ordered" do
     weather = weather_event(0, ~U[2026-08-03 11:59:59.000000Z])
     wikimedia = Enum.map(1..6, &source_event/1)

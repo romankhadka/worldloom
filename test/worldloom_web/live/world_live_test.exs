@@ -59,6 +59,33 @@ defmodule WorldloomWeb.WorldLiveTest do
     assert has_element?(live_view, "#worldloom[data-event-window-size='400']")
   end
 
+  test "supplies a separate public scaffold behind an all-visitor live window", %{conn: conn} do
+    public_events = seed_events(2)
+    visitor_events = seed_visitor_events(405)
+
+    {:ok, live_view, _html} = live(conn, "/")
+
+    assert has_element?(live_view, "#loom-canvas[data-instruction-count='400']")
+    assert has_element?(live_view, "#loom-canvas[data-scaffold-count='2']")
+    assert has_element?(live_view, "#worldloom[data-event-window-size='400']")
+
+    render_hook(live_view, "sequence-gap", %{
+      "after" => List.last(visitor_events).id,
+      "through" => List.last(visitor_events).id + 601
+    })
+
+    assert_push_event live_view, "worldloom:reload", %{
+      instructions: instructions,
+      scaffold: scaffold,
+      watermark: watermark
+    }
+
+    assert length(instructions) == 400
+    assert Enum.all?(instructions, &(&1["source"] == "visitor"))
+    assert Enum.map(scaffold, & &1["sequence"]) == Enum.map(public_events, & &1.id)
+    assert watermark == List.last(visitor_events).id
+  end
+
   test "validates chapter permalinks and keeps historical views read-only", %{conn: conn} do
     [event] = seed_events(1, ~U[2026-08-03 12:00:00.000000Z])
     path = "/chapters/2026-08-03/#{event.id}"
@@ -644,6 +671,28 @@ defmodule WorldloomWeb.WorldLiveTest do
              })
 
     events
+  end
+
+  defp seed_visitor_events(count) do
+    unique = System.unique_integer([:positive, :monotonic])
+
+    Enum.map(1..count, fn index ->
+      visitor =
+        SourceEvent.new!(%{
+          kind: :illuminate,
+          source: :visitor,
+          external_id: nil,
+          occurred_at: DateTime.add(~U[2026-08-03 13:00:00.000000Z], index, :second),
+          lane: 0.5,
+          intensity: 0.6,
+          payload: %{"summary" => "Visitor formation #{index}"}
+        })
+
+      assert {:ok, event} =
+               Store.commit_visitor(visitor, "world-live-visitor-#{unique}-#{index}")
+
+      event
+    end)
   end
 
   defp eventually(assertion, attempts \\ 20)

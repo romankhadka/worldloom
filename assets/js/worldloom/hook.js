@@ -53,6 +53,7 @@ export const Worldloom = {
 
     this.renderer.setEvents(parseJson(this.el.dataset.instructions, []), {
       ambient: parseJson(this.el.dataset.ambient, null),
+      scaffold: parseJson(this.el.dataset.scaffold, []),
     })
     this.laneInput = document.querySelector("#gesture-lane")
     this.localLane = normalizedLane(this.el.dataset.gestureLane, 0.5)
@@ -113,7 +114,9 @@ export const Worldloom = {
     })
 
     this.handleEvent("worldloom:reload", payload => {
-      this.renderer.reload(payload.instructions ?? [], payload.watermark)
+      this.renderer.reload(payload.instructions ?? [], payload.watermark, {
+        scaffold: payload.scaffold ?? [],
+      })
       if (Number.isSafeInteger(payload.selected_sequence) && payload.selected_sequence > 0) {
         this.renderer.setSelection(payload.selected_sequence)
       } else {
@@ -123,7 +126,11 @@ export const Worldloom = {
     })
 
     this.handleEvent("worldloom:return-live", payload => {
-      if (payload?.instructions) this.renderer.reload(payload.instructions, payload.watermark)
+      if (payload?.instructions) {
+        this.renderer.reload(payload.instructions, payload.watermark, {
+          scaffold: payload.scaffold ?? [],
+        })
+      }
       this.renderer.returnLive()
       this.renderer.clearSelection()
       this.syncRenderedSequence()

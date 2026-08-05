@@ -129,6 +129,25 @@ defmodule Worldloom.Loom.Store do
     validate_limit!(limit)
   end
 
+  @spec wikimedia_before(pos_integer(), pos_integer()) :: [Event.t()]
+  def wikimedia_before(sequence, limit \\ 2)
+
+  def wikimedia_before(sequence, limit)
+      when is_integer(sequence) and sequence > 0 and is_integer(limit) and
+             limit in 1..@maximum_limit do
+    Event
+    |> where([event], event.source == "wikimedia" and event.id <= ^sequence)
+    |> order_by([event], desc: event.id)
+    |> limit(^limit)
+    |> Repo.all()
+    |> Enum.reverse()
+  end
+
+  def wikimedia_before(sequence, limit) do
+    validate_sequence!(sequence)
+    validate_limit!(limit)
+  end
+
   @spec ambient_before(pos_integer()) :: Event.t() | nil
   def ambient_before(sequence) when is_integer(sequence) and sequence > 0 do
     Event

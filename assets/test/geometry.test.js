@@ -64,6 +64,39 @@ test("holds ambient weather outside the visible event window", () => {
   assert.equal(commands.filter(command => command.type === "ambient").length, 1)
 })
 
+test("held ambient weather does not re-space the visible event projection", () => {
+  const publicInstruction = {...contract[0], sequence: 100, source: "wikimedia", kind: "wikimedia"}
+  const visitorTemplate = contract.find(instruction => instruction.source === "visitor")
+  const visible = [
+    publicInstruction,
+    ...Array.from({length: 70}, (_entry, index) => index + 101)
+      .filter(sequence => sequence !== 135)
+      .map(sequence => ({
+        ...visitorTemplate,
+        sequence,
+        lane: 0.5,
+      })),
+  ]
+  const ambient = {
+    ...contract.find(instruction => instruction.kind === "weather"),
+    sequence: 135,
+  }
+  const projectionViewport = {...viewport, maxSequence: 170}
+
+  const withoutAmbient = commandsForScene(visible, projectionViewport)
+  const withAmbient = commandsForScene(visible, projectionViewport, {ambient})
+
+  assert.deepEqual(
+    withAmbient
+      .filter(command => command.type === "anchor-hit")
+      .map(command => [command.sequence, command.x]),
+    withoutAmbient
+      .filter(command => command.type === "anchor-hit")
+      .map(command => [command.sequence, command.x]),
+  )
+  assert.equal(withAmbient.filter(command => command.type === "ambient").length, 1)
+})
+
 test("adds UTC chapter seams at date transitions", () => {
   const events = [
     {...contract[0], occurred_at: "2026-08-03T23:59:59.000000Z"},
