@@ -65,21 +65,15 @@ defmodule WorldloomWeb.WorldLive do
   end
 
   @impl true
-  def handle_params(_params, uri, socket) do
-    permalink = socket.assigns.permalink || URI.parse(uri).path
-
+  def handle_params(params, uri, socket) do
     socket =
-      if socket.assigns.live_action == :chapter and socket.assigns.live? do
-        if connected?(socket) do
-          Phoenix.PubSub.unsubscribe(Worldloom.PubSub, Coordinator.topic())
-        end
-
-        assign(socket, live?: false, mode: :chapter)
-      else
-        socket
+      case socket.assigns.live_action do
+        :live -> enter_live_route(socket, uri)
+        :chapter -> enter_chapter_route(socket, params, uri)
+        action -> enter_panel_route(socket, action, uri)
       end
 
-    {:noreply, assign(socket, current_url: uri, permalink: permalink)}
+    {:noreply, socket}
   end
 
   @impl true
@@ -365,6 +359,114 @@ defmodule WorldloomWeb.WorldLive do
   end
 
   defp load_events(_action, _params), do: {Store.latest(@initial_history_limit), nil}
+
+  defp enter_live_route(socket, uri) do
+    events = Store.latest(@initial_history_limit)
+    instructions = Enum.map(events, &Instruction.from_event/1)
+    route_changed? = route_changed?(socket, uri)
+
+    socket =
+      socket
+      |> transition_coordinator_subscription(true)
+      |> assign(:page_title, page_title(:live))
+      |> assign(:live?, true)
+      |> assign(:mode, :live)
+      |> assign(:at_live_edge, true)
+      |> assign(:selected_event, nil)
+      |> assign(:selected_detail, nil)
+      |> assign(:permalink, URI.parse(uri).path || "/")
+      |> assign(:current_url, uri)
+      |> assign(:gesture_status, live_gesture_status(socket))
+      |> assign_event_window(events, nil)
+
+    if route_changed? do
+      push_event(socket, "worldloom:return-live", %{
+        instructions: instructions,
+        watermark: instruction_watermark(instructions)
+      })
+    else
+      socket
+    end
+  end
+
+  defp enter_chapter_route(socket, params, uri) do
+    {events, selected_event} = load_events(:chapter, params)
+    instructions = Enum.map(events, &Instruction.from_event/1)
+    route_changed? = route_changed?(socket, uri)
+
+    socket =
+      socket
+      |> transition_coordinator_subscription(false)
+      |> assign(:page_title, page_title(:chapter))
+      |> assign(:live?, false)
+      |> assign(:mode, :chapter)
+      |> assign(:at_live_edge, false)
+      |> assign(:selected_event, selected_event)
+      |> assign(:selected_detail, safe_detail(selected_event))
+      |> assign(:permalink, event_permalink(selected_event))
+      |> assign(:current_url, uri)
+      |> assign_event_window(events, selected_event)
+
+    if route_changed? do
+      push_event(socket, "worldloom:reload", %{
+        instructions: instructions,
+        watermark: instruction_watermark(instructions)
+      })
+    else
+      socket
+    end
+  end
+
+  defp enter_panel_route(socket, action, uri) do
+    socket
+    |> assign(:page_title, page_title(action))
+    |> assign(:mode, action)
+    |> assign(:current_url, uri)
+    |> assign(:permalink, socket.assigns.permalink || URI.parse(uri).path)
+  end
+
+  defp assign_event_window(socket, events, selected_event) do
+    instructions = Enum.map(events, &Instruction.from_event/1)
+
+    socket
+    |> assign(:utc_chapter, utc_chapter(events, selected_event))
+    |> assign(:instructions, instructions)
+    |> assign(:ambient, ambient_event(events, selected_event))
+    |> assign(:trusted_events, trusted_event_map(events))
+    |> assign(:oldest_loaded_sequence, oldest_sequence(events))
+    |> assign(:history_requested_at, nil)
+    |> stream(:accessible_formations, Enum.take(instructions, -@accessible_limit), reset: true)
+  end
+
+  defp transition_coordinator_subscription(socket, live?) do
+    if connected?(socket) do
+      cond do
+        live? and not socket.assigns.live? ->
+          Phoenix.PubSub.subscribe(Worldloom.PubSub, Coordinator.topic())
+
+        not live? and socket.assigns.live? ->
+          Phoenix.PubSub.unsubscribe(Worldloom.PubSub, Coordinator.topic())
+
+        true ->
+          :ok
+      end
+    end
+
+    socket
+  end
+
+  defp route_changed?(socket, uri) do
+    connected?(socket) and not is_nil(socket.assigns.current_url) and
+      URI.parse(socket.assigns.current_url).path != URI.parse(uri).path
+  end
+
+  defp live_gesture_status(%{assigns: %{cooldown_seconds: nil}}),
+    do: "Choose an action for the live edge."
+
+  defp live_gesture_status(socket), do: socket.assigns.gesture_status
+
+  defp instruction_watermark([]), do: 0
+  defp instruction_watermark(instructions), do: List.last(instructions)["sequence"]
 
   defp ambient_event([], _selected_event), do: nil
 

@@ -14,11 +14,17 @@ defmodule WorldloomWeb.PageMetadataTest do
            |> LazyHTML.query("meta[property='og:title'][content*='Worldloom']")
            |> Enum.count() == 1
 
-    assert document
-           |> LazyHTML.query(
-             "meta[property='og:image'][content$='/images/worldloom-social-preview.png']"
-           )
-           |> Enum.count() == 1
+    expected_image_url =
+      WorldloomWeb.Endpoint.url() <> "/images/worldloom-social-preview.png"
+
+    for selector <- ["meta[property='og:image']", "meta[name='twitter:image']"] do
+      image_metadata = LazyHTML.query(document, selector)
+      assert LazyHTML.attribute(image_metadata, "content") == [expected_image_url]
+
+      assert %URI{scheme: scheme, host: host} = URI.parse(expected_image_url)
+      assert scheme in ["http", "https"]
+      assert is_binary(host) and host != ""
+    end
 
     assert document
            |> LazyHTML.query("meta[name='twitter:card'][content='summary_large_image']")
@@ -28,6 +34,10 @@ defmodule WorldloomWeb.PageMetadataTest do
            |> LazyHTML.query("meta[name='theme-color'][content='#07110f']")
            |> Enum.count() == 1
 
-    assert document |> LazyHTML.query("a[href*='WORLDLOOM_PUBLIC_URL']") |> Enum.empty?()
+    assert document |> LazyHTML.query("link[rel='canonical']") |> Enum.empty?()
+
+    assert document
+           |> LazyHTML.query("[href*='WORLDLOOM_PUBLIC_URL'], [content*='WORLDLOOM_PUBLIC_URL']")
+           |> Enum.empty?()
   end
 end

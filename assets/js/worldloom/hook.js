@@ -1,5 +1,18 @@
 import {Renderer} from "./renderer.js"
 
+export function selectedSequenceFromClick(event, element, renderer) {
+  const bounds = element.getBoundingClientRect()
+  const sequence = renderer.hitTest(event.clientX - bounds.left, event.clientY - bounds.top)
+
+  if (sequence !== null) event.stopPropagation()
+  return sequence
+}
+
+export function shouldClearSelectionFromClick(event, detail) {
+  if (!detail || detail.contains(event.target)) return false
+  return !event.target?.closest?.("#accessible-formations")
+}
+
 export const Worldloom = {
   mounted() {
     this.canvas = this.el.querySelector("canvas")
@@ -91,9 +104,13 @@ export const Worldloom = {
     this.listen(this.el, "touchend", () => this.renderer.touchEnd())
 
     this.listen(this.el, "click", event => {
-      const bounds = this.el.getBoundingClientRect()
-      const sequence = this.renderer.hitTest(event.clientX - bounds.left, event.clientY - bounds.top)
+      const sequence = selectedSequenceFromClick(event, this.el, this.renderer)
       if (sequence !== null) this.pushEvent("select-formation", {sequence})
+    })
+
+    this.listen(globalThis.window, "click", event => {
+      const detail = globalThis.document.querySelector("#signal-detail")
+      if (shouldClearSelectionFromClick(event, detail)) this.pushEvent("clear-selection", {})
     })
 
     this.listen(this.el, "keydown", event => {

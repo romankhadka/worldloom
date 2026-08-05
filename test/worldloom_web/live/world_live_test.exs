@@ -85,6 +85,56 @@ defmodule WorldloomWeb.WorldLiveTest do
     end
   end
 
+  test "derives live and chapter state from browser history patches", %{conn: conn} do
+    [selected_event, _later_event] = seed_events(2, ~U[2026-08-03 15:00:00.000000Z])
+    {:ok, live_view, _html} = live(conn, "/")
+
+    chapter_path = "/chapters/2026-08-03/#{selected_event.id}"
+    render_hook(live_view, "select-formation", %{"sequence" => selected_event.id})
+
+    assert_patch live_view, chapter_path
+    assert has_element?(live_view, "#worldloom[data-mode='chapter']")
+    assert has_element?(live_view, "#signal-detail", "Public formation 1")
+    assert has_element?(live_view, "#gesture-dock[aria-disabled='true']")
+
+    render_patch(live_view, "/")
+
+    assert has_element?(live_view, "#worldloom[data-mode='live']")
+    refute has_element?(live_view, "#signal-detail")
+    assert has_element?(live_view, "#gesture-dock[aria-disabled='false']")
+
+    for gesture <- ["tug", "knot", "illuminate"] do
+      refute has_element?(live_view, "#gesture-#{gesture}[disabled]")
+    end
+
+    live_view |> element("#share-worldloom") |> render_click()
+    assert_push_event live_view, "worldloom:copy-link", %{url: root_url}
+    assert URI.parse(root_url).path == "/"
+
+    [broadcast_event] = seed_events(1, ~U[2026-08-03 16:00:00.000000Z])
+    broadcast_instruction = Instruction.from_event(broadcast_event)
+
+    Phoenix.PubSub.broadcast(
+      Worldloom.PubSub,
+      Worldloom.Loom.Coordinator.topic(),
+      {:loom_event, broadcast_instruction}
+    )
+
+    assert_push_event live_view, "worldloom:event", ^broadcast_instruction
+
+    render_patch(live_view, chapter_path)
+
+    assert has_element?(live_view, "#worldloom[data-mode='chapter']")
+    assert has_element?(live_view, "#signal-detail", "Public formation 1")
+    assert has_element?(live_view, "#gesture-dock[aria-disabled='true']")
+
+    render_patch(live_view, "/")
+
+    assert has_element?(live_view, "#worldloom[data-mode='live']")
+    refute has_element?(live_view, "#signal-detail")
+    assert has_element?(live_view, "#formation-#{broadcast_event.id}")
+  end
+
   test "tracks only the aggregate connected viewer count", %{conn: conn} do
     {:ok, first_view, _html} = live(conn, "/")
     {:ok, second_view, _html} = live(recycle(conn), "/about")
@@ -187,11 +237,16 @@ defmodule WorldloomWeb.WorldLiveTest do
         ] do
       assert has_element?(
                live_view,
-               "#gesture-#{gesture}[type='submit'][name='gesture'][value='#{gesture}'][aria-label='#{label}']"
+               "#gesture-#{gesture}[type='submit'][name='gesture'][value='#{gesture}'][aria-label='#{label}'][aria-describedby='gesture-#{gesture}-description']"
              )
 
       assert has_element?(live_view, "#gesture-#{gesture} .gesture-copy strong", label)
-      assert has_element?(live_view, "#gesture-#{gesture} .gesture-copy small", description)
+
+      assert has_element?(
+               live_view,
+               "#gesture-#{gesture}-description",
+               description
+             )
     end
 
     refute has_element?(live_view, "[aria-pressed]")
@@ -221,6 +276,7 @@ defmodule WorldloomWeb.WorldLiveTest do
     assert is_integer(sequence)
 
     assert has_element?(live_view, "#gesture-status", "Gesture joined the living edge")
+    assert has_element?(live_view, "#gesture-status", "Gesture controls return in 30 seconds.")
     assert has_element?(live_view, "#gesture-cooldown-ring[data-seconds='30']")
 
     for gesture <- ["tug", "knot", "illuminate"] do
@@ -381,6 +437,7 @@ defmodule WorldloomWeb.WorldLiveTest do
 
     render_hook(live_view, "gesture", %{"gesture" => "illuminate", "lane" => 0.72})
     assert has_element?(live_view, "#gesture-status", "Try again in 30 seconds")
+    assert has_element?(live_view, "#gesture-status", "Gesture controls return in 30 seconds.")
     assert has_element?(live_view, "#gesture-cooldown-ring[data-seconds='30']")
     refute_push_event live_view, "worldloom:event", _rejected
   end
