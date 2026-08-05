@@ -15,6 +15,7 @@ defmodule WorldloomWeb.WorldLiveTest do
 
     assert html =~ "data-instruction-count=\"1\""
     assert has_element?(live_view, "#loom-canvas[data-gesture-lane='0.5']")
+    assert has_element?(live_view, "#loom-canvas[data-live='true']")
 
     for selector <- [
           "#worldloom",
@@ -33,9 +34,11 @@ defmodule WorldloomWeb.WorldLiveTest do
 
     assert {:ok, archive_view, _html} = live(conn, "/chapters")
     assert has_element?(archive_view, "#archive-panel[data-active]")
+    assert has_element?(archive_view, "#loom-canvas[data-live='false']")
 
     assert {:ok, about_view, _html} = live(conn, "/about")
     assert has_element?(about_view, "#about-panel[data-active]")
+    assert has_element?(about_view, "#loom-canvas[data-live='false']")
   end
 
   test "stages the artwork without rendering empty detail chrome", %{conn: conn} do
@@ -126,8 +129,11 @@ defmodule WorldloomWeb.WorldLiveTest do
     render_patch(live_view, chapter_path)
 
     assert has_element?(live_view, "#worldloom[data-mode='chapter']")
+    assert has_element?(live_view, "#loom-canvas[data-live='false']")
     assert has_element?(live_view, "#signal-detail", "Public formation 1")
     assert has_element?(live_view, "#gesture-dock[aria-disabled='true']")
+    assert_push_event live_view, "worldloom:reload", %{selected_sequence: selected_sequence}
+    assert selected_sequence == selected_event.id
 
     render_patch(live_view, "/")
 
@@ -423,6 +429,9 @@ defmodule WorldloomWeb.WorldLiveTest do
     assert has_element?(live_view, "#about-link")
     assert has_element?(live_view, "#share-worldloom")
     assert has_element?(live_view, "#share-status[aria-live='polite']")
+    assert has_element?(live_view, "#share-fallback-field[hidden][phx-update='ignore']")
+    assert has_element?(live_view, "label[for='share-fallback']", "Permanent link")
+    assert has_element?(live_view, "#share-fallback[type='url'][readonly]")
     assert has_element?(live_view, "#mobile-worldloom-menu a[href='/chapters']", "Archive")
     assert has_element?(live_view, "#mobile-worldloom-menu a[href='/about']", "About")
     assert has_element?(live_view, "#mobile-worldloom-menu button", "Share")

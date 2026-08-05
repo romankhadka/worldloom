@@ -13,6 +13,7 @@
       data-instruction-count={length(@instructions)}
       data-ambient={@ambient && Jason.encode!(Instruction.from_event(@ambient))}
       data-gesture-lane={@gesture_lane}
+      data-live={to_string(@live?)}
       role="img"
       aria-label="A living public tapestry woven from public signals. Use arrow keys to inspect formations."
       tabindex="0"
@@ -59,6 +60,10 @@
           <button id="share-worldloom" type="button" phx-click="share">Share</button>
         </nav>
         <p id="share-status" class="sr-only" aria-live="polite"></p>
+        <div id="share-fallback-field" phx-update="ignore" hidden>
+          <label for="share-fallback">Permanent link</label>
+          <input id="share-fallback" type="url" readonly value="" />
+        </div>
       </div>
     </header>
 

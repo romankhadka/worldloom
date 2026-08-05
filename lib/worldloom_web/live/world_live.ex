@@ -407,7 +407,8 @@ defmodule WorldloomWeb.WorldLive do
     if route_changed? do
       push_event(socket, "worldloom:reload", %{
         instructions: instructions,
-        watermark: instruction_watermark(instructions)
+        watermark: instruction_watermark(instructions),
+        selected_sequence: selected_event.id
       })
     else
       socket

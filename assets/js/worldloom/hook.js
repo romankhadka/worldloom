@@ -21,6 +21,19 @@ export const Worldloom = {
     this.el.dataset.motion = reducedMotion ? "reduced" : "full"
     this.lastPointer = null
     this.listeners = []
+    this.boundLaneInputs = new WeakSet()
+    this.boundGestureButtons = new WeakSet()
+    this.introductionDismissed = false
+    this.placingLane = false
+    this.placedLane = false
+    this.activePointerId = null
+    this.activePointerType = null
+    this.activePointerCaptured = false
+    this.pendingLane = null
+    this.placementStartLane = null
+    this.clickSuppressionTimer = null
+    this.scheduleTimeout = (callback, delay) => globalThis.setTimeout(callback, delay)
+    this.cancelTimeout = timer => globalThis.clearTimeout(timer)
 
     this.renderer = new Renderer(this.canvas, {
       reducedMotion,
@@ -39,21 +52,11 @@ export const Worldloom = {
       ambient: parseJson(this.el.dataset.ambient, null),
     })
     this.laneInput = document.querySelector("#gesture-lane")
-    this.renderer.setTargetLane(Number(this.el.dataset.gestureLane ?? 0.5))
-    this.placingLane = false
-    this.placedLane = false
+    this.localLane = normalizedLane(this.el.dataset.gestureLane, 0.5)
+    this.lastServerLane = this.localLane
+    this.renderer.setTargetLane(this.localLane)
     this.introduction = document.querySelector("#worldloom-introduction")
     this.shareStatus = document.querySelector("#share-status")
-    this.dismissIntroduction = () => {
-      if (!this.introduction?.isConnected) {
-        this.introduction = document.querySelector("#worldloom-introduction")
-      }
-      if (this.introduction) this.introduction.dataset.dismissed = "true"
-    }
-    this.announceShare = message => {
-      if (!this.shareStatus?.isConnected) this.shareStatus = document.querySelector("#share-status")
-      if (this.shareStatus) this.shareStatus.textContent = message
-    }
 
     this.installListeners()
     this.installServerEvents()
@@ -64,6 +67,7 @@ export const Worldloom = {
   },
 
   destroyed() {
+    this.clearClickSuppression()
     this.resizeObserver?.disconnect()
     for (const [target, event, listener, options] of this.listeners) {
       target.removeEventListener(event, listener, options)
@@ -73,6 +77,10 @@ export const Worldloom = {
 
   updated() {
     if (!this.renderer) return
+    this.refreshIntroduction()
+    this.bindExternalControls()
+    if (this.placingLane && !this.directPlacementEnabled()) this.cancelPlacement()
+    this.reconcileServerLane()
     this.syncRenderedSequence()
     this.el.dataset.ready = "true"
     this.el.dataset.motion = this.renderer.reducedMotion ? "reduced" : "full"
@@ -98,12 +106,18 @@ export const Worldloom = {
 
     this.handleEvent("worldloom:reload", payload => {
       this.renderer.reload(payload.instructions ?? [], payload.watermark)
+      if (Number.isSafeInteger(payload.selected_sequence) && payload.selected_sequence > 0) {
+        this.renderer.setSelection(payload.selected_sequence)
+      } else {
+        this.renderer.clearSelection()
+      }
       this.syncRenderedSequence()
     })
 
     this.handleEvent("worldloom:return-live", payload => {
       if (payload?.instructions) this.renderer.reload(payload.instructions, payload.watermark)
       this.renderer.returnLive()
+      this.renderer.clearSelection()
       this.syncRenderedSequence()
     })
 
@@ -114,22 +128,7 @@ export const Worldloom = {
   },
 
   installListeners() {
-    const placeLane = event => {
-      const bounds = this.el.getBoundingClientRect()
-      const lane = laneFromClientY(event.clientY, bounds)
-      this.renderer.setTargetLane(lane)
-      if (!this.laneInput?.isConnected) this.laneInput = document.querySelector("#gesture-lane")
-      if (this.laneInput) this.laneInput.value = String(lane)
-      this.pushEvent("lane-change", {lane: String(lane)})
-      this.placedLane = true
-    }
-
-    if (this.laneInput) {
-      this.listen(this.laneInput, "input", event => {
-        this.dismissIntroduction()
-        this.renderer.setTargetLane(Number(event.target.value))
-      })
-    }
+    this.bindExternalControls()
 
     this.listen(this.el, "wheel", event => {
       this.dismissIntroduction()
@@ -139,11 +138,11 @@ export const Worldloom = {
     this.listen(this.el, "pointerdown", event => {
       this.dismissIntroduction()
       if (event.pointerType === "touch") return
+      if (this.placingLane) return
 
       const bounds = this.el.getBoundingClientRect()
-      if (withinLiveEdgeTarget(event.clientX, bounds) && this.renderer.atLiveEdge()) {
-        this.placingLane = true
-        placeLane(event)
+      if (withinLiveEdgeTarget(event.clientX, bounds) && this.directPlacementEnabled()) {
+        this.beginPlacement(event, "pointer")
         return
       }
       this.renderer.pointerDown(event)
@@ -151,55 +150,71 @@ export const Worldloom = {
     this.listen(this.el, "pointermove", event => {
       if (event.pointerType === "touch") return
       if (this.placingLane) {
-        placeLane(event)
+        if (event.pointerId !== this.activePointerId) return
+        this.placeLane(event)
         return
       }
       this.renderer.pointerMove(event)
     })
     this.listen(this.el, "pointerup", event => {
       if (event.pointerType === "touch") return
-      this.placingLane = false
+      if (this.placingLane) {
+        if (event.pointerId !== this.activePointerId) return
+        this.completePlacement(event)
+        return
+      }
       this.renderer.pointerUp()
     })
     this.listen(this.el, "pointercancel", event => {
       if (event.pointerType === "touch") return
-      this.placingLane = false
+      if (this.placingLane) {
+        if (event.pointerId !== this.activePointerId) return
+        this.cancelPlacement()
+        return
+      }
       this.renderer.pointerUp()
+    })
+    this.listen(this.el, "lostpointercapture", event => {
+      if (!this.placingLane || event.pointerId !== this.activePointerId) return
+      this.cancelPlacement({releasePointer: false})
     })
 
     this.listen(this.el, "touchstart", event => {
       this.dismissIntroduction()
+      if (this.placingLane) return
       if (event.touches?.length !== 1) return
 
       const touch = event.touches[0]
       const bounds = this.el.getBoundingClientRect()
-      if (withinLiveEdgeTarget(touch.clientX, bounds) && this.renderer.atLiveEdge()) {
-        this.placingLane = true
-        placeLane(touch)
+      if (withinLiveEdgeTarget(touch.clientX, bounds) && this.directPlacementEnabled()) {
+        this.beginPlacement(touch, "touch")
         return
       }
       this.renderer.touchStart(event)
     }, {passive: true})
     this.listen(this.el, "touchmove", event => {
-      if (this.placingLane && event.touches?.length === 1) {
-        event.preventDefault()
-        placeLane(event.touches[0])
-        return
+      if (this.placingLane) {
+        if (this.activePointerType !== "touch") return
+        if (event.touches?.length === 1) {
+          event.preventDefault()
+          this.placeLane(event.touches[0])
+          return
+        }
       }
       this.renderer.touchMove(event)
     }, {passive: false})
     this.listen(this.el, "touchend", () => {
-      this.placingLane = false
+      if (this.placingLane && this.activePointerType === "touch") this.completePlacement()
       this.renderer.touchEnd()
     })
     this.listen(this.el, "touchcancel", () => {
-      this.placingLane = false
+      if (this.placingLane && this.activePointerType === "touch") this.cancelPlacement()
       this.renderer.touchEnd()
     })
 
     this.listen(this.el, "click", event => {
       if (this.placedLane) {
-        this.placedLane = false
+        this.clearClickSuppression()
         return
       }
 
@@ -212,7 +227,7 @@ export const Worldloom = {
 
     this.listen(globalThis.window, "click", event => {
       const detail = globalThis.document.querySelector("#signal-detail")
-      if (shouldClearSelectionFromClick(event, detail)) this.pushEvent("clear-selection", {})
+      if (shouldClearSelectionFromClick(event, detail)) this.clearSelection()
     })
 
     this.listen(this.el, "keydown", event => {
@@ -234,10 +249,176 @@ export const Worldloom = {
     this.listen(globalThis.window, "keydown", event => {
       if (event.key === "Escape") this.renderer.clearSelection()
     })
+  },
+
+  bindExternalControls() {
+    const laneInput = document.querySelector("#gesture-lane")
+    this.laneInput = laneInput
+    if (laneInput && !this.boundLaneInputs.has(laneInput)) {
+      this.listen(laneInput, "input", event => this.handleLaneInput(event))
+      this.boundLaneInputs.add(laneInput)
+    }
 
     for (const button of document.querySelectorAll(".gesture-button")) {
-      this.listen(button, "click", this.dismissIntroduction)
+      if (this.boundGestureButtons.has(button)) continue
+      this.listen(button, "click", () => this.dismissIntroduction())
+      this.boundGestureButtons.add(button)
     }
+  },
+
+  handleLaneInput(event) {
+    this.dismissIntroduction()
+    const lane = normalizedLane(event.target.value, this.localLane)
+    this.updateLocalLane(lane)
+    this.lastServerLane = lane
+    this.pendingLane = null
+  },
+
+  refreshIntroduction() {
+    this.introduction = document.querySelector("#worldloom-introduction")
+    if (this.introductionDismissed && this.introduction) {
+      this.introduction.dataset.dismissed = "true"
+    }
+  },
+
+  dismissIntroduction() {
+    this.introductionDismissed = true
+    this.refreshIntroduction()
+  },
+
+  announceShare(message) {
+    const shareStatus = document.querySelector("#share-status")
+    if (shareStatus) this.shareStatus = shareStatus
+    if (this.shareStatus?.isConnected === false) this.shareStatus = null
+    if (this.shareStatus) this.shareStatus.textContent = message
+  },
+
+  reconcileServerLane() {
+    if (this.placingLane) return
+    const lane = normalizedLane(
+      this.el.dataset.gestureLane,
+      this.lastServerLane ?? this.localLane ?? 0.5,
+    )
+    this.lastServerLane = lane
+    this.updateLocalLane(lane)
+  },
+
+  directPlacementEnabled() {
+    return this.el.dataset.live === "true" &&
+      !this.laneInput?.disabled &&
+      this.renderer.atLiveEdge()
+  },
+
+  beginPlacement(event, inputType) {
+    this.clearClickSuppression()
+    this.placingLane = true
+    this.pendingLane = null
+    this.placementStartLane = this.localLane
+    this.activePointerId = inputType === "pointer" ? event.pointerId : null
+    this.activePointerType = inputType === "pointer" ? event.pointerType : "touch"
+    this.activePointerCaptured = false
+
+    if (inputType === "pointer" && this.el.setPointerCapture) {
+      try {
+        this.el.setPointerCapture(event.pointerId)
+        this.activePointerCaptured = this.el.hasPointerCapture?.(event.pointerId) ?? true
+      } catch (_error) {
+        this.activePointerCaptured = false
+      }
+    }
+
+    this.placeLane(event)
+  },
+
+  placeLane(event) {
+    const bounds = this.el.getBoundingClientRect()
+    const lane = laneFromClientY(event.clientY, bounds)
+    this.pendingLane = lane
+    this.updateLocalLane(lane)
+  },
+
+  updateLocalLane(lane) {
+    if (lane !== this.localLane) {
+      this.localLane = lane
+      this.renderer.setTargetLane(lane)
+    }
+    if (this.laneInput && this.laneInput.value !== String(lane)) {
+      this.laneInput.value = String(lane)
+    }
+  },
+
+  completePlacement(event) {
+    if (!this.placingLane) return
+    if (Number.isFinite(event?.clientY)) this.placeLane(event)
+
+    const pointerId = this.activePointerId
+    const pointerCaptured = this.activePointerCaptured
+    const lane = this.pendingLane
+    this.placingLane = false
+    this.activePointerId = null
+    this.activePointerType = null
+    this.activePointerCaptured = false
+    this.pendingLane = null
+    this.placementStartLane = null
+
+    this.releasePointer(pointerId, pointerCaptured)
+    if (lane !== null && lane !== this.lastServerLane) {
+      this.pushEvent("lane-change", {lane: String(lane)})
+      this.lastServerLane = lane
+    }
+    this.armClickSuppression()
+  },
+
+  cancelPlacement({releasePointer = true} = {}) {
+    if (!this.placingLane) return
+
+    const pointerId = this.activePointerId
+    const pointerCaptured = this.activePointerCaptured
+    const placementStartLane = this.placementStartLane
+    this.placingLane = false
+    this.activePointerId = null
+    this.activePointerType = null
+    this.activePointerCaptured = false
+    this.pendingLane = null
+    this.placementStartLane = null
+    this.clearClickSuppression()
+    if (placementStartLane !== null) this.updateLocalLane(placementStartLane)
+    if (releasePointer) this.releasePointer(pointerId, pointerCaptured)
+  },
+
+  releasePointer(pointerId, captured) {
+    if (!captured || pointerId === null || !this.el.releasePointerCapture) return
+    try {
+      if (!this.el.hasPointerCapture || this.el.hasPointerCapture(pointerId)) {
+        this.el.releasePointerCapture(pointerId)
+      }
+    } catch (_error) {
+      // Pointer capture may already have been released by the browser.
+    }
+  },
+
+  armClickSuppression() {
+    this.clearClickSuppression()
+    this.placedLane = true
+    const schedule = this.scheduleTimeout ?? ((callback, delay) => globalThis.setTimeout(callback, delay))
+    this.clickSuppressionTimer = schedule(() => {
+      this.clickSuppressionTimer = null
+      this.placedLane = false
+    }, 250)
+  },
+
+  clearClickSuppression() {
+    if (this.clickSuppressionTimer !== null && this.clickSuppressionTimer !== undefined) {
+      const cancel = this.cancelTimeout ?? (timer => globalThis.clearTimeout(timer))
+      cancel(this.clickSuppressionTimer)
+    }
+    this.clickSuppressionTimer = null
+    this.placedLane = false
+  },
+
+  clearSelection() {
+    this.renderer.clearSelection()
+    this.pushEvent("clear-selection", {})
   },
 
   installResizeObserver() {
@@ -263,18 +444,24 @@ export const Worldloom = {
   },
 
   async copyLink(url) {
+    const fallbackField = document.querySelector("#share-fallback-field")
+    const fallbackInput = document.querySelector("#share-fallback")
+
     try {
       if (!globalThis.navigator?.clipboard?.writeText) throw new Error("clipboard unavailable")
       await globalThis.navigator.clipboard.writeText(url)
+      if (fallbackField) fallbackField.hidden = true
       this.announceShare("Link copied.")
     } catch (_error) {
-      const input = document.querySelector("#share-link")
-      if (input) {
-        input.value = url
-        input.focus()
-        input.select()
+      if (fallbackField && fallbackInput) {
+        fallbackField.hidden = false
+        fallbackInput.value = url
+        fallbackInput.focus()
+        fallbackInput.select()
+        this.announceShare("Select and copy this permanent link.")
+      } else {
+        this.announceShare("Copy failed. Use the address bar to copy this link.")
       }
-      this.announceShare("Select and copy this permanent link.")
     }
   },
 }
@@ -286,4 +473,10 @@ function parseJson(encoded, fallback) {
   } catch (_error) {
     return fallback
   }
+}
+
+function normalizedLane(encoded, fallback) {
+  const lane = Number(encoded)
+  if (!Number.isFinite(lane)) return fallback
+  return Math.min(1, Math.max(0, lane))
 }
