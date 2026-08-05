@@ -1,4 +1,4 @@
-import {commandsForScene, cubicPrefix} from "./geometry.js"
+import {commandsForScene, cubicPrefix, laneToY} from "./geometry.js"
 
 const maximumEvents = 600
 const maximumCommands = 4000
@@ -40,6 +40,8 @@ export class Renderer {
     this.pointerX = null
     this.touchX = null
     this.selectionIndex = -1
+    this.targetLane = 0.5
+    this.selectedSequence = null
     this.viewerPulses = 0
     this.animationTime = 0
     this.frameHandle = null
@@ -66,6 +68,21 @@ export class Renderer {
     this.activeTransitions.clear()
     this.ambient = ambient
     this.rebuild()
+  }
+
+  setTargetLane(lane) {
+    this.targetLane = Math.min(1, Math.max(0, Number(lane) || 0))
+    this.draw()
+  }
+
+  setSelection(sequence) {
+    this.selectedSequence = Number.isSafeInteger(sequence) ? sequence : null
+    this.draw()
+  }
+
+  clearSelection() {
+    this.selectedSequence = null
+    this.draw()
   }
 
   resize(width, height, dpr = this.dpr) {
@@ -354,6 +371,10 @@ export class Renderer {
         this.height,
       ),
     )
+    drawTargetSeed(context, this.targetLane, this.viewport(), this.atLiveEdge())
+    drawTranslated(context, translationX, () =>
+      drawSelectionHalo(context, this.commands, this.selectedSequence),
+    )
     drawViewerPulses(context, this.viewerPulses, this.width, this.height, this.animationTime)
   }
 
@@ -564,6 +585,12 @@ function boundedInstructions(instructions, preference) {
 
 function drawCommand(context, command, width, height) {
   context.save()
+  if (command.type === "fiber-path") {
+    drawFiberPath(context, command)
+    context.restore()
+    return
+  }
+
   context.strokeStyle = command.stroke ?? "#f3ead4"
   context.fillStyle = command.glow ?? command.stroke ?? "#f3ead4"
   context.lineWidth = 1 + (command.intensity ?? 0.2) * 2
@@ -580,20 +607,6 @@ function drawCommand(context, command, width, height) {
     case "glow":
       context.arc(command.x, command.y, command.radius, 0, Math.PI * 2)
       command.type === "glow" ? context.fill() : context.stroke()
-      break
-    case "fiber-path":
-      for (const segment of command.segments) {
-        context.moveTo(segment.curve.from.x, segment.curve.from.y)
-        context.bezierCurveTo(
-          segment.curve.control1.x,
-          segment.curve.control1.y,
-          segment.curve.control2.x,
-          segment.curve.control2.y,
-          segment.curve.to.x,
-          segment.curve.to.y,
-        )
-      }
-      context.stroke()
       break
     case "tug-response": {
       const points = command.after ?? []
@@ -708,6 +721,67 @@ function drawCommand(context, command, width, height) {
       context.stroke()
   }
 
+  context.restore()
+}
+
+function drawFiberPath(context, command) {
+  const material = command.material ?? {
+    glow: {width: 5, alpha: 0.08},
+    body: {width: 2, alpha: 0.42},
+    core: {width: 1, alpha: 0.82},
+  }
+  for (const [layer, style] of Object.entries(material)) {
+    context.beginPath()
+    context.lineWidth = style.width
+    context.globalAlpha = style.alpha
+    context.strokeStyle = layer === "glow" ? command.glow : command.stroke
+    traceFiberSegments(context, command.segments)
+    context.stroke()
+  }
+}
+
+function traceFiberSegments(context, segments) {
+  for (const segment of segments) {
+    context.moveTo(segment.curve.from.x, segment.curve.from.y)
+    context.bezierCurveTo(
+      segment.curve.control1.x, segment.curve.control1.y,
+      segment.curve.control2.x, segment.curve.control2.y,
+      segment.curve.to.x, segment.curve.to.y,
+    )
+  }
+}
+
+function drawTargetSeed(context, lane, viewport, atLiveEdge) {
+  if (!atLiveEdge) return
+
+  context.save()
+  context.fillStyle = "#f5ecd8"
+  context.globalAlpha = 0.92
+  context.beginPath()
+  context.arc(viewport.width - 14, laneToY(lane, viewport), 3.5, 0, Math.PI * 2)
+  context.fill()
+  context.restore()
+}
+
+function drawSelectionHalo(context, commands, selectedSequence) {
+  if (!Number.isSafeInteger(selectedSequence)) return
+  const command = commands.find(item => item.sequence === selectedSequence && item.hit)
+  if (!command) return
+
+  const {hit} = command
+  context.save()
+  context.strokeStyle = "#f5ecd8"
+  context.globalAlpha = 0.54
+  context.lineWidth = 1
+  context.beginPath()
+  context.arc(
+    hit.x + hit.width / 2,
+    hit.y + hit.height / 2,
+    Math.max(hit.width, hit.height) * 0.62,
+    0,
+    Math.PI * 2,
+  )
+  context.stroke()
   context.restore()
 }
 
