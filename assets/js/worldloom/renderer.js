@@ -173,7 +173,12 @@ export class Renderer {
 
   panBy(delta) {
     this.activeTransitions.clear()
-    const maximumPan = Math.max(0, (this.events.length - 1) * this.spacing)
+    const hitPositions = this.commands
+      .filter(command => command.type === "anchor-hit" && Number.isFinite(command.x))
+      .map(command => command.x)
+    const maximumPan = hitPositions.length >= 2
+      ? Math.max(...hitPositions) - Math.min(...hitPositions)
+      : Math.max(0, (this.events.length - 1) * this.spacing)
     this.panOffset = Math.min(maximumPan, Math.max(0, this.panOffset + delta))
     this.rebuild()
     this.notifyViewport()

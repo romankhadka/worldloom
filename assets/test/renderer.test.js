@@ -117,6 +117,78 @@ test("supports hit testing and keyboard formation traversal", () => {
   assert.deepEqual(selected, [2])
 })
 
+test("keeps the living spine visible through a trailing visitor surge", () => {
+  const selected = []
+  const renderer = new Renderer(null, {
+    width: 1000,
+    height: 600,
+    padding: 50,
+    reducedMotion: true,
+    onSelect: sequence => selected.push(sequence),
+  })
+  renderer.setEvents(visitorSurgeInstructions())
+
+  const liveSpine = renderer.commands.find(
+    command => command.type === "fiber-path" && command.role === "spine",
+  )
+  const liveSpineEnd = liveSpine.segments.at(-1).curve.to
+  const liveHits = renderer.commands.filter(command => command.type === "anchor-hit")
+  assert.ok(liveSpineEnd.x >= renderer.padding)
+  assert.ok(liveSpineEnd.x <= renderer.width - renderer.padding)
+  assert.deepEqual(
+    liveHits.map(command => command.sequence),
+    Array.from({length: 190}, (_entry, index) => index + 1),
+  )
+  assert.ok(liveHits.slice(1).every((hit, index) => hit.x > liveHits[index].x))
+  assert.equal(renderer.hitTest(liveHits.at(-1).x, liveHits.at(-1).y), 190)
+
+  for (let index = 0; index < liveHits.length; index++) renderer.selectNext(1)
+  renderer.activateSelection()
+  assert.deepEqual(selected, [190])
+})
+
+test("extends the visible spine when public activity resumes after a visitor surge", () => {
+  const renderer = new Renderer(null, {
+    width: 1000,
+    height: 600,
+    padding: 50,
+    reducedMotion: true,
+  })
+
+  renderer.setEvents([...visitorSurgeInstructions(), publicInstruction(191)])
+
+  const resumedSpine = renderer.commands.find(
+    command => command.type === "fiber-path" && command.role === "spine",
+  )
+  const resumedSegment = resumedSpine.segments.at(-1)
+  const resumedHits = renderer.commands.filter(command => command.type === "anchor-hit")
+  assert.ok(resumedSegment.curve.from.x >= renderer.padding)
+  assert.equal(resumedSegment.curve.to.x, renderer.width - renderer.padding)
+  assert.deepEqual(
+    resumedHits.map(command => command.sequence),
+    Array.from({length: 191}, (_entry, index) => index + 1),
+  )
+  assert.ok(resumedHits.slice(1).every((hit, index) => hit.x > resumedHits[index].x))
+})
+
+test("bounds archive panning to the compressed visitor projection", () => {
+  const renderer = new Renderer(null, {
+    width: 1000,
+    height: 600,
+    padding: 50,
+    reducedMotion: true,
+  })
+  renderer.setEvents(visitorSurgeInstructions())
+
+  renderer.panBy(10_000)
+
+  const archivedHits = renderer.commands.filter(command => command.type === "anchor-hit")
+  assert.equal(archivedHits[0].sequence, 1)
+  assert.equal(archivedHits.at(-1).sequence, 190)
+  assert.ok(archivedHits.slice(1).every((hit, index) => hit.x > archivedHits[index].x))
+  assert.equal(archivedHits[0].x, renderer.width - renderer.padding)
+})
+
 test("requests a fresh live window when history panning dropped newer events", () => {
   let reloadRequests = 0
   const renderer = new Renderer(null, {onReloadRequest: () => reloadRequests++})
@@ -612,6 +684,25 @@ function rendererWithActiveTransition() {
   renderer.receiveEvent(instruction(2))
   assert.equal(renderer.activeTransitions.size, 1)
   return renderer
+}
+
+function publicInstruction(sequence) {
+  return {...instruction(sequence), kind: "wikimedia", source: "wikimedia"}
+}
+
+function visitorSurgeInstructions() {
+  const publicInstructions = Array.from(
+    {length: 120},
+    (_entry, index) => publicInstruction(index + 1),
+  )
+  const visitorKinds = ["tug", "knot", "illuminate"]
+  const visitorInstructions = Array.from({length: 70}, (_entry, index) => ({
+    ...instruction(index + 121),
+    kind: visitorKinds[index % visitorKinds.length],
+    source: "visitor",
+  }))
+
+  return [...publicInstructions, ...visitorInstructions]
 }
 
 function cachedCallsFor(command) {

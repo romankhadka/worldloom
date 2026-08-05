@@ -10,13 +10,16 @@ export const signalPalette = Object.freeze({
 
 const supportedRenderVersion = 1
 const defaultSpacing = 28
+const maximumVisitorBandSpan = 8
 
 export function sequenceToX(sequence, viewport) {
   const padding = viewport.padding ?? 40
   const spacing = viewport.spacing ?? defaultSpacing
+  const displayPosition = viewport.displayPositions?.get(sequence) ?? sequence
   const maxSequence = viewport.maxSequence ?? sequence
+  const maxDisplayPosition = viewport.displayPositions?.get(maxSequence) ?? maxSequence
   const panOffset = viewport.panOffset ?? 0
-  return viewport.width - padding - (maxSequence - sequence) * spacing + panOffset
+  return viewport.width - padding - (maxDisplayPosition - displayPosition) * spacing + panOffset
 }
 
 export function laneToY(lane, viewport) {
@@ -83,7 +86,14 @@ export function chapterSeams(instructions, viewport) {
 export function commandsForScene(instructions, viewport, {ambient = null} = {}) {
   const ordered = uniqueInstructions(instructions)
   const maxSequence = viewport.maxSequence ?? ordered.at(-1)?.sequence ?? ambient?.sequence ?? 0
-  const projectedViewport = {...viewport, maxSequence}
+  const projectionInstructions = ambient
+    ? uniqueInstructions([...ordered, ambient])
+    : ordered
+  const projectedViewport = {
+    ...viewport,
+    maxSequence,
+    displayPositions: displayPositionsFor(projectionInstructions),
+  }
   const topology = buildTopology(ordered)
   const ambientInstruction = topology.ambient ?? ambient
   const ambientCommands = ambientInstruction
@@ -625,6 +635,49 @@ function uniqueInstructions(instructions) {
   const bySequence = new Map()
   for (const instruction of instructions) bySequence.set(instruction.sequence, instruction)
   return [...bySequence.values()].sort((left, right) => left.sequence - right.sequence)
+}
+
+function displayPositionsFor(instructions) {
+  const positions = new Map()
+  if (instructions.length === 0) return positions
+
+  let previousSequence = instructions[0].sequence
+  let previousPosition = previousSequence
+  positions.set(previousSequence, previousPosition)
+
+  for (let index = 1; index < instructions.length;) {
+    if (instructions[index].source !== "visitor") {
+      const instruction = instructions[index]
+      previousPosition += instruction.sequence - previousSequence
+      previousSequence = instruction.sequence
+      positions.set(instruction.sequence, previousPosition)
+      index++
+      continue
+    }
+
+    let runEnd = index
+    while (
+      runEnd + 1 < instructions.length &&
+      instructions[runEnd + 1].source === "visitor"
+    ) {
+      runEnd++
+    }
+
+    const finalVisitorSequence = instructions[runEnd].sequence
+    const rawSpan = finalVisitorSequence - previousSequence
+    const displaySpan = Math.min(maximumVisitorBandSpan, rawSpan)
+    for (let visitorIndex = index; visitorIndex <= runEnd; visitorIndex++) {
+      const visitorSequence = instructions[visitorIndex].sequence
+      const progress = (visitorSequence - previousSequence) / rawSpan
+      positions.set(visitorSequence, previousPosition + displaySpan * progress)
+    }
+
+    previousSequence = finalVisitorSequence
+    previousPosition += displaySpan
+    index = runEnd + 1
+  }
+
+  return positions
 }
 
 function utcDate(encodedTime) {
