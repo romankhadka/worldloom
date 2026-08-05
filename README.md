@@ -1,12 +1,15 @@
 # Worldloom
 
-Worldloom is a public, persistent artwork woven in real time from Wikimedia edits,
+> **The world is weaving itself.**
+
+Worldloom is a persistent living tapestry woven in real time from Wikimedia edits,
 earthquakes, global weather, and three small anonymous visitor gestures. The present
-lives at the right edge; pan left to revisit earlier hours and stable UTC chapters.
+lives at the luminous right edge; move left to revisit earlier UTC chapters.
 
-[Open the living weave](https://WORLDLOOM_PUBLIC_URL)
+![Worldloom's Living Reliquary](priv/static/images/worldloom-social-preview.png)
 
-![Worldloom's living-fiber canvas](docs/preview.gif)
+Worldloom is currently available as public source and a local experience. A hosted
+demo link will appear here only after public infrastructure is configured and verified.
 
 There are no accounts, names, chat messages, uploads, or visitor profiles. Every
 formation is stored before it is broadcast, so two connected browsers see the same
