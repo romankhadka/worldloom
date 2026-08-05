@@ -232,6 +232,142 @@ test("a keyboard-only visitor positions and directly weaves a gesture", async ({
   expect(browserFailures).toEqual([])
 })
 
+test("pointer visitors place a seed on the live membrane before weaving", async ({
+  page,
+}) => {
+  const browserFailures = monitorPage(page, "pointer placement")
+  await page.emulateMedia({reducedMotion: "reduce"})
+  await page.goto("/")
+  const introduction = page.locator("#worldloom-introduction")
+  await expect(introduction).toBeVisible()
+
+  const canvas = await waitForCanvas(page)
+  const bounds = await canvas.boundingBox()
+  expect(bounds).not.toBeNull()
+  await expect(introduction).toBeVisible()
+
+  await canvas.dispatchEvent("pointerdown", {
+    pointerId: 7,
+    pointerType: "mouse",
+    clientX: bounds.x + 100,
+    clientY: bounds.y + 200,
+  })
+  await canvas.dispatchEvent("pointerup", {
+    pointerId: 7,
+    pointerType: "mouse",
+    clientX: bounds.x + 100,
+    clientY: bounds.y + 200,
+  })
+  await expect(introduction).toBeHidden()
+
+  await canvas.click({
+    position: {x: bounds.width - 12, y: bounds.height * 0.25},
+  })
+  await expect(
+    page.getByRole("slider", {name: "Gesture vertical lane"}),
+  ).toHaveValue("0.2")
+
+  const startingSequence = await renderedSequence(canvas)
+  await page.getByRole("button", {name: "Tug", exact: true}).click()
+  await expect
+    .poll(async () => renderedSequence(canvas))
+    .toBeGreaterThan(startingSequence)
+  await expect(page.locator("#accessible-formations button").last()).toContainText(
+    /tugged the living edge/i,
+  )
+  await expect(canvas).toHaveAttribute("data-ready", "true")
+  expect(browserFailures).toEqual([])
+})
+
+test("contextual detail supports keyboard, Escape, and outside dismissal", async ({
+  page,
+}) => {
+  const browserFailures = monitorPage(page, "detail dismissal")
+  const canvas = await openWorldloom(page)
+
+  await canvas.focus()
+  await page.keyboard.press("ArrowRight")
+  await page.keyboard.press("Enter")
+  await expect(page.locator("#signal-detail")).toBeVisible()
+
+  await page.keyboard.press("Escape")
+  await expect(page.locator("#signal-detail")).toHaveCount(0)
+
+  await canvas.focus()
+  await page.keyboard.press("ArrowRight")
+  await page.keyboard.press("Enter")
+  await expect(page.locator("#signal-detail")).toBeVisible()
+  await page.locator("#utc-chapter").click()
+  await expect(page.locator("#signal-detail")).toHaveCount(0)
+  expect(browserFailures).toEqual([])
+})
+
+test("a second formation remains selected after LiveView navigates from the first", async ({
+  page,
+}) => {
+  const browserFailures = monitorPage(page, "selection reconciliation")
+  const canvas = await openWorldloom(page)
+  const formations = page.locator("#accessible-formations button")
+  expect(await formations.count()).toBeGreaterThanOrEqual(2)
+
+  const firstFormation = formations.nth(0)
+  const firstSummary = (await firstFormation.textContent()).trim()
+  const firstSequence = Number((await firstFormation.getAttribute("id")).split("-").at(-1))
+  await firstFormation.focus()
+  await page.keyboard.press("Enter")
+  await expect(page).toHaveURL(new RegExp(`/chapters/\\d{4}-\\d{2}-\\d{2}/${firstSequence}$`))
+  await expect(page.locator("#signal-detail .detail-summary")).toHaveText(firstSummary)
+
+  const secondFormation = formations.nth(1)
+  const secondSummary = (await secondFormation.textContent()).trim()
+  const secondSequence = Number((await secondFormation.getAttribute("id")).split("-").at(-1))
+  expect(secondSequence).not.toBe(firstSequence)
+  await secondFormation.focus()
+  await page.keyboard.press("Enter")
+
+  const secondPath = new RegExp(`/chapters/\\d{4}-\\d{2}-\\d{2}/${secondSequence}$`)
+  await expect(page).toHaveURL(secondPath)
+  await expect(page.locator("#signal-detail .detail-summary")).toHaveText(secondSummary)
+  await expect(page.locator("#share-link")).toHaveValue(new RegExp(`/${secondSequence}$`))
+  await expect(canvas).toHaveAttribute("data-ready", "true")
+  expect(browserFailures).toEqual([])
+})
+
+test("Tug, Knot, and Illuminate commit distinct accessible formations", async ({
+  browser,
+}) => {
+  const expectations = [
+    ["Tug", /tugged the living edge/i],
+    ["Knot", /tied a knot/i],
+    ["Illuminate", /illuminated a thread/i],
+  ]
+
+  for (const [label, summary] of expectations) {
+    const context = await browser.newContext({
+      baseURL: process.env.WORLDLOOM_BASE_URL ?? "http://localhost:4002",
+    })
+    const gesturePage = await context.newPage()
+    const browserFailures = monitorPage(gesturePage, label)
+
+    try {
+      const canvas = await openWorldloom(gesturePage)
+      const startingSequence = await renderedSequence(canvas)
+
+      await gesturePage.getByRole("button", {name: label, exact: true}).click()
+      await expect
+        .poll(async () => renderedSequence(canvas))
+        .toBeGreaterThan(startingSequence)
+      await expect(
+        gesturePage.locator("#accessible-formations button").last(),
+      ).toContainText(summary)
+      await expect(canvas).toHaveAttribute("data-ready", "true")
+      expect(browserFailures).toEqual([])
+    } finally {
+      await context.close()
+    }
+  }
+})
+
 test("formation detail and a shared permalink survive a full round trip", async ({
   page,
 }) => {
@@ -246,11 +382,15 @@ test("formation detail and a shared permalink survive a full round trip", async 
   await expect(page).toHaveURL(/\/chapters\/\d{4}-\d{2}-\d{2}\/\d+$/)
   const detail = page.locator("#signal-detail .detail-summary")
   await expect(detail).toBeVisible()
-  const selectedSummary = await detail.textContent()
   const selectedPath = new URL(page.url()).pathname
   await expect(page.locator("#share-link")).toHaveValue(selectedPath)
 
+  const pathBeforeShare = new URL(page.url()).pathname
+  const summaryBeforeShare = (await detail.textContent()).trim()
   await page.getByRole("button", {name: "Share", exact: true}).click()
+  await expect(page.locator("#share-status")).toHaveText("Link copied.")
+  expect(new URL(page.url()).pathname).toBe(pathBeforeShare)
+  await expect(detail).toHaveText(summaryBeforeShare)
   const sharedLink = await page.evaluate(() => navigator.clipboard.readText())
   const sharedURL = new URL(sharedLink)
   expect(sharedURL.pathname).toBe(selectedPath)
@@ -263,13 +403,84 @@ test("formation detail and a shared permalink survive a full round trip", async 
   await page.goto(roundTripURL)
   await waitForCanvas(page)
   await expect(page.locator("#signal-detail .detail-summary")).toHaveText(
-    selectedSummary.trim(),
+    summaryBeforeShare,
   )
   await expect(page.locator("#gesture-dock")).toHaveAttribute(
     "aria-disabled",
     "true",
   )
   expect(browserFailures).toEqual([])
+})
+
+test("clipboard fallback is selectable and clears when its permalink becomes stale", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    baseURL: process.env.WORLDLOOM_BASE_URL ?? "http://localhost:4002",
+  })
+  const page = await context.newPage()
+  const browserFailures = monitorPage(page, "clipboard fallback")
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      value: undefined,
+      configurable: true,
+    })
+  })
+
+  try {
+    const canvas = await openWorldloom(page)
+    await canvas.focus()
+    await page.keyboard.press("ArrowRight")
+    await page.keyboard.press("Enter")
+    await expect(page.locator("#signal-detail")).toBeVisible()
+
+    await page.getByRole("button", {name: "Share", exact: true}).click()
+    const fallbackInput = page.locator("#share-fallback")
+    await expect(fallbackInput).toBeFocused()
+    await expect(page.locator("#share-status")).toHaveText(
+      "Select and copy this permanent link.",
+    )
+    const fallbackSelection = await fallbackInput.evaluate(input => ({
+      start: input.selectionStart,
+      end: input.selectionEnd,
+      length: input.value.length,
+    }))
+    expect(fallbackSelection).toEqual({
+      start: 0,
+      end: fallbackSelection.length,
+      length: fallbackSelection.length,
+    })
+
+    const currentSequence = Number(new URL(page.url()).pathname.split("/").at(-1))
+    const formations = page.locator("#accessible-formations button")
+    const formationCount = await formations.count()
+    let replacementFormation = null
+    let replacementSequence = null
+    for (let index = 0; index < formationCount; index += 1) {
+      const candidate = formations.nth(index)
+      const candidateSequence = Number(
+        (await candidate.getAttribute("id")).split("-").at(-1),
+      )
+      if (candidateSequence !== currentSequence) {
+        replacementFormation = candidate
+        replacementSequence = candidateSequence
+        break
+      }
+    }
+    expect(replacementFormation).not.toBeNull()
+
+    await replacementFormation.focus()
+    await page.keyboard.press("Enter")
+    await expect(page).toHaveURL(
+      new RegExp(`/chapters/\\d{4}-\\d{2}-\\d{2}/${replacementSequence}$`),
+    )
+    await expect(fallbackInput).toBeHidden()
+    await expect(fallbackInput).toHaveValue("")
+    await expect(page.locator("#share-status")).toHaveText("")
+    expect(browserFailures).toEqual([])
+  } finally {
+    await context.close()
+  }
 })
 
 test("the archive opens a stable read-only historical chapter", async ({

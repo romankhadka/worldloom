@@ -11,7 +11,7 @@ export function selectedSequenceFromClick(event, element, renderer) {
 
 export function shouldClearSelectionFromClick(event, detail) {
   if (!detail || detail.contains(event.target)) return false
-  return !event.target?.closest?.("#accessible-formations")
+  return !event.target?.closest?.("#accessible-formations, [data-preserve-selection]")
 }
 
 export const Worldloom = {
@@ -34,6 +34,9 @@ export const Worldloom = {
     this.clickSuppressionTimer = null
     this.scheduleTimeout = (callback, delay) => globalThis.setTimeout(callback, delay)
     this.cancelTimeout = timer => globalThis.clearTimeout(timer)
+    this.shareRequestGeneration = 0
+    this.shareWriteQueue = Promise.resolve()
+    this.shareDestroyed = false
 
     this.renderer = new Renderer(this.canvas, {
       reducedMotion,
@@ -57,6 +60,8 @@ export const Worldloom = {
     this.renderer.setTargetLane(this.localLane)
     this.introduction = document.querySelector("#worldloom-introduction")
     this.shareStatus = document.querySelector("#share-status")
+    this.lastSharePath = globalThis.location?.pathname ?? null
+    this.lastSelectionPermalink = this.selectedPermalink()
 
     this.installListeners()
     this.installServerEvents()
@@ -67,6 +72,8 @@ export const Worldloom = {
   },
 
   destroyed() {
+    this.shareDestroyed = true
+    this.invalidateShareRequests()
     this.clearClickSuppression()
     this.resizeObserver?.disconnect()
     for (const [target, event, listener, options] of this.listeners) {
@@ -79,6 +86,7 @@ export const Worldloom = {
     if (!this.renderer) return
     this.refreshIntroduction()
     this.bindExternalControls()
+    this.reconcileShareFallback()
     if (this.placingLane && !this.directPlacementEnabled()) this.cancelPlacement()
     this.reconcileServerLane()
     this.syncRenderedSequence()
@@ -181,7 +189,12 @@ export const Worldloom = {
 
     this.listen(this.el, "touchstart", event => {
       this.dismissIntroduction()
-      if (this.placingLane) return
+      if (this.placingLane) {
+        if (this.activePointerType === "touch" && event.touches?.length !== 1) {
+          this.cancelPlacement()
+        }
+        return
+      }
       if (event.touches?.length !== 1) return
 
       const touch = event.touches[0]
@@ -291,6 +304,61 @@ export const Worldloom = {
     if (shareStatus) this.shareStatus = shareStatus
     if (this.shareStatus?.isConnected === false) this.shareStatus = null
     if (this.shareStatus) this.shareStatus.textContent = message
+  },
+
+  selectedPermalink() {
+    return document.querySelector("#share-link")?.value ?? null
+  },
+
+  reconcileShareFallback() {
+    const sharePath = globalThis.location?.pathname ?? null
+    const selectionPermalink = this.selectedPermalink()
+    const pathChanged = this.lastSharePath !== undefined && sharePath !== this.lastSharePath
+    const selectionChanged = this.lastSelectionPermalink !== undefined &&
+      selectionPermalink !== this.lastSelectionPermalink
+
+    if (pathChanged || selectionChanged) {
+      this.invalidateShareRequests()
+      this.resetShareFallback()
+    }
+    this.lastSharePath = sharePath
+    this.lastSelectionPermalink = selectionPermalink
+  },
+
+  invalidateShareRequests() {
+    this.shareRequestGeneration = (this.shareRequestGeneration ?? 0) + 1
+  },
+
+  expectedSharePath() {
+    const selectedPermalink = this.selectedPermalink()
+    if (selectedPermalink) return this.sharePathFromUrl(selectedPermalink)
+    return globalThis.location?.pathname ?? null
+  },
+
+  sharePathFromUrl(url) {
+    if (typeof url !== "string" || url.trim() === "") return null
+
+    try {
+      const base = globalThis.location?.origin ?? "https://worldloom.invalid"
+      return new URL(url, base).pathname
+    } catch (_error) {
+      return null
+    }
+  },
+
+  currentShareRequest(generation, path) {
+    return this.shareDestroyed !== true &&
+      generation === this.shareRequestGeneration &&
+      path === this.expectedSharePath()
+  },
+
+  resetShareFallback() {
+    const fallbackField = document.querySelector("#share-fallback-field")
+    const fallbackInput = document.querySelector("#share-fallback")
+    const shareStatus = document.querySelector("#share-status")
+    if (fallbackField) fallbackField.hidden = true
+    if (fallbackInput) fallbackInput.value = ""
+    if (shareStatus) shareStatus.textContent = ""
   },
 
   reconcileServerLane() {
@@ -443,26 +511,58 @@ export const Worldloom = {
     this.el.dataset.renderedSequence = String(this.renderer.watermark)
   },
 
-  async copyLink(url) {
-    const fallbackField = document.querySelector("#share-fallback-field")
-    const fallbackInput = document.querySelector("#share-fallback")
+  copyLink(url) {
+    const requestedPath = this.sharePathFromUrl(url)
+    if (
+      this.shareDestroyed === true ||
+      requestedPath === null ||
+      requestedPath !== this.expectedSharePath()
+    ) {
+      return Promise.resolve(false)
+    }
 
-    try {
-      if (!globalThis.navigator?.clipboard?.writeText) throw new Error("clipboard unavailable")
-      await globalThis.navigator.clipboard.writeText(url)
-      if (fallbackField) fallbackField.hidden = true
-      this.announceShare("Link copied.")
-    } catch (_error) {
-      if (fallbackField && fallbackInput) {
-        fallbackField.hidden = false
-        fallbackInput.value = url
-        fallbackInput.focus()
-        fallbackInput.select()
-        this.announceShare("Select and copy this permanent link.")
-      } else {
-        this.announceShare("Copy failed. Use the address bar to copy this link.")
+    this.shareRequestGeneration = (this.shareRequestGeneration ?? 0) + 1
+    const generation = this.shareRequestGeneration
+    this.lastSharePath = globalThis.location?.pathname ?? null
+    this.lastSelectionPermalink = this.selectedPermalink()
+    this.resetShareFallback()
+
+    const writeLink = async () => {
+      if (!this.currentShareRequest(generation, requestedPath)) return false
+
+      try {
+        const clipboard = globalThis.navigator?.clipboard
+        if (!clipboard?.writeText) throw new Error("clipboard unavailable")
+        if (!this.currentShareRequest(generation, requestedPath)) return false
+        await clipboard.writeText(url)
+        if (!this.currentShareRequest(generation, requestedPath)) return false
+
+        const fallbackField = document.querySelector("#share-fallback-field")
+        if (fallbackField) fallbackField.hidden = true
+        this.announceShare("Link copied.")
+        return true
+      } catch (_error) {
+        if (!this.currentShareRequest(generation, requestedPath)) return false
+
+        const fallbackField = document.querySelector("#share-fallback-field")
+        const fallbackInput = document.querySelector("#share-fallback")
+        if (fallbackField && fallbackInput) {
+          fallbackField.hidden = false
+          fallbackInput.value = url
+          fallbackInput.focus()
+          fallbackInput.select()
+          this.announceShare("Select and copy this permanent link.")
+        } else {
+          this.announceShare("Copy failed. Use the address bar to copy this link.")
+        }
+        return false
       }
     }
+
+    const previousWrite = this.shareWriteQueue ?? Promise.resolve()
+    const completion = previousWrite.catch(() => false).then(writeLink)
+    this.shareWriteQueue = completion.catch(() => false)
+    return completion
   },
 }
 

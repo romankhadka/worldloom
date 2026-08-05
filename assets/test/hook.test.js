@@ -51,6 +51,7 @@ test("lets a canvas click without a formation continue propagating", () => {
 test("classifies only ordinary clicks outside formation detail for dismissal", () => {
   const detailTarget = target("detail")
   const accessibleTarget = target("accessible")
+  const shareTarget = target("share")
   const outsideTarget = target("outside")
   const detail = {
     contains: candidate => candidate === detailTarget,
@@ -59,6 +60,7 @@ test("classifies only ordinary clicks outside formation detail for dismissal", (
   assert.equal(shouldClearSelectionFromClick({target: outsideTarget}, null), false)
   assert.equal(shouldClearSelectionFromClick({target: detailTarget}, detail), false)
   assert.equal(shouldClearSelectionFromClick({target: accessibleTarget}, detail), false)
+  assert.equal(shouldClearSelectionFromClick({target: shareTarget}, detail), false)
   assert.equal(shouldClearSelectionFromClick({target: outsideTarget}, detail), true)
 })
 
@@ -128,6 +130,21 @@ test("touch placement cancels cleanly and commits a normal end at most once", t 
   harness.el.dispatch("touchend", touchEvent())
   harness.el.dispatch("touchend", touchEvent())
   assert.deepEqual(harness.lanePushes(), [{lane: "0.75"}])
+})
+
+test("a second touch cancels direct placement without committing its preview lane", t => {
+  const harness = hookHarness(t)
+  const firstTouch = {clientX: 790, clientY: 430}
+  const secondTouch = {clientX: 760, clientY: 170}
+
+  harness.el.dispatch("touchstart", {touches: [firstTouch]})
+  assert.equal(harness.renderer.targetLanes.at(-1), 0.75)
+
+  harness.el.dispatch("touchstart", {touches: [firstTouch, secondTouch]})
+  harness.el.dispatch("touchend", touchEvent())
+
+  assert.deepEqual(harness.lanePushes(), [])
+  assert.equal(harness.renderer.targetLanes.at(-1), 0.5)
 })
 
 test("deduplicates snapped placement updates and synchronizes only on release", t => {
@@ -287,8 +304,35 @@ test("updated reconciles changed lane data and binds replacement controls once",
   assert.deepEqual(harness.lanePushes(), [])
 })
 
+test("updated clears a revealed share fallback when the selected permalink changes", t => {
+  const harness = hookHarness(t)
+  harness.hook.lastSelectionPermalink = "/chapters/2026-08-04/1"
+  harness.nodes.shareLink = new FakeTarget({value: "/chapters/2026-08-04/2"})
+  harness.fallbackField.hidden = false
+  harness.fallbackInput.value = "https://example.test/chapters/2026-08-04/1"
+  harness.shareStatus.textContent = "Select and copy this permanent link."
+
+  harness.hook.updated()
+
+  assert.equal(harness.fallbackField.hidden, true)
+  assert.equal(harness.fallbackInput.value, "")
+  assert.equal(harness.shareStatus.textContent, "")
+  assert.equal(harness.hook.lastSelectionPermalink, "/chapters/2026-08-04/2")
+
+  harness.fallbackField.hidden = false
+  harness.fallbackInput.value = "https://example.test/chapters/2026-08-04/2"
+  harness.shareStatus.textContent = "Select and copy this permanent link."
+  harness.hook.updated()
+
+  assert.equal(harness.fallbackField.hidden, false)
+  assert.equal(harness.fallbackInput.value, "https://example.test/chapters/2026-08-04/2")
+  assert.equal(harness.shareStatus.textContent, "Select and copy this permanent link.")
+})
+
 test("copyLink provides truthful success, fallback, and missing-target feedback", async t => {
   const harness = hookHarness(t)
+  const location = {origin: "https://example.test", pathname: "/live"}
+  replaceGlobal(t, "location", location)
   let copiedUrl = null
   replaceGlobal(t, "navigator", {
     clipboard: {writeText: async url => { copiedUrl = url }},
@@ -303,6 +347,7 @@ test("copyLink provides truthful success, fallback, and missing-target feedback"
   replaceGlobal(t, "navigator", {
     clipboard: {writeText: async () => { throw new Error("denied") }},
   })
+  location.pathname = "/chapter"
   await harness.hook.copyLink("https://example.test/chapter")
   assert.equal(harness.fallbackField.hidden, false)
   assert.equal(harness.fallbackInput.value, "https://example.test/chapter")
@@ -317,6 +362,7 @@ test("copyLink provides truthful success, fallback, and missing-target feedback"
   replaceGlobal(t, "navigator", {
     clipboard: {writeText: async () => {}},
   })
+  location.pathname = "/recovered"
   await harness.hook.copyLink("https://example.test/recovered")
   assert.equal(harness.fallbackField.hidden, true)
   assert.equal(harness.shareStatus.textContent, "Link copied.")
@@ -326,6 +372,7 @@ test("copyLink provides truthful success, fallback, and missing-target feedback"
   replaceGlobal(t, "navigator", {
     clipboard: {writeText: async () => { throw new Error("denied") }},
   })
+  location.pathname = "/missing"
   await harness.hook.copyLink("https://example.test/missing")
   assert.equal(
     harness.shareStatus.textContent,
@@ -333,12 +380,219 @@ test("copyLink provides truthful success, fallback, and missing-target feedback"
   )
 })
 
+test("delayed clipboard resolution cannot announce after the share context changes", async t => {
+  const harness = hookHarness(t)
+  const shareContext = installShareContext(t, harness, "/chapters/2026-08-04/1")
+  const pendingWrite = deferred()
+  const writes = []
+  replaceGlobal(t, "navigator", {
+    clipboard: {
+      writeText(url) {
+        writes.push(url)
+        return pendingWrite.promise
+      },
+    },
+  })
+
+  const oldRequest = harness.hook.copyLink("https://example.test/chapters/2026-08-04/1")
+  await flushPromises()
+  assert.deepEqual(writes, ["https://example.test/chapters/2026-08-04/1"])
+
+  shareContext.setPath("/chapters/2026-08-04/2")
+  harness.hook.updated()
+  pendingWrite.resolve()
+  await oldRequest
+
+  assert.equal(harness.fallbackField.hidden, true)
+  assert.equal(harness.fallbackInput.value, "")
+  assert.equal(harness.shareStatus.textContent, "")
+  assert.deepEqual(harness.announcements, [])
+})
+
+test("delayed clipboard rejection cannot restore fallback after the share context changes", async t => {
+  const harness = hookHarness(t)
+  const shareContext = installShareContext(t, harness, "/chapters/2026-08-04/1")
+  const pendingWrite = deferred()
+  replaceGlobal(t, "navigator", {
+    clipboard: {writeText: () => pendingWrite.promise},
+  })
+
+  const oldRequest = harness.hook.copyLink("https://example.test/chapters/2026-08-04/1")
+  await flushPromises()
+  shareContext.setPath("/chapters/2026-08-04/2")
+  harness.hook.updated()
+  pendingWrite.reject(new Error("denied late"))
+  await oldRequest
+
+  assert.equal(harness.fallbackField.hidden, true)
+  assert.equal(harness.fallbackInput.value, "")
+  assert.equal(harness.shareStatus.textContent, "")
+  assert.deepEqual(harness.announcements, [])
+})
+
+test("a delayed stale URL is dropped without disturbing the current share", async t => {
+  const harness = hookHarness(t)
+  installShareContext(t, harness, "/chapters/2026-08-04/2")
+  const writes = []
+  replaceGlobal(t, "navigator", {
+    clipboard: {writeText: async url => writes.push(url)},
+  })
+  harness.fallbackField.hidden = false
+  harness.fallbackInput.value = "https://example.test/chapters/2026-08-04/2"
+  harness.shareStatus.textContent = "Select and copy this permanent link."
+
+  await harness.hook.copyLink("https://example.test/chapters/2026-08-04/1")
+
+  assert.deepEqual(writes, [])
+  assert.equal(harness.fallbackField.hidden, false)
+  assert.equal(
+    harness.fallbackInput.value,
+    "https://example.test/chapters/2026-08-04/2",
+  )
+  assert.equal(harness.shareStatus.textContent, "Select and copy this permanent link.")
+  assert.deepEqual(harness.announcements, [])
+})
+
+test("concurrent shares serialize writes so the latest valid URL finishes last", async t => {
+  const harness = hookHarness(t)
+  const shareContext = installShareContext(t, harness, "/chapters/2026-08-04/1")
+  const firstWrite = deferred()
+  const secondWrite = deferred()
+  const writes = []
+  let clipboardText = ""
+  replaceGlobal(t, "navigator", {
+    clipboard: {
+      writeText(url) {
+        writes.push(url)
+        const pending = url.endsWith("/1") ? firstWrite : secondWrite
+        return pending.promise.then(() => { clipboardText = url })
+      },
+    },
+  })
+
+  const firstRequest = harness.hook.copyLink("https://example.test/chapters/2026-08-04/1")
+  await flushPromises()
+  shareContext.setPath("/chapters/2026-08-04/2")
+  harness.hook.updated()
+  const secondRequest = harness.hook.copyLink("https://example.test/chapters/2026-08-04/2")
+
+  secondWrite.resolve()
+  await flushPromises()
+  assert.deepEqual(writes, ["https://example.test/chapters/2026-08-04/1"])
+
+  firstWrite.resolve()
+  await Promise.all([firstRequest, secondRequest])
+
+  assert.deepEqual(writes, [
+    "https://example.test/chapters/2026-08-04/1",
+    "https://example.test/chapters/2026-08-04/2",
+  ])
+  assert.equal(clipboardText, "https://example.test/chapters/2026-08-04/2")
+  assert.equal(harness.fallbackField.hidden, true)
+  assert.equal(harness.shareStatus.textContent, "Link copied.")
+  assert.deepEqual(harness.announcements, ["Link copied."])
+})
+
+test("a latest queued rejection owns fallback after the older write resolves", async t => {
+  const harness = hookHarness(t)
+  const shareContext = installShareContext(t, harness, "/chapters/2026-08-04/1")
+  const firstWrite = deferred()
+  const secondWrite = deferred()
+  const writes = []
+  replaceGlobal(t, "navigator", {
+    clipboard: {
+      writeText(url) {
+        writes.push(url)
+        return url.endsWith("/1") ? firstWrite.promise : secondWrite.promise
+      },
+    },
+  })
+
+  const firstRequest = harness.hook.copyLink("https://example.test/chapters/2026-08-04/1")
+  await flushPromises()
+  shareContext.setPath("/chapters/2026-08-04/2")
+  harness.hook.updated()
+  const secondRequest = harness.hook.copyLink("https://example.test/chapters/2026-08-04/2")
+
+  secondWrite.reject(new Error("latest clipboard denied"))
+  await flushPromises()
+  firstWrite.resolve()
+  await Promise.all([firstRequest, secondRequest])
+
+  assert.deepEqual(writes, [
+    "https://example.test/chapters/2026-08-04/1",
+    "https://example.test/chapters/2026-08-04/2",
+  ])
+  assert.equal(harness.fallbackField.hidden, false)
+  assert.equal(
+    harness.fallbackInput.value,
+    "https://example.test/chapters/2026-08-04/2",
+  )
+  assert.equal(harness.fallbackInput.focused, true)
+  assert.equal(harness.fallbackInput.selected, true)
+  assert.equal(harness.shareStatus.textContent, "Select and copy this permanent link.")
+  assert.deepEqual(harness.announcements, ["Select and copy this permanent link."])
+})
+
+test("destroying the hook invalidates pending share completion", async t => {
+  const harness = hookHarness(t)
+  installShareContext(t, harness, "/chapters/2026-08-04/1")
+  const pendingWrite = deferred()
+  replaceGlobal(t, "navigator", {
+    clipboard: {writeText: () => pendingWrite.promise},
+  })
+
+  const request = harness.hook.copyLink("https://example.test/chapters/2026-08-04/1")
+  await flushPromises()
+  harness.hook.destroyed()
+  pendingWrite.resolve()
+  await request
+
+  assert.equal(harness.fallbackField.hidden, true)
+  assert.equal(harness.fallbackInput.value, "")
+  assert.equal(harness.shareStatus.textContent, "")
+  assert.deepEqual(harness.announcements, [])
+})
+
 function target(location) {
   return {
     closest(selector) {
-      return selector === "#accessible-formations" && location === "accessible" ? {} : null
+      if (selector.includes("#accessible-formations") && location === "accessible") return {}
+      if (selector.includes("[data-preserve-selection]") && location === "share") return {}
+      return null
     },
   }
+}
+
+function installShareContext(t, harness, path) {
+  const location = {origin: "https://example.test", pathname: path}
+  replaceGlobal(t, "location", location)
+  harness.nodes.shareLink = new FakeTarget({value: path})
+  harness.hook.lastSharePath = path
+  harness.hook.lastSelectionPermalink = path
+
+  return {
+    setPath(nextPath) {
+      location.pathname = nextPath
+      harness.nodes.shareLink.value = nextPath
+    },
+  }
+}
+
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  promise.catch(() => {})
+  return {promise, resolve, reject}
+}
+
+async function flushPromises() {
+  await Promise.resolve()
+  await Promise.resolve()
 }
 
 function hookHarness(t, {live = true, laneDisabled = false} = {}) {
@@ -372,6 +626,7 @@ function hookHarness(t, {live = true, laneDisabled = false} = {}) {
     shareStatus,
     fallbackField,
     fallbackInput,
+    shareLink: null,
     detail,
     gestureButtons: [gestureButton],
   }
@@ -383,6 +638,7 @@ function hookHarness(t, {live = true, laneDisabled = false} = {}) {
         "#share-status": nodes.shareStatus,
         "#share-fallback-field": nodes.fallbackField,
         "#share-fallback": nodes.fallbackInput,
+        "#share-link": nodes.shareLink,
         "#signal-detail": nodes.detail,
       }[selector] ?? null
     },

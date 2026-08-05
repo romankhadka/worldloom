@@ -51,15 +51,22 @@
           <nav aria-label="Worldloom mobile navigation">
             <.link navigate={~p"/chapters"}>Archive</.link>
             <.link navigate={~p"/about"}>About</.link>
-            <button type="button" phx-click="share">Share</button>
+            <button type="button" phx-click="share" data-preserve-selection>Share</button>
           </nav>
         </details>
         <nav class="worldloom-nav" aria-label="Worldloom">
           <.link id="archive-link" navigate={~p"/chapters"}>Archive</.link>
           <.link id="about-link" navigate={~p"/about"}>About</.link>
-          <button id="share-worldloom" type="button" phx-click="share">Share</button>
+          <button
+            id="share-worldloom"
+            type="button"
+            phx-click="share"
+            data-preserve-selection
+          >
+            Share
+          </button>
         </nav>
-        <p id="share-status" class="sr-only" aria-live="polite"></p>
+        <p id="share-status" phx-update="ignore" class="sr-only" aria-live="polite"></p>
         <div id="share-fallback-field" phx-update="ignore" hidden>
           <label for="share-fallback">Permanent link</label>
           <input id="share-fallback" type="url" readonly value="" />
