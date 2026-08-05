@@ -237,6 +237,55 @@ test("projects a bounded public scaffold as a coherent viewport-spanning spine",
   assert.ok(scene.length <= 4000)
 })
 
+test("gives consecutive public scaffold anchors a stable desktop cadence", () => {
+  const {scaffold, visitors} = publicSurgeInstructions()
+  const desktop = {width: 1600, height: 900, padding: 40, spacing: 28, maxSequence: 612}
+  const scene = projectedPublicSurge(scaffold, visitors, desktop)
+  const spine = scene.find(
+    command => command.type === "fiber-path" && command.role === "spine",
+  )
+  const visitorHits = scene.filter(command => command.type === "anchor-hit")
+
+  assert.deepEqual(
+    spine.segments.map(segment => segment.sequence),
+    scaffold.slice(1).map(instruction => instruction.sequence),
+  )
+  assert.equal(
+    spine.segments.at(-1).curve.to.x - spine.segments[0].curve.from.x,
+    11 * 4 * desktop.spacing,
+  )
+  assert.equal(
+    visitorHits.at(-1).x - spine.segments.at(-1).curve.to.x,
+    8 * desktop.spacing,
+  )
+  assert.deepEqual(
+    visitorHits.map(command => command.sequence),
+    visitors.map(visitor => visitor.sequence),
+  )
+})
+
+test("reserves narrow live-edge width for multiple real scaffold segments", () => {
+  const {scaffold, visitors} = publicSurgeInstructions()
+  const narrow = {width: 390, height: 844, padding: 40, spacing: 28, maxSequence: 612}
+  const scene = projectedPublicSurge(scaffold, visitors, narrow)
+  const spine = scene.find(
+    command => command.type === "fiber-path" && command.role === "spine",
+  )
+  const visitorHits = scene.filter(command => command.type === "anchor-hit")
+  const visible = visibleSpineMetrics(spine, narrow)
+
+  assert.equal(
+    visitorHits.at(-1).x - spine.segments.at(-1).curve.to.x,
+    3 * narrow.spacing,
+  )
+  assert.ok(visible.segmentCount >= 3)
+  assert.ok(visible.span >= (narrow.width - narrow.padding * 2) * 0.65)
+  assert.deepEqual(
+    visitorHits.map(command => command.sequence),
+    visitors.map(visitor => visitor.sequence),
+  )
+})
+
 test("derives cosmetic fiber layers from one structural command", () => {
   const instructions = Array.from({length: 60}, (_item, index) => ({
     ...contract[0],
@@ -341,6 +390,50 @@ test("keeps malformed scene commands finite", () => {
   assert.ok(Number.isFinite(fallback.x))
   assert.ok(Number.isFinite(fallback.y))
 })
+
+function publicSurgeInstructions() {
+  const publicTemplate = contract.find(instruction => instruction.kind === "wikimedia")
+  const visitorTemplate = contract.find(instruction => instruction.source === "visitor")
+  const scaffold = Array.from({length: 12}, (_entry, index) => ({
+    ...publicTemplate,
+    sequence: index + 1,
+    lane: 0.5 + Math.sin(index / 3) * 0.16,
+  }))
+  const visitors = Array.from({length: 600}, (_entry, index) => ({
+    ...visitorTemplate,
+    sequence: index + 13,
+    lane: 0.5,
+  }))
+  return {scaffold, visitors}
+}
+
+function projectedPublicSurge(scaffold, visitors, projectionViewport) {
+  return commandsForScene(
+    [...scaffold, ...visitors.slice(-588)],
+    projectionViewport,
+    {
+      projectionInstructions: [...scaffold, ...visitors],
+      hitInstructions: visitors,
+    },
+  )
+}
+
+function visibleSpineMetrics(spine, projectionViewport) {
+  const minimumX = projectionViewport.padding
+  const maximumX = projectionViewport.width - projectionViewport.padding
+  const visibleSegments = spine.segments.filter(segment =>
+    segment.curve.to.x >= minimumX && segment.curve.from.x <= maximumX
+  )
+  const clippedXs = visibleSegments.flatMap(segment => [
+    Math.max(minimumX, Math.min(maximumX, segment.curve.from.x)),
+    Math.max(minimumX, Math.min(maximumX, segment.curve.to.x)),
+  ])
+
+  return {
+    segmentCount: visibleSegments.length,
+    span: clippedXs.length > 0 ? Math.max(...clippedXs) - Math.min(...clippedXs) : 0,
+  }
+}
 
 function tangentDifference(previous, current) {
   const outgoing = normalize({

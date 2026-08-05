@@ -12,6 +12,8 @@ const supportedRenderVersion = 1
 const defaultSpacing = 28
 const maximumVisitorBandSpan = 8
 const maximumDurableDisplayStep = 8
+const minimumPublicDisplayStep = 4
+const visitorBandViewportDivisor = 3
 
 export function sequenceToX(sequence, viewport) {
   const padding = viewport.padding ?? 40
@@ -96,7 +98,7 @@ export function commandsForScene(
   const projectedViewport = {
     ...viewport,
     maxSequence,
-    displayPositions: displayPositionsFor(projectionOrdered),
+    displayPositions: displayPositionsFor(projectionOrdered, viewport),
   }
   const topology = buildTopology(ordered)
   const ambientInstruction = topology.ambient ?? ambient
@@ -641,11 +643,12 @@ function uniqueInstructions(instructions) {
   return [...bySequence.values()].sort((left, right) => left.sequence - right.sequence)
 }
 
-function displayPositionsFor(instructions) {
+function displayPositionsFor(instructions, viewport) {
   const positions = new Map()
   if (instructions.length === 0) return positions
 
   let previousSequence = instructions[0].sequence
+  let previousInstruction = instructions[0]
   let previousPosition = previousSequence
   positions.set(previousSequence, previousPosition)
 
@@ -653,8 +656,16 @@ function displayPositionsFor(instructions) {
     if (instructions[index].source !== "visitor") {
       const instruction = instructions[index]
       const rawStep = instruction.sequence - previousSequence
-      previousPosition += Math.min(maximumDurableDisplayStep, rawStep)
+      const minimumStep = previousInstruction.source === "wikimedia" &&
+        instruction.source === "wikimedia"
+        ? minimumPublicDisplayStep
+        : 1
+      previousPosition += Math.min(
+        maximumDurableDisplayStep,
+        Math.max(minimumStep, rawStep),
+      )
       previousSequence = instruction.sequence
+      previousInstruction = instruction
       positions.set(instruction.sequence, previousPosition)
       index++
       continue
@@ -670,7 +681,7 @@ function displayPositionsFor(instructions) {
 
     const finalVisitorSequence = instructions[runEnd].sequence
     const rawSpan = finalVisitorSequence - previousSequence
-    const displaySpan = Math.min(maximumVisitorBandSpan, rawSpan)
+    const displaySpan = Math.min(visitorBandSpan(viewport), rawSpan)
     for (let visitorIndex = index; visitorIndex <= runEnd; visitorIndex++) {
       const visitorSequence = instructions[visitorIndex].sequence
       const progress = (visitorSequence - previousSequence) / rawSpan
@@ -678,11 +689,25 @@ function displayPositionsFor(instructions) {
     }
 
     previousSequence = finalVisitorSequence
+    previousInstruction = instructions[runEnd]
     previousPosition += displaySpan
     index = runEnd + 1
   }
 
   return positions
+}
+
+function visitorBandSpan(viewport) {
+  const width = Number(viewport.width)
+  const padding = Number(viewport.padding ?? 40)
+  const spacing = Number(viewport.spacing ?? defaultSpacing)
+  if (![width, padding, spacing].every(Number.isFinite) || width <= 0 || spacing <= 0) {
+    return maximumVisitorBandSpan
+  }
+
+  const usableWidth = Math.max(spacing, width - padding * 2)
+  const responsiveSpan = Math.floor(usableWidth / (spacing * visitorBandViewportDivisor))
+  return Math.max(1, Math.min(maximumVisitorBandSpan, responsiveSpan))
 }
 
 function utcDate(encodedTime) {

@@ -187,6 +187,10 @@ test("extends the visible spine when public activity resumes after a visitor sur
   const resumedHits = renderer.commands.filter(command => command.type === "anchor-hit")
   assert.ok(resumedSegment.curve.from.x >= renderer.padding)
   assert.equal(resumedSegment.curve.to.x, renderer.width - renderer.padding)
+  assert.equal(
+    resumedSegment.curve.to.x - resumedSegment.curve.from.x,
+    (8 + 1) * renderer.spacing,
+  )
   assert.deepEqual(
     resumedHits.map(command => command.sequence),
     Array.from({length: 191}, (_entry, index) => index + 1),
@@ -203,7 +207,7 @@ test("bounds archive panning to the compressed visitor projection", () => {
   })
   renderer.setEvents(visitorSurgeInstructions())
 
-  renderer.panBy(10_000)
+  renderer.panBy(Number.MAX_SAFE_INTEGER)
 
   const archivedHits = renderer.commands.filter(command => command.type === "anchor-hit")
   assert.equal(archivedHits[0].sequence, 1)
@@ -233,6 +237,7 @@ test("retains a bounded public scaffold through all-visitor reloads and live app
 
   renderer.setEvents(visitors, {scaffold})
   assertVisibleScaffold(renderer)
+  assert.equal(visitorBandWidth(renderer), renderer.spacing * 8)
   assert.deepEqual(
     renderer.commands
       .filter(command => command.type === "anchor-hit")
@@ -254,9 +259,47 @@ test("retains a bounded public scaffold through all-visitor reloads and live app
   }
 
   assertVisibleScaffold(renderer)
+  assert.equal(visitorBandWidth(renderer), renderer.spacing * 8)
   assert.equal(renderer.events.length, 600)
   assert.equal(renderer.events[0].sequence, 116)
   assert.equal(renderer.watermark, 715)
+  assert.ok(renderer.commands.length <= 4000)
+})
+
+test("reserves narrow live-edge width for multiple real scaffold segments", () => {
+  const renderer = new Renderer(null, {
+    width: 390,
+    height: 844,
+    padding: 40,
+    reducedMotion: true,
+  })
+  const scaffold = Array.from(
+    {length: 12},
+    (_entry, index) => publicInstruction(index * 4 + 1),
+  )
+  const visitors = Array.from({length: 600}, (_entry, index) => ({
+    ...instruction(index + 46),
+    kind: "knot",
+    source: "visitor",
+    lane: 0.5,
+  }))
+
+  renderer.setEvents(visitors, {scaffold})
+
+  const spine = renderer.commands.find(
+    command => command.type === "fiber-path" && command.role === "spine",
+  )
+  const visible = visibleSpineMetrics(renderer, spine)
+  assert.equal(visitorBandWidth(renderer), renderer.spacing * 3)
+  assert.ok(visible.segmentCount >= 3)
+  assert.ok(visible.span >= (renderer.width - renderer.padding * 2) * 0.65)
+  assert.deepEqual(
+    renderer.commands
+      .filter(command => command.type === "anchor-hit")
+      .map(command => command.sequence),
+    visitors.map(visitor => visitor.sequence),
+  )
+  assert.equal(renderer.watermark, 645)
   assert.ok(renderer.commands.length <= 4000)
 })
 
@@ -911,6 +954,33 @@ function assertVisibleScaffold(renderer) {
     Math.max(renderer.padding, Math.min(renderer.width - renderer.padding, segment.curve.to.x)),
   ])
   assert.ok(Math.max(...visibleXs) - Math.min(...visibleXs) >= renderer.width * 0.65)
+}
+
+function visitorBandWidth(renderer) {
+  const spine = renderer.commands.find(
+    command => command.type === "fiber-path" && command.role === "spine",
+  )
+  const newestHit = renderer.commands
+    .filter(command => command.type === "anchor-hit")
+    .at(-1)
+  return newestHit.x - spine.segments.at(-1).curve.to.x
+}
+
+function visibleSpineMetrics(renderer, spine) {
+  const minimumX = renderer.padding
+  const maximumX = renderer.width - renderer.padding
+  const visibleSegments = spine.segments.filter(segment =>
+    segment.curve.to.x >= minimumX && segment.curve.from.x <= maximumX
+  )
+  const clippedXs = visibleSegments.flatMap(segment => [
+    Math.max(minimumX, Math.min(maximumX, segment.curve.from.x)),
+    Math.max(minimumX, Math.min(maximumX, segment.curve.to.x)),
+  ])
+
+  return {
+    segmentCount: visibleSegments.length,
+    span: clippedXs.length > 0 ? Math.max(...clippedXs) - Math.min(...clippedXs) : 0,
+  }
 }
 
 function cachedCallsFor(command) {

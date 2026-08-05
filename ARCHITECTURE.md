@@ -118,11 +118,13 @@ historical page.
 `topology.js` turns the bounded instruction window into stable anchors, branches,
 connectors, and visitor formations without access to the viewport, canvas, clock, or
 DOM. `geometry.js` projects that graph through centripetal Catmull-Rom splines converted
-to cubic Bézier segments. Consecutive visitor events share a bounded monotonic display
-band, and sparse durable-event gaps are capped to eight display steps, while every event
-retains its raw sequence identity. Held ambient weather is remembered independently and
-does not participate in horizontal spacing. Replaying the same stored instruction set
-therefore yields the same graph relationships at any viewport size.
+to cubic Bézier segments. Consecutive Wikimedia scaffold anchors receive four to eight
+display steps so the public spine stays coherent across both dense and sparse source
+cadence. Consecutive visitor events share a monotonic display band capped at eight steps
+and at one third of the usable viewport; every event retains its raw sequence identity.
+Held ambient weather is remembered independently and does not participate in horizontal
+spacing. Replaying the same stored instruction set therefore yields the same graph
+relationships at any viewport size, while projection density adapts to the viewport.
 
 The Canvas 2D renderer owns hit testing, focus traversal, panning, resize, and local
 animation timestamps. It composites a detached cache of settled fibers and durable
