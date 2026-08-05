@@ -7,6 +7,29 @@
     <.live_title default="Worldloom · A living public tapestry">
       {assigns[:page_title]}
     </.live_title>
+    <meta
+      name="description"
+      content="A persistent living tapestry woven from public signals and anonymous visitor gestures."
+    />
+    <meta name="theme-color" content="#07110f" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Worldloom · The world is weaving itself" />
+    <meta
+      property="og:description"
+      content="A persistent living tapestry woven from public signals and anonymous visitor gestures."
+    />
+    <meta
+      property="og:image"
+      content={WorldloomWeb.Endpoint.url() <> "/images/worldloom-social-preview.png"}
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Worldloom · The world is weaving itself" />
+    <meta name="twitter:description" content="Public signals, becoming one persistent fabric." />
+    <meta
+      name="twitter:image"
+      content={WorldloomWeb.Endpoint.url() <> "/images/worldloom-social-preview.png"}
+    />
+    <link rel="icon" type="image/svg+xml" href={~p"/images/logo.svg"} />
     <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
     <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
     </script>

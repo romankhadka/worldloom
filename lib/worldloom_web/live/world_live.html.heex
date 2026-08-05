@@ -20,6 +20,17 @@
       <canvas aria-hidden="true"></canvas>
     </div>
 
+    <section
+      id="worldloom-introduction"
+      class="worldloom-introduction"
+      aria-labelledby="worldloom-title"
+    >
+      <p class="eyebrow">A living public record</p>
+      <h1 id="worldloom-title">The world is weaving itself.</h1>
+      <p>Public signals, becoming one persistent fabric.</p>
+      <span aria-hidden="true">Move left through earlier hours.</span>
+    </section>
+
     <header class="worldloom-header">
       <.link id="wordmark" navigate={~p"/"} class="wordmark" aria-label="Worldloom live weave">
         <span class="wordmark-glyph" aria-hidden="true"></span> Worldloom
@@ -31,15 +42,31 @@
           <span class="viewer-pulse" aria-hidden="true"></span>
           {@viewer_count} viewing
         </span>
+        <details id="mobile-worldloom-menu" class="mobile-worldloom-menu">
+          <summary aria-label="Open Worldloom navigation">
+            <.icon name="hero-ellipsis-horizontal" class="size-5" />
+          </summary>
+          <nav aria-label="Worldloom mobile navigation">
+            <.link navigate={~p"/chapters"}>Archive</.link>
+            <.link navigate={~p"/about"}>About</.link>
+            <button type="button" phx-click="share">Share</button>
+          </nav>
+        </details>
         <nav class="worldloom-nav" aria-label="Worldloom">
           <.link id="archive-link" navigate={~p"/chapters"}>Archive</.link>
           <.link id="about-link" navigate={~p"/about"}>About</.link>
           <button id="share-worldloom" type="button" phx-click="share">Share</button>
         </nav>
+        <p id="share-status" class="sr-only" aria-live="polite"></p>
       </div>
     </header>
 
     <div id="live-edge" class="live-edge" aria-label="Live edge">
+      <span class="live-edge-seed" aria-hidden="true">
+        <i></i>
+        <i></i>
+        <i></i>
+      </span>
       <span>Live</span>
     </div>
 
@@ -72,6 +99,15 @@
       aria-disabled={to_string(not @live? or not @at_live_edge or not is_nil(@cooldown_until))}
       class="gesture-dock"
     >
+      <h2>Touch the loom</h2>
+      <span
+        :if={@cooldown_seconds}
+        id="gesture-cooldown-ring"
+        class="gesture-cooldown-ring"
+        data-seconds={@cooldown_seconds}
+        style={"--cooldown-duration: #{@cooldown_seconds}s"}
+        aria-hidden="true"
+      ></span>
       <form
         id="gesture-lane-form"
         phx-change="lane-change"
@@ -89,11 +125,15 @@
             value={gesture}
             class="gesture-button"
             data-gesture={gesture}
+            aria-label={label}
             phx-disable-with="Weaving…"
             disabled={not @live? or not @at_live_edge or not is_nil(@cooldown_until)}
           >
             <span class="gesture-mark" aria-hidden="true"></span>
-            {label}
+            <span class="gesture-copy">
+              <strong>{label}</strong>
+              <small>{gesture_description(gesture)}</small>
+            </span>
           </button>
         </div>
 
@@ -133,13 +173,18 @@
       <span>Now</span>
     </div>
 
-    <aside id="signal-detail" class="signal-detail" aria-live="polite">
+    <aside
+      :if={@selected_detail}
+      id="signal-detail"
+      class="signal-detail"
+      aria-live="polite"
+      phx-click-away="clear-selection"
+      phx-window-keydown="clear-selection"
+      phx-key="Escape"
+    >
       <div id="mobile-detail-sheet">
         <p class="eyebrow">Formation detail</p>
-        <p :if={is_nil(@selected_detail)} class="detail-empty">
-          Select a formation to inspect its public detail.
-        </p>
-        <div :if={@selected_detail}>
+        <div>
           <p class="detail-summary">{@selected_detail.summary}</p>
           <p class="detail-meta">{@selected_detail.source} · {@selected_detail.occurred_at}</p>
         </div>
@@ -182,15 +227,65 @@
         <.link navigate={~p"/"}>Close</.link>
       </div>
       <p class="about-lede">
-        Public change becomes a shared, persistent fabric. No accounts, names, chat, uploads,
-        or visitor tracking enter the weave.
+        Worldloom is one living public record. Activity from across the world enters as fiber,
+        tension, atmosphere, and light—then remains part of the same shared fabric.
       </p>
+      <div class="about-sections">
+        <section>
+          <p class="eyebrow">The material</p>
+          <h2>Public change, given form</h2>
+          <p>
+            Wikimedia edits extend connective threads. Earthquakes tighten ember knots. Weather
+            changes the surrounding field. The work is interpretive, not an alerting tool.
+          </p>
+        </section>
+        <section>
+          <p class="eyebrow">Your touch</p>
+          <h2>Shape the present, never rewrite the past</h2>
+          <p>
+            Tug bends a strand, Knot joins two paths, and Illuminate awakens a junction. Every
+            gesture appears only after it becomes part of the persistent record.
+          </p>
+        </section>
+        <section>
+          <p class="eyebrow">A shared memory</p>
+          <h2>The weave survives the room</h2>
+          <p>
+            Committed formations live in PostgreSQL and reopen through stable UTC chapter links.
+            Connected browsers receive the same ordered artifact.
+          </p>
+        </section>
+        <section>
+          <p class="eyebrow">Privacy</p>
+          <h2>No identity enters the artwork</h2>
+          <p>
+            There are no accounts, names, chat messages, uploads, profiles, or public cursors.
+            Anonymous browser and network values exist only long enough to enforce contribution
+            limits.
+          </p>
+        </section>
+        <section>
+          <p class="eyebrow">Access</p>
+          <h2>The canvas is not the only way in</h2>
+          <p>
+            Keyboard, pointer, and touch controls share the same actions. Reduced motion, visible
+            focus, structural signal shapes, and textual formation summaries remain available.
+          </p>
+        </section>
+      </div>
       <div id="source-attribution" class="source-attribution">
-        <h2>Public signals</h2>
+        <h2>Public sources</h2>
         <a href="https://stream.wikimedia.org/" rel="noreferrer">Wikimedia EventStreams</a>
         <a href="https://earthquake.usgs.gov/" rel="noreferrer">USGS Earthquake Hazards</a>
         <a href="https://open-meteo.com/" rel="noreferrer">Open-Meteo</a>
       </div>
+      <p class="about-technology">
+        Worldloom is built with Phoenix LiveView, OTP, PubSub, Presence, PostgreSQL, and a
+        deterministic Canvas 2D renderer. <a
+          href="https://github.com/romankhadka/worldloom"
+          rel="noreferrer"
+        >Read the public source</a>.
+      </p>
     </section>
 
     <p id="live-summary" class="sr-only" aria-live="polite">
@@ -213,8 +308,7 @@
 
     <noscript>
       <p class="noscript-note">
-        Worldloom needs JavaScript to draw its living Canvas. The public archive remains available
-        when JavaScript is enabled.
+        Worldloom needs JavaScript to draw the living fabric. Its public source, privacy contract, and data-source documentation remain available in the repository.
       </p>
     </noscript>
   </section>

@@ -41,6 +41,7 @@ defmodule WorldloomWeb.WorldLive do
       |> assign(:gesture_status, "Choose an action for the live edge.")
       |> assign(:cooldown_until, nil)
       |> assign(:cooldown_token, nil)
+      |> assign(:cooldown_seconds, nil)
       |> assign(:at_live_edge, true)
       |> assign(:permalink, event_permalink(selected_event))
       |> assign(:current_url, nil)
@@ -267,6 +268,10 @@ defmodule WorldloomWeb.WorldLive do
 
   def handle_event("select-formation", _payload, socket), do: {:noreply, socket}
 
+  def handle_event("clear-selection", _payload, socket) do
+    {:noreply, assign(socket, selected_event: nil, selected_detail: nil)}
+  end
+
   def handle_event("share", _payload, socket) do
     absolute_url =
       WorldloomWeb.Endpoint.url()
@@ -334,7 +339,8 @@ defmodule WorldloomWeb.WorldLive do
     assign(socket,
       gesture_status: status,
       cooldown_until: DateTime.add(DateTime.utc_now(), seconds, :second),
-      cooldown_token: token
+      cooldown_token: token,
+      cooldown_seconds: seconds
     )
   end
 
@@ -342,6 +348,7 @@ defmodule WorldloomWeb.WorldLive do
     assign(socket,
       cooldown_until: nil,
       cooldown_token: nil,
+      cooldown_seconds: nil,
       gesture_status: "Choose an action for the live edge."
     )
   end
@@ -442,6 +449,9 @@ defmodule WorldloomWeb.WorldLive do
   end
 
   defp clamp_lane(lane), do: lane |> max(0.0) |> min(1.0) |> Float.round(2)
+  defp gesture_description("tug"), do: "Bend a strand"
+  defp gesture_description("knot"), do: "Join two paths"
+  defp gesture_description("illuminate"), do: "Awaken a junction"
   defp gesture_error_message(:invalid, _retry), do: "Choose a valid gesture and lane."
   defp gesture_error_message(:not_live, _retry), do: "Return to the live edge to contribute."
   defp gesture_error_message(:cooldown, retry), do: "Try again in #{retry} seconds."

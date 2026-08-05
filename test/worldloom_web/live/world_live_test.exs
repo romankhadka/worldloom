@@ -23,7 +23,6 @@ defmodule WorldloomWeb.WorldLiveTest do
           "#signal-legend",
           "#gesture-dock",
           "#timeline",
-          "#signal-detail",
           "#archive-panel",
           "#about-panel",
           "#accessible-formations"
@@ -36,6 +35,15 @@ defmodule WorldloomWeb.WorldLiveTest do
 
     assert {:ok, about_view, _html} = live(conn, "/about")
     assert has_element?(about_view, "#about-panel[data-active]")
+  end
+
+  test "stages the artwork without rendering empty detail chrome", %{conn: conn} do
+    {:ok, live_view, _html} = live(conn, "/")
+
+    assert has_element?(live_view, "#worldloom-introduction h1", "The world is weaving itself")
+    assert has_element?(live_view, "#worldloom-introduction", "Public signals")
+    assert has_element?(live_view, "#gesture-dock", "Touch the loom")
+    refute has_element?(live_view, "#signal-detail")
   end
 
   test "caps initial history and every trusted detail window", %{conn: conn} do
@@ -172,11 +180,18 @@ defmodule WorldloomWeb.WorldLiveTest do
   test "exposes direct gesture actions and adjusts the lane with keyboard events", %{conn: conn} do
     {:ok, live_view, _html} = live(conn, "/")
 
-    for gesture <- ["tug", "knot", "illuminate"] do
+    for {gesture, label, description} <- [
+          {"tug", "Tug", "Bend a strand"},
+          {"knot", "Knot", "Join two paths"},
+          {"illuminate", "Illuminate", "Awaken a junction"}
+        ] do
       assert has_element?(
                live_view,
-               "#gesture-#{gesture}[type='submit'][name='gesture'][value='#{gesture}']"
+               "#gesture-#{gesture}[type='submit'][name='gesture'][value='#{gesture}'][aria-label='#{label}']"
              )
+
+      assert has_element?(live_view, "#gesture-#{gesture} .gesture-copy strong", label)
+      assert has_element?(live_view, "#gesture-#{gesture} .gesture-copy small", description)
     end
 
     refute has_element?(live_view, "[aria-pressed]")
@@ -206,6 +221,7 @@ defmodule WorldloomWeb.WorldLiveTest do
     assert is_integer(sequence)
 
     assert has_element?(live_view, "#gesture-status", "Gesture joined the living edge")
+    assert has_element?(live_view, "#gesture-cooldown-ring[data-seconds='30']")
 
     for gesture <- ["tug", "knot", "illuminate"] do
       assert has_element?(live_view, "#gesture-#{gesture}[disabled]")
@@ -215,6 +231,7 @@ defmodule WorldloomWeb.WorldLiveTest do
 
     assert eventually(fn ->
              has_element?(live_view, "#gesture-status", "Choose an action for the live edge") and
+               not has_element?(live_view, "#gesture-cooldown-ring") and
                Enum.all?(["tug", "knot", "illuminate"], fn gesture ->
                  not has_element?(live_view, "#gesture-#{gesture}[disabled]")
                end)
@@ -259,20 +276,77 @@ defmodule WorldloomWeb.WorldLiveTest do
     assert has_element?(live_view, "#archive-link")
     assert has_element?(live_view, "#about-link")
     assert has_element?(live_view, "#share-worldloom")
+    assert has_element?(live_view, "#share-status[aria-live='polite']")
+    assert has_element?(live_view, "#mobile-worldloom-menu a[href='/chapters']", "Archive")
+    assert has_element?(live_view, "#mobile-worldloom-menu a[href='/about']", "About")
+    assert has_element?(live_view, "#mobile-worldloom-menu button", "Share")
     assert has_element?(live_view, "#signal-legend [data-family='wikimedia']")
     assert has_element?(live_view, "#signal-legend [data-family='usgs']")
     assert has_element?(live_view, "#signal-legend [data-family='open_meteo']")
     assert has_element?(live_view, "#signal-legend [data-family='visitor']")
     assert has_element?(live_view, "#signal-legend[data-usgs-state='quiet']")
     assert has_element?(live_view, "#signal-legend[data-weather-state='stale']")
-    assert has_element?(live_view, "#mobile-detail-sheet")
     assert has_element?(live_view, "#live-summary[aria-live='polite']")
-    assert html =~ "JavaScript"
+
+    assert html =~
+             "Worldloom needs JavaScript to draw the living fabric. Its public source, privacy contract, and data-source documentation remain available in the repository."
 
     {:ok, about_view, _html} = live(recycle(conn), "/about")
-    assert has_element?(about_view, "#source-attribution a", "Wikimedia")
-    assert has_element?(about_view, "#source-attribution a", "USGS")
-    assert has_element?(about_view, "#source-attribution a", "Open-Meteo")
+
+    assert has_element?(
+             about_view,
+             ".about-lede",
+             "Worldloom is one living public record. Activity from across the world enters as fiber, tension, atmosphere, and light—then remains part of the same shared fabric."
+           )
+
+    assert has_element?(about_view, ".about-sections section", "Public change, given form")
+
+    assert has_element?(
+             about_view,
+             ".about-sections section",
+             "Shape the present, never rewrite the past"
+           )
+
+    assert has_element?(about_view, ".about-sections section", "The weave survives the room")
+    assert has_element?(about_view, ".about-sections section", "No identity enters the artwork")
+
+    assert has_element?(
+             about_view,
+             ".about-sections section",
+             "The canvas is not the only way in"
+           )
+
+    assert has_element?(
+             about_view,
+             "#source-attribution a[href='https://stream.wikimedia.org/'][rel='noreferrer']",
+             "Wikimedia"
+           )
+
+    assert has_element?(
+             about_view,
+             "#source-attribution a[href='https://earthquake.usgs.gov/'][rel='noreferrer']",
+             "USGS"
+           )
+
+    assert has_element?(
+             about_view,
+             "#source-attribution a[href='https://open-meteo.com/'][rel='noreferrer']",
+             "Open-Meteo"
+           )
+
+    assert has_element?(about_view, "#source-attribution h2", "Public sources")
+
+    assert has_element?(
+             about_view,
+             ".about-technology",
+             "Worldloom is built with Phoenix LiveView, OTP, PubSub, Presence, PostgreSQL, and a deterministic Canvas 2D renderer."
+           )
+
+    assert has_element?(
+             about_view,
+             ".about-technology a[href='https://github.com/romankhadka/worldloom'][rel='noreferrer']",
+             "Read the public source"
+           )
   end
 
   test "renders a gesture only from its committed broadcast and exposes cooldown safely", %{
@@ -307,6 +381,7 @@ defmodule WorldloomWeb.WorldLiveTest do
 
     render_hook(live_view, "gesture", %{"gesture" => "illuminate", "lane" => 0.72})
     assert has_element?(live_view, "#gesture-status", "Try again in 30 seconds")
+    assert has_element?(live_view, "#gesture-cooldown-ring[data-seconds='30']")
     refute_push_event live_view, "worldloom:event", _rejected
   end
 
@@ -350,6 +425,26 @@ defmodule WorldloomWeb.WorldLiveTest do
     refute render(live_view) =~ event.external_id
     assert has_element?(live_view, "#share-link[readonly][value$='#{path}']")
 
+    live_view |> element("#share-worldloom") |> render_click()
+    assert_push_event live_view, "worldloom:copy-link", %{url: copied_url}
+    assert String.ends_with?(copied_url, path)
+  end
+
+  test "dismisses trusted formation detail without changing its permalink", %{conn: conn} do
+    [event] = seed_events(1, ~U[2026-08-03 15:00:00.000000Z])
+    {:ok, live_view, _html} = live(conn, "/")
+
+    render_hook(live_view, "select-formation", %{"sequence" => event.id})
+
+    path = "/chapters/2026-08-03/#{event.id}"
+    assert_patch live_view, path
+    assert has_element?(live_view, "#worldloom[data-mode='chapter']")
+    assert has_element?(live_view, "#signal-detail", "Public formation 1")
+
+    live_view |> element("#signal-detail") |> render_keydown(%{"key" => "Escape"})
+
+    refute has_element?(live_view, "#signal-detail")
+    assert has_element?(live_view, "#worldloom[data-mode='chapter']")
     live_view |> element("#share-worldloom") |> render_click()
     assert_push_event live_view, "worldloom:copy-link", %{url: copied_url}
     assert String.ends_with?(copied_url, path)
