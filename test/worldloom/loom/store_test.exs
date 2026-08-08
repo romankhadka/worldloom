@@ -243,9 +243,49 @@ defmodule Worldloom.Loom.StoreTest do
     assert apply(Worldloom.Repo.Migrations.AddLiveEventTimeIndexes, :__migration__, []) ==
              [disable_ddl_transaction: true, disable_migration_lock: true]
 
-    assert length(Regex.scan(~r/\bcreate_if_not_exists index\(/, migration_source)) == 2
-    assert length(Regex.scan(~r/\bdrop_if_exists index\(/, migration_source)) == 2
-    assert length(Regex.scan(~r/concurrently: true/, migration_source)) == 4
+    [_, up_source, down_source] =
+      Regex.run(
+        ~r/  def up do\n(.*?)\n  end\n\n  def down do\n(.*?)\n  end/s,
+        migration_source
+      )
+
+    up_operations =
+      Regex.scan(~r/\b(drop_if_exists|create)\s+index\((.*?)\n\s*\)/s, up_source)
+      |> Enum.map(fn [_declaration, operation, options] ->
+        index =
+          cond do
+            options =~ "@source_time_index" -> :source_time
+            options =~ "@primary_time_index" -> :primary_time
+          end
+
+        {operation, index, options =~ "concurrently: true"}
+      end)
+
+    down_operations =
+      Regex.scan(~r/\b(drop_if_exists|create)\s+index\((.*?)\n\s*\)/s, down_source)
+      |> Enum.map(fn [_declaration, operation, options] ->
+        index =
+          cond do
+            options =~ "@source_time_index" -> :source_time
+            options =~ "@primary_time_index" -> :primary_time
+          end
+
+        {operation, index, options =~ "concurrently: true"}
+      end)
+
+    refute up_source =~ "create_if_not_exists"
+
+    assert up_operations == [
+             {"drop_if_exists", :source_time, true},
+             {"create", :source_time, true},
+             {"drop_if_exists", :primary_time, true},
+             {"create", :primary_time, true}
+           ]
+
+    assert down_operations == [
+             {"drop_if_exists", :primary_time, true},
+             {"drop_if_exists", :source_time, true}
+           ]
   end
 
   test "around, after, before, ambient, fetch, and highest sequence are bounded and ordered" do

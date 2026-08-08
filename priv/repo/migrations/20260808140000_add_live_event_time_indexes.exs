@@ -8,16 +8,26 @@ defmodule Worldloom.Repo.Migrations.AddLiveEventTimeIndexes do
   @primary_time_index :loom_events_primary_occurred_at_id_index
 
   def up do
-    create_if_not_exists index(:loom_events, [:source, :occurred_at, :id],
-                           name: @source_time_index,
-                           concurrently: true
-                         )
+    drop_if_exists index(:loom_events, [:source, :occurred_at, :id],
+                     name: @source_time_index,
+                     concurrently: true
+                   )
 
-    create_if_not_exists index(:loom_events, [:occurred_at, :id],
-                           name: @primary_time_index,
-                           where: "source <> 'open_meteo'",
-                           concurrently: true
-                         )
+    create index(:loom_events, [:source, :occurred_at, :id],
+             name: @source_time_index,
+             concurrently: true
+           )
+
+    drop_if_exists index(:loom_events, [:occurred_at, :id],
+                     name: @primary_time_index,
+                     concurrently: true
+                   )
+
+    create index(:loom_events, [:occurred_at, :id],
+             name: @primary_time_index,
+             where: "source <> 'open_meteo'",
+             concurrently: true
+           )
   end
 
   def down do
