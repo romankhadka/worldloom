@@ -80,7 +80,7 @@ defmodule Worldloom.Loom.LiveProjectionTest do
   test "round robin consumes deterministic newest-first source queues within both caps" do
     wikimedia = dense_events("wikimedia", 1, 300)
     earthquakes = dense_events("usgs", 1_001, 300)
-    visitors = dense_events("visitor", 2_001, 121)
+    visitors = dense_events("visitor", 2_001, 300)
 
     snapshot =
       LiveProjection.build(Enum.reverse(wikimedia ++ visitors ++ earthquakes), nil, 2_300)
@@ -88,11 +88,11 @@ defmodule Worldloom.Loom.LiveProjectionTest do
     frequencies = Enum.frequencies_by(snapshot.display_events, & &1.source)
 
     assert length(snapshot.display_events) == 600
-    assert frequencies == %{"usgs" => 240, "visitor" => 121, "wikimedia" => 239}
+    assert frequencies == %{"usgs" => 200, "visitor" => 200, "wikimedia" => 200}
 
-    assert selected_ids(snapshot, "usgs") == Enum.to_list(1_061..1_300)
-    assert selected_ids(snapshot, "visitor") == Enum.to_list(2_001..2_121)
-    assert selected_ids(snapshot, "wikimedia") == Enum.to_list(62..300)
+    assert selected_ids(snapshot, "usgs") == Enum.to_list(1_101..1_300)
+    assert selected_ids(snapshot, "visitor") == Enum.to_list(2_101..2_300)
+    assert selected_ids(snapshot, "wikimedia") == Enum.to_list(101..300)
 
     assert snapshot.display_events ==
              Enum.sort_by(
@@ -146,6 +146,28 @@ defmodule Worldloom.Loom.LiveProjectionTest do
     refute current_visitor in snapshot.memory_events
     refute stale_earthquake in snapshot.memory_events
     refute stale_visitor in snapshot.memory_events
+  end
+
+  test "memory includes earthquake and visitor events exactly twenty-four hours old" do
+    window_end = ~U[2026-08-08 12:00:00Z]
+    memory_boundary = DateTime.add(window_end, -24 * 60 * 60, :second)
+    anchor = event(1, "wikimedia", window_end)
+    boundary_earthquake = event(2, "usgs", memory_boundary)
+    boundary_visitor = event(3, "visitor", memory_boundary)
+    stale_earthquake = event(4, "usgs", DateTime.add(memory_boundary, -1, :microsecond))
+    stale_visitor = event(5, "visitor", DateTime.add(memory_boundary, -1, :microsecond))
+
+    snapshot =
+      LiveProjection.build(
+        [stale_visitor, boundary_visitor, anchor, stale_earthquake, boundary_earthquake],
+        nil,
+        5
+      )
+
+    assert Enum.map(snapshot.memory_events, & &1.id) == [
+             boundary_earthquake.id,
+             boundary_visitor.id
+           ]
   end
 
   test "weather candidates are ambient only and the supplied ambient wins" do
