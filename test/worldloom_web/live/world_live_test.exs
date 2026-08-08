@@ -123,6 +123,98 @@ defmodule WorldloomWeb.WorldLiveTest do
     refute {ambient["source"], ambient["sequence"]} in source_sequence_pairs(memory_events)
   end
 
+  test "visitor-only live display retains the latest bounded public scaffold", %{conn: conn} do
+    public_events = seed_events(15, ~U[2026-08-08 11:58:00Z])
+    visitor_events = seed_visitor_events(2, ~U[2026-08-08 12:00:50Z])
+
+    put_current_snapshot(%LiveSnapshot{
+      window_end: ~U[2026-08-08 12:01:00Z],
+      commit_watermark: List.last(visitor_events).id,
+      display_events: visitor_events,
+      memory_events: [],
+      ambient: nil
+    })
+
+    {{:ok, live_view, _html}, scaffold_query_count} =
+      count_function_calls({Store, :wikimedia_before, 2}, fn -> live(conn, "/") end)
+
+    canvas = live_view |> render() |> LazyHTML.from_fragment() |> LazyHTML.query("#loom-canvas")
+    [encoded_scaffold] = LazyHTML.attribute(canvas, "data-scaffold")
+    scaffold = Jason.decode!(encoded_scaffold)
+    expected_public_ids = public_events |> Enum.take(-12) |> Enum.map(& &1.id)
+
+    assert Enum.map(scaffold, & &1["sequence"]) == expected_public_ids
+    assert Enum.all?(scaffold, &(&1["source"] == "wikimedia"))
+    assert scaffold_query_count == 2
+    assert has_element?(live_view, "#worldloom[data-event-window-size='2']")
+    assert accessible_sequence_ids(live_view) == Enum.map(visitor_events, & &1.id)
+
+    for public_event <- Enum.take(public_events, -12) do
+      refute has_element?(live_view, "#formation-#{public_event.id}")
+    end
+  end
+
+  test "snapshot updates merge and retain bounded public scaffold without Store queries", %{
+    conn: conn
+  } do
+    public_events = seed_events(12, ~U[2026-08-08 11:58:00Z])
+    visitor_events = seed_visitor_events(2, ~U[2026-08-08 12:00:50Z])
+
+    initial_snapshot = %LiveSnapshot{
+      window_end: ~U[2026-08-08 12:01:00Z],
+      commit_watermark: List.last(visitor_events).id,
+      display_events: visitor_events,
+      memory_events: [],
+      ambient: nil
+    }
+
+    put_current_snapshot(initial_snapshot)
+    {:ok, live_view, _html} = live(conn, "/")
+    [new_public_event] = seed_events(1, ~U[2026-08-08 12:00:55Z])
+
+    mixed_snapshot = %{
+      initial_snapshot
+      | commit_watermark: new_public_event.id,
+        display_events: visitor_events ++ [new_public_event]
+    }
+
+    visitor_only_snapshot = %{
+      mixed_snapshot
+      | commit_watermark: new_public_event.id + 1,
+        display_events: visitor_events
+    }
+
+    {{merged_scaffold_ids, retained_scaffold_ids}, scaffold_query_count} =
+      count_function_calls({Store, :wikimedia_before, 2}, fn ->
+        put_current_snapshot(mixed_snapshot)
+        send(live_view.pid, {:loom_snapshot, mixed_snapshot})
+        assert_push_event live_view, "worldloom:snapshot", %{}
+        merged_scaffold_ids = live_assign(live_view, :scaffold) |> instruction_sequence_ids()
+
+        put_current_snapshot(visitor_only_snapshot)
+        send(live_view.pid, {:loom_snapshot, visitor_only_snapshot})
+        assert_push_event live_view, "worldloom:snapshot", %{}
+        retained_scaffold_ids = live_assign(live_view, :scaffold) |> instruction_sequence_ids()
+
+        {merged_scaffold_ids, retained_scaffold_ids}
+      end)
+
+    expected_scaffold_ids =
+      public_events
+      |> Enum.drop(1)
+      |> Kernel.++([new_public_event])
+      |> Enum.map(& &1.id)
+
+    assert merged_scaffold_ids == expected_scaffold_ids
+    assert retained_scaffold_ids == expected_scaffold_ids
+    assert scaffold_query_count == 0
+    assert accessible_sequence_ids(live_view) == Enum.map(visitor_events, & &1.id)
+
+    for public_sequence <- expected_scaffold_ids do
+      refute has_element?(live_view, "#formation-#{public_sequence}")
+    end
+  end
+
   test "validates chapter permalinks and keeps historical views read-only", %{conn: conn} do
     [event] = seed_events(1, ~U[2026-08-03 12:00:00.000000Z])
     path = "/chapters/2026-08-03/#{event.id}"
@@ -373,6 +465,50 @@ defmodule WorldloomWeb.WorldLiveTest do
 
     render_hook(live_view, "history-before", %{"sequence" => 1})
     refute_push_event live_view, "worldloom:history", _throttled
+  end
+
+  test "history paging starts before primary display rather than older contextual memory", %{
+    conn: conn
+  } do
+    [contextual_memory] = seed_visitor_events(1, ~U[2026-08-08 11:58:00Z])
+    intervening_events = seed_events(3, ~U[2026-08-08 11:59:00Z])
+    display_events = seed_events(2, ~U[2026-08-08 12:00:50Z])
+
+    put_current_snapshot(%LiveSnapshot{
+      window_end: ~U[2026-08-08 12:01:00Z],
+      commit_watermark: List.last(display_events).id,
+      display_events: display_events,
+      memory_events: [contextual_memory],
+      ambient: nil
+    })
+
+    {:ok, live_view, _html} = live(conn, "/")
+    render_hook(live_view, "history-before", %{})
+
+    assert_push_event live_view, "worldloom:history", %{instructions: instructions}
+
+    assert Enum.map(instructions, & &1["sequence"]) ==
+             Enum.map([contextual_memory | intervening_events], & &1.id)
+  end
+
+  test "history paging starts from the commit watermark when primary display is empty", %{
+    conn: conn
+  } do
+    committed_events = seed_events(3, ~U[2026-08-08 11:59:00Z])
+
+    put_current_snapshot(%LiveSnapshot{
+      window_end: nil,
+      commit_watermark: List.last(committed_events).id,
+      display_events: [],
+      memory_events: [],
+      ambient: nil
+    })
+
+    {:ok, live_view, _html} = live(conn, "/")
+    render_hook(live_view, "history-before", %{})
+
+    assert_push_event live_view, "worldloom:history", %{instructions: instructions}
+    assert Enum.map(instructions, & &1["sequence"]) == Enum.map(committed_events, & &1.id)
   end
 
   test "receives shared safe feed health without polling in the view", %{conn: conn} do
@@ -954,6 +1090,18 @@ defmodule WorldloomWeb.WorldLiveTest do
     |> LazyHTML.query("#accessible-formations button")
     |> LazyHTML.attribute("id")
     |> Enum.map(fn "formation-" <> sequence -> String.to_integer(sequence) end)
+  end
+
+  defp live_assign(live_view, assign_name) do
+    live_view.pid
+    |> :sys.get_state()
+    |> Map.fetch!(:socket)
+    |> Map.fetch!(:assigns)
+    |> Map.fetch!(assign_name)
+  end
+
+  defp instruction_sequence_ids(instructions) do
+    Enum.map(instructions, & &1["sequence"])
   end
 
   defp chapter_path(event) do

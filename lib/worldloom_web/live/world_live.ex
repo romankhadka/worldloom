@@ -193,11 +193,12 @@ defmodule WorldloomWeb.WorldLive do
 
   def handle_event("return-live", _payload, socket) do
     snapshot = Coordinator.current_snapshot()
+    scaffold_events = load_live_scaffold(snapshot.commit_watermark)
 
     {:noreply,
      socket
      |> assign(:at_live_edge, true)
-     |> assign_live_snapshot(snapshot)
+     |> assign_live_snapshot(snapshot, scaffold_events)
      |> push_event("worldloom:return-live", encode_snapshot(snapshot))}
   end
 
@@ -317,6 +318,7 @@ defmodule WorldloomWeb.WorldLive do
   defp enter_live_route(socket, uri) do
     socket = transition_coordinator_subscription(socket, true)
     snapshot = Coordinator.current_snapshot()
+    scaffold_events = load_live_scaffold(snapshot.commit_watermark)
     route_changed? = route_changed?(socket, uri)
 
     socket =
@@ -330,7 +332,7 @@ defmodule WorldloomWeb.WorldLive do
       |> assign(:permalink, URI.parse(uri).path || "/")
       |> assign(:current_url, uri)
       |> restore_live_gesture_state()
-      |> assign_live_snapshot(snapshot)
+      |> assign_live_snapshot(snapshot, scaffold_events)
 
     if route_changed? do
       push_event(socket, "worldloom:return-live", encode_snapshot(snapshot))
@@ -423,6 +425,26 @@ defmodule WorldloomWeb.WorldLive do
 
   defp assign_live_snapshot(socket, snapshot) do
     encoded_snapshot = encode_snapshot(snapshot)
+
+    scaffold =
+      live_scaffold(socket.assigns.scaffold ++ encoded_snapshot.display_events)
+
+    assign_live_snapshot(socket, snapshot, encoded_snapshot, scaffold)
+  end
+
+  defp assign_live_snapshot(socket, snapshot, scaffold_events) do
+    encoded_snapshot = encode_snapshot(snapshot)
+
+    scaffold =
+      scaffold_events
+      |> Enum.map(&Instruction.from_event/1)
+      |> Kernel.++(encoded_snapshot.display_events)
+      |> live_scaffold()
+
+    assign_live_snapshot(socket, snapshot, encoded_snapshot, scaffold)
+  end
+
+  defp assign_live_snapshot(socket, snapshot, encoded_snapshot, scaffold) do
     trusted_events = snapshot.display_events ++ snapshot.memory_events
     accessible_formations = encoded_snapshot.display_events ++ encoded_snapshot.memory_events
 
@@ -434,10 +456,13 @@ defmodule WorldloomWeb.WorldLive do
     |> assign(:display_events, encoded_snapshot.display_events)
     |> assign(:memory_events, encoded_snapshot.memory_events)
     |> assign(:instructions, encoded_snapshot.display_events)
-    |> assign(:scaffold, live_scaffold(snapshot.display_events))
+    |> assign(:scaffold, scaffold)
     |> assign(:ambient, snapshot.ambient)
     |> assign(:trusted_events, trusted_event_map(trusted_events))
-    |> assign(:oldest_loaded_sequence, minimum_sequence(trusted_events))
+    |> assign(
+      :oldest_loaded_sequence,
+      live_history_cursor(snapshot.display_events, snapshot.commit_watermark)
+    )
     |> assign(:history_requested_at, nil)
     |> stream(:accessible_formations, accessible_formations, reset: true)
   end
@@ -456,11 +481,18 @@ defmodule WorldloomWeb.WorldLive do
   defp encode_window_end(nil), do: nil
   defp encode_window_end(window_end), do: DateTime.to_iso8601(window_end)
 
-  defp live_scaffold(events) do
-    events
-    |> Enum.filter(&(&1.source == "wikimedia"))
+  defp live_scaffold(instructions) do
+    instructions
+    |> Enum.filter(&(&1["source"] == "wikimedia"))
+    |> Enum.uniq_by(& &1["sequence"])
+    |> Enum.sort_by(& &1["sequence"])
     |> Enum.take(-@public_scaffold_limit)
-    |> Enum.map(&Instruction.from_event/1)
+  end
+
+  defp load_live_scaffold(0), do: []
+
+  defp load_live_scaffold(commit_watermark) do
+    Store.wikimedia_before(commit_watermark, @public_scaffold_limit)
   end
 
   defp public_scaffold([], _selected_event), do: []
@@ -571,7 +603,12 @@ defmodule WorldloomWeb.WorldLive do
   defp older_sequence(events, _socket), do: oldest_sequence(events)
   defp oldest_sequence([]), do: nil
   defp oldest_sequence([event | _events]), do: event.id
-  defp minimum_sequence([]), do: nil
+  defp live_history_cursor([], 0), do: nil
+  defp live_history_cursor([], commit_watermark), do: commit_watermark + 1
+
+  defp live_history_cursor(display_events, _commit_watermark),
+    do: minimum_sequence(display_events)
+
   defp minimum_sequence(events), do: events |> Enum.map(& &1.id) |> Enum.min()
   defp trusted_event_map(events), do: Map.new(events, &{&1.id, &1})
   defp formation_dom_id(instruction), do: "formation-#{instruction["sequence"]}"
