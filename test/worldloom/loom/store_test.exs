@@ -1,6 +1,7 @@
 defmodule Worldloom.Loom.StoreTest do
-  use Worldloom.DataCase, async: true
+  use Worldloom.DataCase
 
+  alias Worldloom.Loom.Event
   alias Worldloom.Loom.FeedCheckpoint
   alias Worldloom.Loom.SourceEvent
   alias Worldloom.Loom.Store
@@ -199,6 +200,89 @@ defmodule Worldloom.Loom.StoreTest do
     assert_raise ArgumentError, fn -> Store.before(target.id, 0) end
   end
 
+  test "live snapshot loads bounded source candidates and the authoritative watermark" do
+    stored_wikimedia =
+      insert_stored_events("wikimedia", 1..241, fn index ->
+        if index == 241 do
+          ~U[2026-08-08 12:01:00.987654Z]
+        else
+          DateTime.add(~U[2026-08-08 12:00:36Z], index * 100_000, :microsecond)
+        end
+      end)
+
+    [_earthquake] =
+      insert_stored_events("usgs", [1], fn _index -> ~U[2026-08-08 12:00:45Z] end)
+
+    [_visitor] =
+      insert_stored_events("visitor", [1], fn _index -> ~U[2026-08-08 12:00:50Z] end)
+
+    [weather] =
+      insert_stored_events("open_meteo", [1], fn _index -> ~U[2026-08-08 13:00:00Z] end)
+
+    snapshot = Store.live_snapshot(nil)
+
+    assert snapshot.commit_watermark == Store.highest_sequence()
+    assert snapshot.commit_watermark == weather.id
+    assert snapshot.window_end == ~U[2026-08-08 12:01:00Z]
+    assert Enum.count(snapshot.display_events, &(&1.source == "wikimedia")) == 240
+    assert Enum.any?(snapshot.display_events, &(&1.source == "usgs"))
+    assert Enum.any?(snapshot.display_events, &(&1.source == "visitor"))
+    assert List.last(stored_wikimedia) in snapshot.display_events
+    assert snapshot.ambient.source == "open_meteo"
+    refute weather in snapshot.display_events
+  end
+
+  test "live snapshot supplies contextual memory behind full current source sets" do
+    [_anchor] =
+      insert_stored_events("wikimedia", [1], fn _index -> ~U[2026-08-08 12:01:00Z] end)
+
+    insert_stored_events("usgs", 1..240, fn _index -> ~U[2026-08-08 12:00:30Z] end)
+
+    [contextual_earthquake] =
+      insert_stored_events("usgs", [241], fn _index -> ~U[2026-08-08 11:59:59Z] end)
+
+    insert_stored_events("visitor", 1..240, fn _index -> ~U[2026-08-08 12:00:40Z] end)
+
+    contextual_visitors =
+      insert_stored_events("visitor", 241..244, fn index ->
+        DateTime.add(~U[2026-08-08 11:59:56Z], index - 241, :second)
+      end)
+
+    snapshot = Store.live_snapshot(nil)
+
+    contextual_visitor_ids =
+      contextual_visitors |> Enum.take(-3) |> Enum.reverse() |> Enum.map(& &1.id)
+
+    assert Enum.map(snapshot.memory_events, & &1.id) ==
+             [contextual_earthquake.id | contextual_visitor_ids]
+  end
+
+  test "live snapshot query count does not grow with Wikimedia row volume" do
+    insert_stored_events("wikimedia", 1..240, fn _index -> ~U[2026-08-08 12:01:00Z] end)
+
+    {_snapshot, query_count_at_240} = count_repo_queries(fn -> Store.live_snapshot(nil) end)
+
+    insert_stored_events("wikimedia", 241..2_400, fn _index ->
+      ~U[2026-08-08 12:01:00Z]
+    end)
+
+    {_snapshot, query_count_at_2_400} = count_repo_queries(fn -> Store.live_snapshot(nil) end)
+
+    assert query_count_at_240 == 8
+    assert query_count_at_2_400 == query_count_at_240
+  end
+
+  test "live snapshot has an empty version one envelope when storage is empty" do
+    snapshot = Store.live_snapshot(nil)
+
+    assert snapshot.snapshot_version == 1
+    assert snapshot.window_end == nil
+    assert snapshot.commit_watermark == 0
+    assert snapshot.display_events == []
+    assert snapshot.memory_events == []
+    assert snapshot.ambient == nil
+  end
+
   test "UTC chapters honor day seams and report counts and sequence bounds" do
     first_day_events = [
       source_event(1, ~U[2026-08-03 00:00:00.000000Z]),
@@ -255,6 +339,71 @@ defmodule Worldloom.Loom.StoreTest do
       intensity: 0.5,
       payload: %{"summary" => "Weather crossed the fixed city anchors"}
     })
+  end
+
+  defp insert_stored_events(source, indices, occurred_at) do
+    rows =
+      Enum.map(indices, fn index ->
+        event_occurred_at = occurred_at.(index)
+
+        {kind, external_id} =
+          case source do
+            "wikimedia" -> {"wikimedia", "stored-revision-#{index}"}
+            "usgs" -> {"earthquake", "stored-earthquake-#{index}"}
+            "open_meteo" -> {"weather", "stored-weather-#{index}"}
+            "visitor" -> {"illuminate", nil}
+          end
+
+        %{
+          kind: kind,
+          source: source,
+          external_id: external_id,
+          occurred_at: %{
+            event_occurred_at
+            | microsecond: {elem(event_occurred_at.microsecond, 0), 6}
+          },
+          render_version: 1,
+          render_seed: index,
+          lane: 0.5,
+          intensity: 0.5,
+          payload: %{},
+          inserted_at: ~U[2026-08-08 00:00:00.000000Z]
+        }
+      end)
+
+    {_count, events} = Repo.insert_all(Event, rows, returning: true)
+    events
+  end
+
+  defp count_repo_queries(operation) do
+    handler_id = {__MODULE__, make_ref()}
+    message_ref = make_ref()
+    event_name = Repo.config()[:telemetry_prefix] ++ [:query]
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        event_name,
+        fn _event_name, _measurements, _metadata, {test_process, query_ref} ->
+          send(test_process, {:store_query, query_ref})
+        end,
+        {self(), message_ref}
+      )
+
+    try do
+      output = operation.()
+      {output, drain_query_events(message_ref)}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_query_events(message_ref, count \\ 0) do
+    receive do
+      {:store_query, ^message_ref} -> drain_query_events(message_ref, count + 1)
+    after
+      0 -> count
+    end
   end
 
   defp checkpoint(cursor, overrides \\ %{}) do

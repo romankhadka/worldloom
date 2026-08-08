@@ -3,10 +3,16 @@ defmodule Worldloom.Loom.Store do
 
   alias Worldloom.Loom.Event
   alias Worldloom.Loom.FeedCheckpoint
+  alias Worldloom.Loom.LiveProjection
+  alias Worldloom.Loom.LiveSnapshot
   alias Worldloom.Loom.SourceEvent
   alias Worldloom.Loom.VisualParameters
   alias Worldloom.Repo
 
+  @live_sources ~w(wikimedia usgs visitor)
+  @live_source_limit 240
+  @memory_lookback_seconds 24 * 60 * 60
+  @live_window_seconds 60
   @maximum_limit 600
 
   @spec commit_external([SourceEvent.t()], map() | nil) ::
@@ -59,6 +65,27 @@ defmodule Worldloom.Loom.Store do
   end
 
   def latest(_limit), do: invalid_limit!()
+
+  @spec live_snapshot(DateTime.t() | nil) :: LiveSnapshot.t()
+  def live_snapshot(previous_window_end \\ nil) do
+    commit_watermark = highest_sequence()
+
+    if commit_watermark == 0 do
+      %LiveSnapshot{
+        window_end: nil,
+        commit_watermark: 0,
+        display_events: [],
+        memory_events: [],
+        ambient: nil
+      }
+    else
+      window_end = live_window_end(commit_watermark, previous_window_end)
+      candidates = live_candidates(window_end, commit_watermark)
+      ambient = ambient_before(commit_watermark)
+
+      LiveProjection.build(candidates, ambient, commit_watermark, previous_window_end)
+    end
+  end
 
   @spec fetch(pos_integer()) :: {:ok, Event.t()} | :error
   def fetch(sequence) when is_integer(sequence) and sequence > 0 do
@@ -202,6 +229,87 @@ defmodule Worldloom.Loom.Store do
   @spec highest_sequence() :: non_neg_integer()
   def highest_sequence do
     Repo.one(from event in Event, select: max(event.id)) || 0
+  end
+
+  defp live_window_end(commit_watermark, previous_window_end) do
+    latest_occurrence =
+      Event
+      |> where(
+        [event],
+        event.id <= ^commit_watermark and event.kind != "weather" and
+          event.source != "open_meteo"
+      )
+      |> order_by([event], desc: event.occurred_at, desc: event.id)
+      |> limit(1)
+      |> select([event], event.occurred_at)
+      |> Repo.one()
+
+    latest_occurrence
+    |> truncate_window_end()
+    |> later_window_end(previous_window_end)
+  end
+
+  defp truncate_window_end(nil), do: nil
+  defp truncate_window_end(occurred_at), do: DateTime.truncate(occurred_at, :second)
+
+  defp later_window_end(nil, previous_window_end), do: previous_window_end
+  defp later_window_end(window_end, nil), do: window_end
+
+  defp later_window_end(window_end, previous_window_end) do
+    case DateTime.compare(window_end, previous_window_end) do
+      :lt -> previous_window_end
+      :eq -> window_end
+      :gt -> window_end
+    end
+  end
+
+  defp live_candidates(nil, _commit_watermark), do: []
+
+  defp live_candidates(window_end, commit_watermark) do
+    window_start = DateTime.add(window_end, -@live_window_seconds, :second)
+    memory_start = DateTime.add(window_end, -@memory_lookback_seconds, :second)
+    window_ceiling = window_end |> DateTime.truncate(:second) |> DateTime.add(1, :second)
+
+    display_candidates =
+      Enum.flat_map(@live_sources, fn source ->
+        live_source_rows(source, window_start, window_ceiling, commit_watermark)
+      end)
+
+    contextual_candidates =
+      contextual_source_rows("usgs", memory_start, window_start, commit_watermark, 1) ++
+        contextual_source_rows("visitor", memory_start, window_start, commit_watermark, 3)
+
+    display_candidates ++ contextual_candidates
+  end
+
+  defp live_source_rows(source, window_start, window_ceiling, commit_watermark) do
+    Event
+    |> where(
+      [event],
+      event.source == ^source and event.id <= ^commit_watermark and
+        event.occurred_at >= ^window_start and event.occurred_at < ^window_ceiling
+    )
+    |> order_by([event], desc: event.occurred_at, desc: event.id)
+    |> limit(^@live_source_limit)
+    |> Repo.all()
+  end
+
+  defp contextual_source_rows(
+         source,
+         memory_start,
+         window_start,
+         commit_watermark,
+         limit
+       ) do
+    Event
+    |> where(
+      [event],
+      event.source == ^source and event.id <= ^commit_watermark and
+        event.occurred_at >= ^memory_start and event.occurred_at < ^window_start
+    )
+    |> order_by([event], desc: event.occurred_at, desc: event.id)
+    |> limit(^limit)
+    |> Repo.all()
   end
 
   defp validate_external_events(events, checkpoint) do
