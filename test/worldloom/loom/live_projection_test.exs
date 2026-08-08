@@ -170,6 +170,17 @@ defmodule Worldloom.Loom.LiveProjectionTest do
            ]
   end
 
+  test "memory excludes an earthquake older than twenty-four hours" do
+    window_end = ~U[2026-08-08 12:00:00Z]
+    memory_boundary = DateTime.add(window_end, -24 * 60 * 60, :second)
+    anchor = event(1, "wikimedia", window_end)
+    stale_earthquake = event(2, "usgs", DateTime.add(memory_boundary, -1, :microsecond))
+
+    snapshot = LiveProjection.build([stale_earthquake, anchor], nil, 2)
+
+    assert snapshot.memory_events == []
+  end
+
   test "weather candidates are ambient only and the supplied ambient wins" do
     candidate_weather = event(1, "open_meteo", ~U[2026-08-08 13:00:00Z])
     supplied_ambient = event(2, "open_meteo", ~U[2026-08-08 11:55:00Z])
