@@ -1,7 +1,9 @@
 # Balanced World Signals Design
 
-**Date:** 2026-08-08  
-**Status:** Design approved; written specification pending review  
+**Date:** 2026-08-08
+
+**Status:** Architecture reviewed; revised specification awaiting user approval
+
 **Scope:** Diversify Worldloom's live public signals, repair source starvation in the visible weave, and preserve the project's deterministic, private, bounded architecture.
 
 ## Summary
@@ -17,20 +19,20 @@ The approved **Balanced World** direction adds four public event families:
 
 Together with Wikimedia, earthquakes, weather, and anonymous visitor gestures, they create a living view of human knowledge, public conversation, internet infrastructure, shared computation, physical events, planetary conditions, and participation in the artwork.
 
-The design does not merely add feeds. It replaces sequence-distance layout at the live edge with a shared time axis, gives each source a structurally distinct visual language, and summarizes high-volume streams on staggered four-second beats. Under normal source availability, visitors should see several kinds of genuine world activity every few seconds without one source consuming the canvas or the database.
+The design does not merely add feeds. It first repairs projection independently of every new provider, then qualifies and introduces sources through reversible phases. The finished experience replaces sequence-distance layout at the live edge with a shared time axis, gives each source a structurally distinct visual language, and summarizes high-volume streams on staggered four-second beats. Under normal source availability, visitors should see several kinds of genuine world activity every few seconds without one source consuming the canvas or the database.
 
 ## Problem statement
 
-The application currently loads the latest 400 events without considering source. Wikimedia normally emits about one durable event per second, while weather, earthquakes, and visitor gestures occur much less often. A recent local sample contained 398 Wikimedia events, one weather event, one visitor event, and no earthquake among the latest 400 rows.
+The application currently loads the latest 400 committed rows without considering source. Wikimedia normally emits about one durable event per second, while weather, earthquakes, and visitor gestures occur much less often. Repeated local observations found that the latest-400 snapshot was almost entirely Wikimedia, although the exact minority rows changed as the live feed advanced.
 
 The live geometry also advances at least four display units for every consecutive Wikimedia event. At the current scale, approximately twelve seconds of Wikimedia activity can occupy the visible width. Real weather, earthquake, and visitor events still exist in PostgreSQL but age offscreen almost immediately.
 
-This violates Worldloom's intended experience: public signals are meant to remain distinguishable parts of one organism, not become invisible metadata behind a Wikimedia visualization.
+This violates Worldloom's intended experience: public signals are meant to remain distinguishable parts of one organism, not become invisible metadata behind a Wikimedia visualization. The projection and selection defect is corrected in the first phase and does not depend on any new provider succeeding.
 
 ## Goals
 
 - Show a balanced cross-section of genuine public activity throughout the live experience.
-- Introduce four dependable, machine-readable sources with complementary meanings.
+- Qualify four complementary, machine-readable sources and degrade honestly when their best-effort public endpoints are unavailable.
 - Preserve the artistic hierarchy: structural signals form the organism, weather shapes its atmosphere, and visitors leave meaningful interventions.
 - Keep raw high-volume records out of PostgreSQL, PubSub, LiveView, logs, and browser payloads.
 - Maintain persist-before-broadcast, deterministic reconstruction, stable sequence IDs, bounded queues, and source-independent failure recovery.
@@ -62,35 +64,33 @@ Source documentation: [Wikimedia EventStreams](https://www.mediawiki.org/wiki/Ev
 
 ### Bluesky Jetstream
 
-Bluesky adds the pulse of public conversation. Jetstream provides a public JSON WebSocket stream intended to make repository activity easier to consume than the full AT Protocol firehose.
+Bluesky adds the pulse of public conversation. The deployed legacy Jetstream service provides a public JSON WebSocket stream intended to make repository activity easier to consume than the full AT Protocol firehose. It is suitable for informal visualizations, but it is not a stable AT Protocol API, does not authenticate its events, and has no production SLA. Worldloom pins the legacy subscribe contract behind a replaceable adapter and treats protocol drift as source unavailability rather than malformed activity.
 
 Worldloom subscribes only to the collections needed to derive bounded activity categories. It may inspect an incoming record long enough to distinguish an original post from a reply, but it immediately discards record content and identifiers. A durable summary contains only allow-listed counts:
 
 - total accepted operations;
 - original posts;
 - replies;
-- reposts;
-- likes;
-- follows; and
+- reposts; and
 - creates, updates, and deletes.
 
-The visual payload stores counts and bounded ratios, never text or identity. The last accepted Jetstream timestamp cursor is checkpointed for bounded resume.
+Limiting the subscription to post and repost collections keeps input volume and content exposure smaller than following likes and graph changes. The visual payload stores counts and bounded ratios, never text or identity. The last accepted Jetstream timestamp cursor is checkpointed for bounded overlap-and-deduplicate resume.
 
-Source documentation: [Bluesky Jetstream](https://docs.bsky.app/blog/jetstream).
+Source documentation: [Bluesky Jetstream](https://docs.bsky.app/blog/jetstream), the [legacy implementation](https://github.com/bluesky-social/jetstream-legacy), and the [replacement project](https://github.com/bluesky-social/jetstream).
 
 ### RIPE RIS Live
 
 RIPE RIS Live adds the movement of the public internet. Its unauthenticated WebSocket publishes BGP announcements and withdrawals collected by RIPE's routing collectors.
 
-Worldloom reduces accepted messages to:
+Worldloom subscribes only to `UPDATE` messages from a configured allow-list of at most four collectors, intersected with the server's current collector list. No match is a configuration failure; Worldloom never silently falls back to the full firehose. It reduces accepted messages to:
 
-- announcement count;
-- withdrawal count;
+- announced-prefix count;
+- withdrawn-prefix count;
 - IPv4 and IPv6 proportions;
 - number of distinct collectors observed; and
 - number of distinct peers observed.
 
-Collector and peer identifiers may be counted in bounded worker-local sets during a window, but the identifiers themselves are discarded before persistence. Prefixes, AS paths, communities, and raw messages are never stored or broadcast.
+Counts are per prefix inside an UPDATE, not per WebSocket message. Collector and peer identifiers may be counted in bounded worker-local sets during a window, but the identifiers themselves are discarded before persistence. Prefixes, AS paths, communities, and raw messages are never stored or broadcast. `includeRaw` is always false. If Worldloom cannot consume promptly, RIS Live may close the connection; this is an expected degraded state.
 
 RIS Live has no replay contract that Worldloom can treat as authoritative. A reconnect resumes from the live edge and never invents the missed interval.
 
@@ -108,19 +108,19 @@ Each summary contains:
 - final root lag; and
 - maximum root lag during the window.
 
-Public Solana endpoints are suitable for light development and may enforce limits. Production configuration may use a compatible provider endpoint without changing Worldloom's event contract.
+Official public Solana endpoints are suitable only for development: they are rate-limited, have no SLA, may block clients, and are explicitly not intended for production applications. The adapter and deterministic fixtures can be implemented without enabling the source publicly. Production Solana remains disabled until the owner explicitly approves a dedicated provider or self-hosted endpoint; changing endpoints does not change Worldloom's event contract.
 
 Source documentation: [Solana `slotSubscribe`](https://solana.com/docs/rpc/websocket/slotsubscribe) and [Solana public RPC guidance](https://www.solanakit.com/docs/guides/rpc-subscriptions).
 
 ### drand Quicknet
 
-drand adds a pale crystalline pulse derived from public randomness. Quicknet publishes a new beacon round every three seconds. Worldloom polls the documented HTTPS endpoint with Req, validates the configured chain hash, monotonic round, expected field shapes, and timing bounds, then derives the durable render seed from the returned randomness.
+drand adds a pale crystalline pulse derived from public randomness. Quicknet publishes a new beacon round every three seconds. Worldloom pins the v2 HTTP contract and Quicknet chain hash `52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971`, validates monotonic rounds and expected field shapes, and derives the durable render seed from the documented beacon output. Worldloom races bounded concurrent Req calls to official relays and accepts the first valid response.
 
 The normalized payload contains the round number, chain identity, occurrence time, and a fixed summary. It does not retain the complete upstream response. The round number is the external ID and provides natural idempotency.
 
 drand publishes cryptographically verifiable randomness, but Worldloom is an artwork rather than a beacon verifier. This release relies on HTTPS and structural validation and must not claim that it independently verifies the BLS signature.
 
-Source documentation: [drand Quicknet](https://docs.drand.love/blog/2023/10/16/quicknet-is-live/).
+Source documentation: [drand Quicknet](https://docs.drand.love/blog/2023/10/16/quicknet-is-live/) and the [drand v2 HTTP API](https://docs.drand.love/developer/API-v2/drand-http-api/).
 
 ## Durable event contract
 
@@ -133,11 +133,19 @@ The `loom_events` check constraints and `Worldloom.Loom.Event` allow lists gain 
 | `solana` | `slot` | four-second window end in UTC |
 | `drand` | `randomness` | Quicknet round number |
 
-Wikimedia's external ID also becomes its four-second window end. Existing rows and permalinks remain unchanged. A migration replaces the database kind/source-pair constraint without rewriting historical events.
+Wikimedia's external ID also becomes its four-second window end. Existing rows and permalinks remain unchanged. A migration adds the expanded kind/source constraint as a validated superset before removing the old constraint; it does not rewrite historical events. Application allow lists in `Event`, `SourceEvent`, `FeedCheckpoint`, `Instruction`, and source-specific payload validation change together.
 
-Every payload uses string keys, contains a server-authored summary of at most 160 characters, remains below the existing 16 KiB encoded limit, and passes a source-specific allow-list before it can enter the coordinator. Unknown keys, malformed numbers, excessive collection sizes, and non-finite values are rejected. Stream-window occurrence times are assigned by the server. Upstream timestamps are used only for protocol validation, ordering, and recovery; they cannot stretch the visual timeline.
+Every payload uses string keys, contains a server-authored summary of at most 160 characters, remains below the existing 16 KiB encoded limit, and passes a source-specific allow-list before it can enter the coordinator. Unknown keys, malformed numbers, excessive collection sizes, and non-finite values are rejected. Occurrence time follows the source-specific event-time rules below: validated provider time where available, bounded server receipt time otherwise. Untrusted timestamps cannot bypass skew, replay, or lateness limits to stretch the visual timeline.
 
 The existing unique index on `(source, external_id)` provides idempotency. Sequence IDs remain the authoritative total order after persistence.
+
+### Versioned renderer input
+
+The new source families require metrics that the current public instruction deliberately omits. Render version 2 adds a bounded, source-specific `metrics` map to the instruction projection. Existing version 1 rows continue through their current projection and are never rewritten. This explicitly supersedes the earlier Living Reliquary assumption that a new durable render contract would probably be unnecessary.
+
+`contextual_memory` is not durable event truth. It is a presentation role derived by the live snapshot and carried in a separate `memory_events` collection. The same stored event can therefore be a faded memory at the live edge and a normal historical formation in its chapter without changing the row or its render version.
+
+For drand, `VisualParameters` derives the version 2 seed from the validated beacon output rather than only the round-number external ID. The complete upstream response is still discarded.
 
 ## Cadence and aggregation
 
@@ -150,13 +158,13 @@ Wikimedia, Bluesky, RIPE, and Solana are consumed continuously but summarized in
 | `2` | RIPE RIS Live |
 | `3` | Solana |
 
-Each worker uses a monotonic timer for scheduling and a UTC boundary for the durable window identity. The event's `occurred_at` is the window end. A window describes activity observed by Worldloom during that interval; it does not reinterpret an arbitrary upstream timestamp as the publication beat.
+Each worker uses a monotonic timer for scheduling and a UTC boundary for the durable window identity. Wikimedia, Bluesky, and RIPE assign observations from their validated provider timestamps; Solana uses server receipt time because `slotSubscribe` has no wall-clock field. The event's `occurred_at` and external ID are the window end. A one-second grace period admits ordinary reordering, after which observations for an already-closed window are dropped with a coarse lateness metric.
 
-This cadence normally contributes one different high-volume family each second while limiting each source to fifteen durable rows per minute. drand contributes its genuine three-second rounds independently. Earthquake, weather, and visitor events retain their real occurrence cadence.
+This cadence targets one different high-volume family each second while limiting each source to fifteen normal durable rows per minute. Network and commit delay can change when a visitor sees the row; the stored event time does not change to disguise that delay. drand contributes its genuine three-second rounds independently. Earthquake, weather, and visitor events retain their real occurrence cadence.
 
 A zero-count window does not create a `loom_events` row. When a resumable stream advanced during that interval, the worker still submits a checkpoint-only commit through the same coordinator transaction. A source outage therefore creates an honest visual gap without forcing already-consumed frames to replay. The interface reports the source's health state separately.
 
-Decoded text frames are capped at 256 KiB. Category maps contain fixed allow-listed keys, numeric counters saturate at a 32-bit unsigned maximum, and RIPE's worker-local collector and peer sets stop accepting new members at 2,048 entries each. When a limit is reached, the aggregate records a bounded `truncated` flag; it never grows the collection or logs the discarded source material.
+Complete decoded text frames larger than 256 KiB are rejected before JSON decoding. This is an application parsing limit, not a transport-allocation guarantee: WebSockex has already assembled the frame. Category maps contain fixed allow-listed keys, numeric counters saturate at a 32-bit unsigned maximum, and RIPE's worker-local collector and peer sets stop accepting new members at 2,048 entries each. JSON traversal, process heaps, and message queues receive explicit tested bounds. When a limit is reached, the aggregate records a bounded `truncated` flag; it never grows the collection or logs the discarded source material.
 
 ## Architecture and components
 
@@ -170,9 +178,11 @@ Public provider -> source worker -> bounded normalizer/aggregator
 
 ### WebSocket transport
 
-A small reusable WebSocket transport wraps WebSockex. WebSockex is chosen because it fits OTP supervision and callback-driven reconnect behavior without requiring Worldloom to implement WebSocket framing, ping/pong handling, and Mint connection state itself.
+A source-specific supervised process uses WebSockex for each WebSocket feed. WebSockex is chosen because it fits OTP supervision and callback-driven reconnect behavior without requiring Worldloom to implement WebSocket framing, ping/pong handling, and Mint connection state itself.
 
-The transport owns only connection mechanics and frame delivery. It does not know source payloads, aggregation rules, persistence, or visual meaning. Each source worker owns its subscription message, normalizer, checkpoint semantics, and health transitions.
+The WebSockex process owns connection, subscription, bounded synchronous frame handling, aggregation state, and reconnect timing for exactly one source. Pure normalizer and aggregator modules remain independent of that process. This avoids an ordinary `send/2` handoff and its unbounded mailbox. Reconnect delay blocks only that source process.
+
+WebSockex has no documented transport-level maximum-frame option and emits raw received frames in its own telemetry event metadata. Worldloom does not attach handlers, loggers, or exporters to raw WebSockex frame events, and an automated privacy test enforces that application telemetry observes only Worldloom's coarse derived events. Cursors embedded in connection URLs are redacted before logging. These are explicit dependency constraints, not claims that raw bytes never exist transiently in process memory.
 
 WebSockex documentation: [hexdocs.pm/websockex](https://websockex.hexdocs.pm/).
 
@@ -183,7 +193,7 @@ Each new stream has a dedicated supervised worker and a pure aggregator module. 
 The worker:
 
 1. connects and subscribes;
-2. parses frames with a maximum accepted byte size;
+2. rejects complete frames above the application parsing limit;
 3. passes only validated fields to its aggregator;
 4. flushes on its assigned boundary;
 5. sends completed summaries and checkpoint metadata to the existing bounded buffer; and
@@ -195,42 +205,53 @@ drand uses a separate Req-based polling worker because it is an HTTP round feed,
 
 All new summaries use `SourceEvent` and the existing Buffer, Coordinator, and Store transaction. Checkpoint advancement and event insertion remain atomic where the upstream protocol supplies a meaningful cursor. PubSub receives only rows returned by a successful transaction.
 
-A feed failure cannot block visitor gestures or another source. No source worker writes directly to PostgreSQL or broadcasts directly to a LiveView.
+The Buffer changes from one retrying FIFO to fair per-source partitions drained round-robin within one global bound. A failing source can delay its own partition but cannot hold the head of every other source. No source worker writes directly to PostgreSQL or broadcasts directly to a LiveView.
+
+Under pressure, Wikimedia, Bluesky, RIPE, and Solana may combine adjacent pending summaries through source-specific associative reducers. The result declares its actual `window_count` and `window_span_seconds`; it is never mislabeled a normal four-second window. drand rounds never merge. They remain in a bounded twenty-round recovery queue, after which skipped rounds are reported honestly. Every new source receives an explicit `Merger` implementation so queue pressure cannot trigger the current unsupported-source pattern-match crash.
 
 ## Checkpoints and recovery
 
-- **Wikimedia:** persist the last accepted EventStreams cursor with the completed summary, retaining the existing bounded replay behavior.
-- **Bluesky:** persist the maximum accepted Jetstream `time_us` cursor with the completed summary and request resume from that cursor after reconnect. Any provider-imposed resume limit is treated as a live gap, not backfilled fiction.
+- **Wikimedia:** persist the last accepted EventStreams cursor with the completed summary. Reconnect with `Last-Event-ID`, but accept at most sixty seconds of replay before moving to the live edge and reporting a gap.
+- **Bluesky:** persist the maximum accepted Jetstream `time_us` cursor with the completed summary. Reconnect with a five-second cursor overlap, deduplicate observations in a bounded worker-local set, and accept at most sixty seconds of replay. A provider-imposed limit or protocol change becomes a reported gap.
 - **RIPE RIS Live:** record successful contact and summary-window metadata. Reconnect at the live edge; do not replay or synthesize the disconnected interval.
 - **Solana:** record the last observed slot. After reconnect, subscribe to current progress and use the first returned slot to establish the new live edge. A forward gap is reported as a gap, not expanded into fabricated slots.
 - **drand:** persist the last committed round. Fetch at most twenty missed rounds in ascending order; if more than one minute was missed, resume from the latest valid round and report the skipped span.
 
-Each source has independent capped exponential backoff with jitter. A successful connection changes health to connected; a valid frame updates contact; a committed non-empty summary updates activity. These states must remain distinct so a connected but quiet source is not mislabeled healthy activity.
+Recovery observations keep their validated provider occurrence time. A newly persisted recovery row older than the current primary window advances the global commit watermark but is classified as historical recovery and is not appended to the current display. Cursor overlap, deduplication, lateness, replay cap, and checkpoint advancement are tested together for each replayable source.
+
+Each source has independent capped exponential backoff with jitter. A new ephemeral health registry records connection, valid contact, committed activity, dropped or merged windows, recovery, and retry state. Persisted checkpoints remain recovery positions rather than being overloaded as immediate connection status. These states must remain distinct so a connected but quiet source is not mislabeled healthy activity.
 
 Wikimedia, Bluesky, RIPE, and Solana become quiet after twenty seconds without a valid observation while connected. A closed socket becomes disconnected immediately. drand becomes stale after twelve seconds without a valid new round. Existing USGS and Open-Meteo freshness thresholds remain unchanged.
 
 ## Live-window selection and memory
 
-The live route no longer asks only for the latest 400 rows. A source-aware query returns:
+The live route no longer treats its visible rows as the sequence ledger. It loads a versioned snapshot containing:
 
-- all authoritative events in the most recent 60 seconds, capped at the existing bounded instruction limit;
-- the most recent weather event at or before the live edge;
-- the most recent earthquake when no earthquake exists in the minute; and
-- the latest three visitor gestures not already present in the minute.
+- `window_end`, the server-selected event-time anchor;
+- `commit_watermark`, the highest committed database sequence whether displayed or not;
+- `display_events`, primary events in `[window_end - 60 seconds, window_end]`;
+- `memory_events`, contextual earthquake and visitor instructions outside that interval; and
+- `ambient`, the latest weather instruction and its freshness.
 
-The latter earthquake and visitor events are explicit **memory traces**. They remain real persisted events with their original sequence and occurrence time. They are marked as contextual memory in the server instruction, rendered with lower prominence, and remain selectable through the same trusted event map. They are not copied, re-sequenced, or passed through normal catch-up as if newly emitted.
+On initial load, `window_end` is the latest occurrence time eligible for primary display, truncated to a UTC second. It advances monotonically when a newly committed non-recovery event has a later occurrence time. It never uses the browser clock and never moves backward. During a total activity outage the artwork freezes while source health reports the outage; a late recovery row cannot drag the live axis backward.
+
+If more than 600 primary candidates occupy the minute, selection uses deterministic source round-robin over newest-per-source queues, followed by stable `(occurred_at, sequence)` ordering. No source contributes more than 240 of the 600 primary anchors. Selection and pruning happen before topology construction; hidden rows are not merely projected offscreen.
+
+The most recent earthquake and latest three visitor gestures become explicit **memory traces** only when absent from the minute and no more than 24 hours old. They remain real persisted events with their original sequence and occurrence time. They are sent in `memory_events`, rendered with lower prominence, and remain selectable through the same trusted event map. They are not copied, re-sequenced, included in the primary quota, or passed through catch-up as if newly emitted.
+
+Display-set omissions are not sequence gaps. Normal consecutive commits advance `commit_watermark` and either update the display, replace contextual memory, or remain history-only. If the next observed sequence skips the watermark, the server reprojects a complete snapshot at the new authoritative watermark instead of blindly appending every intervening row to the primary display.
 
 Historical chapters and permalinks continue to use sequence-authoritative queries. A formation permalink must reconstruct the same event and surrounding context after this change.
 
 ## Temporal layout
 
-The live canvas projects exactly sixty seconds across the usable width. Horizontal position is derived from normalized `occurred_at` within that window, not from a fixed step per database sequence. Events sharing a time boundary share a time column and separate through source-specific vertical and structural rules.
+The live canvas projects exactly sixty seconds across the usable width using the snapshot's `window_end`. Horizontal position is derived from normalized `occurred_at`, not from a fixed step per database sequence. Events sharing a time boundary share a time column and separate through source-specific vertical and structural rules. The same complete snapshot envelope always produces the same topology and geometry.
 
 Sequence order resolves ties and remains authoritative for selection, cursor repair, history, and accessibility summaries. Time projection changes only geometry; it never changes database ordering or permalink identity.
 
 The current unconditional minimum Wikimedia display step is removed. Sparse deterministic fixtures receive explicit timestamps during fixture construction and use the same production time projection; the geometry layer has no separate scaffold spacing mode.
 
-Memory traces anchor inside a quiet contextual band rather than pretending to have occurred in the current minute. Weather continues to alter the whole atmospheric field based on its original observation and freshness.
+Older history continues linearly to the left on the same event-time scale and is loaded in bounded pages as a visitor pans. Memory traces anchor inside a quiet contextual band rather than pretending to have occurred in the current minute. When their real historical page is loaded, they render there as normal events rather than duplicate contextual copies. Weather continues to alter the whole atmospheric field based on its original observation and freshness.
 
 ## Visual language
 
@@ -251,15 +272,15 @@ High source volume changes bounded local density, thickness, branching, or rhyth
 
 The legend names every source, explains its material behavior in plain language, and shows independent health. Semantic live summaries announce meaningful aggregates without producing a message for every raw upstream frame.
 
-## Balance invariant
+## Balance target
 
-When all five high-cadence sources are connected and producing activity:
+In deterministic acceptance fixtures where Wikimedia, Bluesky, RIPE, Solana, and drand produce every scheduled window:
 
-- every rolling ten-second live interval contains Wikimedia, Bluesky, RIPE, Solana, and drand events;
-- no one family supplies more than 40 percent of primary visible marks; and
-- all five remain structurally recognizable at desktop and mobile widths.
+- every rolling ten-second event-time interval contains all five families;
+- no family supplies more than 40 percent of durable primary anchors; and
+- all five remain structurally recognizable in named desktop, tablet, and mobile snapshots.
 
-An unavailable or genuinely quiet source is exempt from the interval requirement and must be labeled honestly. The renderer does not duplicate another source to fill its place.
+This is not a wall-clock availability guarantee. In production, eligible sources are those reporting valid activity and healthy enough to meet their cadence. Over a rolling five-minute observation, at least 95 percent of eligible ten-second event-time intervals should contain each eligible scheduled source. Missing, delayed, or recovering activity is measured and reported; the renderer never fabricates a mark to satisfy the target.
 
 Earthquakes, weather, and visitor interventions remain contextual layers and do not enter the five-source quota. Their importance comes from persistence, contrast, and memory rather than artificial emission frequency.
 
@@ -270,14 +291,16 @@ The server, not the browser, contacts every provider. Content security policy an
 Source adapters follow a deny-by-default contract:
 
 - accept only documented message types and required fields;
-- cap frame and decoded collection sizes before aggregation;
+- reject complete frames above the parsing cap and bound decoded collection traversal before aggregation;
 - convert categories through fixed allow lists rather than dynamic atoms;
 - reject non-finite or out-of-range numeric values;
-- never log raw frames, subscription cursors, identifiers, response bodies, or malformed payloads;
+- never send raw frames, subscription cursors, identifiers, response bodies, or malformed payloads to Worldloom-owned logs or exported telemetry;
 - never place upstream URLs or connection details in public health output; and
 - discard raw values immediately after updating a bounded aggregate.
 
-Bluesky content and identity, RIPE routing identifiers, and Solana account-level activity cannot appear in `loom_events`, PubSub instructions, rendered HTML, semantic summaries, telemetry metadata, or application logs.
+Bluesky content and identity, RIPE routing identifiers, and Solana account-level activity cannot appear in `loom_events`, PubSub instructions, rendered HTML, semantic summaries, Worldloom telemetry, or application logs. WebSockex's internal raw-frame telemetry events remain handler-free; this constraint is covered by an automated attachment test and documented for future observability work.
+
+Per-source processes enforce a tested mailbox ceiling and terminate cleanly on sustained overload. A process heap ceiling limits damage from an unexpectedly large assembled frame, but the threat model remains explicit: the 256 KiB application check occurs after WebSockex allocates the complete frame. Eliminating that transient allocation would require a separately reviewed lower-level transport.
 
 Existing visitor privacy remains unchanged: no accounts, analytics SDK, free-form content, stable public identity, raw address persistence, or browser-to-source requests.
 
@@ -286,10 +309,10 @@ Existing visitor privacy remains unchanged: no accounts, analytics SDK, free-for
 - One disconnected source leaves all other sources, visitor gestures, archive browsing, and `/healthz` operational.
 - Reconnect attempts use capped exponential backoff with jitter and cannot form a tight crash loop.
 - A malformed or oversized frame is dropped with a coarse reason counter; it does not crash the worker or leak content into logs.
-- A full downstream buffer merges compatible summaries according to existing bounds. It never becomes unbounded.
+- A full downstream buffer applies the documented source-specific reducer or bounded drand recovery policy. Fair draining prevents one retrying source from holding every other partition.
 - A database failure prevents checkpoint advancement and broadcast.
 - Duplicate windows or rounds are harmless because persistence is idempotent.
-- A source clock anomaly outside the accepted range is rejected rather than stretching the canvas.
+- A provider timestamp anomaly outside the source's documented skew and replay bounds is rejected rather than stretching the canvas.
 - A stale weather event remains visible with stale labeling; missing high-cadence sources leave honest visual space.
 - Unsupported renderer instructions produce finite fallback marks and preserve semantic text.
 - Reduced-motion mode removes growth and pulses but preserves every source's settled structure and meaning.
@@ -298,11 +321,11 @@ Existing visitor privacy remains unchanged: no accounts, analytics SDK, free-for
 
 ## Configuration and operations
 
-Each source can be enabled independently. Secure diagnostic URL overrides remain server-side and are rejected unless they use the required `https` or `wss` scheme. Production defaults enable the approved sources, while `WORLDLOOM_FEEDS_ENABLED=false` still disables all external workers for deterministic tests and operational recovery.
+Each source can be enabled independently. Secure diagnostic URL overrides remain server-side and are rejected unless they use the required `https` or `wss` scheme. All new sources default off in production and move through one-source canaries after qualification. `WORLDLOOM_FEEDS_ENABLED=false` still disables every external worker for deterministic tests and operational recovery.
 
 Operations documentation will add source-specific freshness thresholds, retry telemetry, configuration names, attribution, and recovery procedures. It will also state the practical limitations of public endpoints and avoid promising uninterrupted delivery.
 
-No production secret, API token, or paid provider is required by the design. If a future public deployment needs a commercial or authenticated endpoint for reliability, enabling cost-bearing infrastructure requires separate approval.
+Wikimedia, the legacy Bluesky public instances, RIPE, and drand require no production secret for the proposed best-effort artwork. Solana production enablement explicitly requires a separate endpoint and cost decision. Any authenticated, paid, or self-hosted provider requires explicit approval before configuration or activation.
 
 ## Testing strategy
 
@@ -316,6 +339,8 @@ Behavioral implementation follows red-green-refactor. Tests exercise pure source
 - Counters and distinct sets saturate at documented bounds and mark truncation.
 - Empty windows emit no durable event.
 - Four-second windows close on the assigned UTC offsets with deterministic external IDs.
+- Provider-time observations, one-second lateness, replay overlap, and history-only recovery classification are deterministic.
+- Pressure reducers disclose multi-window spans and remain associative; drand never merges.
 - The same accepted observations produce the same aggregate regardless of frame chunking.
 
 ### Worker and recovery tests
@@ -323,28 +348,36 @@ Behavioral implementation follows red-green-refactor. Tests exercise pure source
 - Subscription messages contain only the approved filters.
 - Connection, valid contact, activity, quiet, stale, retry, and recovery are distinct health states.
 - Backoff is capped and jittered.
-- Bluesky resumes from its timestamp cursor.
+- Wikimedia and Bluesky resume with their specified overlap, deduplication, and replay caps.
 - RIPE and Solana reconnect without fabricated replay.
 - drand catches up missed rounds in order and respects its cap.
 - Duplicate windows and rounds produce one stored row.
 - A source crash or malformed frame does not stop sibling workers.
+- Slow consumers, forced provider reconnects, oversized fragmented messages, mailbox pressure, process-heap limits, and database outages produce bounded degradation.
+- No Worldloom handler attaches to raw WebSockex frame telemetry, and URL cursors never reach application logs.
+- Provider contract smoke tests run on a schedule outside deterministic CI and report drift without making pull requests flaky.
 
 ### Store and LiveView tests
 
 - Source-kind constraints reject invalid pairings in both changeset and database.
-- The live query returns the current minute plus the required weather, earthquake, and visitor context without duplicating rows.
-- Catch-up and trusted selection maps retain sequence authority.
+- Old rows survive the additive constraint migration and version 1 instructions remain renderable.
+- The live snapshot returns explicit `window_end`, `commit_watermark`, primary display, memory, and ambient fields without duplicating rows.
+- A display omission does not trigger gap repair; a real commit gap causes full snapshot reprojection.
+- Late historical recovery advances the watermark without re-entering the primary minute.
+- Deterministic round-robin selection respects 600 total and 240-per-source bounds.
+- Trusted selection maps retain sequence authority across both primary and memory layers.
 - Memory traces remain selectable and expose their original occurrence time.
 - Source health and semantic summaries are accessible without canvas or color.
 - Existing permalink and chapter reconstruction remains stable.
 
 ### Renderer tests
 
-- A minute with overwhelming Wikimedia input still displays every active source family.
-- Time-column projection is deterministic, finite, padded, and independent of database density.
+- Named balanced, Wikimedia-surge, delayed-recovery, total-outage, and memory-expiry fixtures cover the full snapshot contract.
+- A minute with overwhelming Wikimedia input still displays every eligible active source family.
+- Time-column projection is deterministic for a complete snapshot envelope, finite, padded, and independent of database density.
 - Events at the same boundary remain distinguishable.
 - Each source has a non-color structural signature.
-- The scaffold fallback cannot push live source events offscreen.
+- No scaffold-only spacing path can push live source events offscreen.
 - Memory traces and ambient weather remain visually distinct from current structural events.
 - Existing instruction, command, transition, and cache limits hold under worst-case aggregates.
 - Reduced motion preserves settled source meaning without continuing animation.
@@ -353,8 +386,9 @@ Behavioral implementation follows red-green-refactor. Tests exercise pure source
 
 - Playwright verifies all source families, legend states, memory selection, mobile layout, accessibility, reconnect presentation, and reduced motion against deterministic feed-disabled fixtures.
 - A two-browser test proves that newly committed summaries broadcast once and reconstruct after reload.
-- A local 100-browser simulation confirms that browser count does not multiply upstream connections, source summaries remain visible, and LiveView stays responsive.
-- The exact release candidate passes existing Elixir, JavaScript, browser, container, and CI checks.
+- A local instrumented fake upstream counts connections and subscriptions while 100 browsers connect, proving that browser count does not multiply upstream connections.
+- The same load run exercises real summary broadcasts, snapshot reprojection, and LiveView responsiveness rather than disabling every feed.
+- The exact release candidate passes existing Elixir, JavaScript, browser, container, dependency-audit, and CI checks.
 
 ## Documentation and attribution
 
@@ -364,40 +398,39 @@ The interface must call the streams by their source names. It must not imply end
 
 ## Rollout
 
-The feature lands behind independent source enablement so each collector can be disabled without reverting the renderer or schema. Feed-disabled deterministic mode remains the first verification environment.
+This work is too broad for one coupled implementation gate. It is divided into independently reviewable phases:
 
-The release order is:
+1. **Projection foundation:** introduce the deterministic snapshot envelope, separate `commit_watermark` from visible rows, remove Wikimedia-only minimum spacing, and reproject rather than append after a real gap. This phase fixes the reported defect with no new provider.
+2. **Contract migration:** add render version 2 metrics, the separate memory layer, old-row compatibility, expanded source/checkpoint allow lists, and four-second Wikimedia windows.
+3. **Provider qualification:** prove the pinned legacy Jetstream contract, bounded RIPE collector subscription and load, drand v2 failover and seed derivation, and the Solana adapter against development infrastructure. No provider is production-enabled in this phase.
+4. **Transport and health:** add the supervised WebSockex workers, handler-free raw telemetry policy, bounded process behavior, ephemeral health registry, fair per-source buffering, and pressure reducers.
+5. **Incremental sources:** enable drand first, then Bluesky and RIPE one at a time through independently reversible canaries. Solana remains disabled until its production endpoint is separately approved.
+6. **Balanced visual release:** add the complete source materials, legend, semantic summaries, deterministic balance fixtures, provider-aware documentation, and instrumented 100-browser verification.
 
-1. extend and test the durable source contract;
-2. add pure bounded aggregators;
-3. add supervised transport workers and health states;
-4. introduce source-aware live-window selection;
-5. replace live sequence-distance geometry with time projection;
-6. add the approved source materials, legend, and semantic summaries;
-7. update privacy, operations, attribution, and public documentation; and
-8. run complete browser, load, container, CI, and visual verification.
+Every phase receives its own red-green tests, diff review, and clean `mix precommit`. Public source enablement additionally requires its privacy, reconnect, drift-smoke, and canary evidence.
 
-The new feeds are enabled publicly only after their privacy allow-list tests, reconnect tests, and source-balance acceptance fixture pass.
+The release gate adds `mix hex.audit`. The current lock reports the medium-severity Postgrex `:comment` advisory; implementation planning must either upgrade to a fixed release or document and verify a temporary non-reachability mitigation. The advisory cannot be silently accepted for a public release.
 
 ## Acceptance criteria
 
-1. Wikimedia, Bluesky, RIPE RIS Live, Solana, and drand appear as distinct genuine signals under normal source availability.
-2. Every rolling ten-second test window with all feeds active contains all five high-cadence families, and none exceeds 40 percent of primary marks.
-3. A Wikimedia surge cannot push another current source, the latest earthquake, or the latest three visitor gestures out of the intended live composition.
+1. Wikimedia, Bluesky, RIPE RIS Live, Solana, and drand render as distinct genuine signals in deterministic qualification fixtures; publicly enabled sources additionally pass their canary gates.
+2. Every rolling ten-second event-time fixture window with all five feeds scheduled contains all five families, and none exceeds 40 percent of durable primary anchors.
+3. A Wikimedia surge cannot push another current source, an eligible earthquake memory, or the latest three eligible visitor memories out of the intended live composition.
 4. Weather remains a clearly labeled atmosphere and never masquerades as a fresh structural event when stale.
-5. No raw Bluesky content or identity, BGP routing identifier, or Solana account-level information reaches durable storage, logs, PubSub, or the browser.
-6. The four stream summaries use staggered non-overlapping four-second windows; drand follows its real three-second rounds; empty windows create no event.
-7. All collectors reconnect independently with bounded memory, bounded catch-up, idempotent persistence, and honest health state.
-8. Sequence IDs remain authoritative for ordering, catch-up, selection, chapters, and permalinks.
-9. The same persisted events produce the same topology and geometry across reloads and browsers.
+5. No raw Bluesky content or identity, BGP routing identifier, or Solana account-level information reaches durable storage, Worldloom-owned logs or telemetry, PubSub, or the browser.
+6. Normal stream summaries use staggered non-overlapping four-second windows; pressure summaries disclose their longer span; drand follows real three-second rounds; empty windows create no event.
+7. Every collector reconnects with bounded replay and honest health, while fair buffering prevents one retrying source from holding every other source behind it.
+8. Sequence IDs remain authoritative for commit ordering, loss detection, selection, chapters, and permalinks; display omissions never count as sequence loss.
+9. The same complete snapshot envelope produces the same topology and geometry across reloads and browsers; version 1 rows remain compatible.
 10. Source meaning survives mobile layout, color-vision differences, missing canvas, and reduced-motion mode.
-11. A 100-browser local simulation does not multiply upstream connections or destabilize event delivery.
-12. `mix precommit`, JavaScript tests, Playwright tests, container build, final diff review, and GitHub CI all pass before integration into `master`.
+11. An instrumented 100-browser local simulation observes one upstream subscription per enabled source and does not destabilize event delivery.
+12. `mix precommit`, `mix hex.audit` or an approved verified mitigation, JavaScript tests, Playwright tests, container build, final diff review, and GitHub CI all pass before integration into `master`.
 
 ## Deferred decisions
 
 - Cryptographic BLS verification of drand beacons inside Worldloom.
-- Authenticated or paid endpoints for any provider.
+- Solana's production RPC provider or self-hosting decision.
+- Authenticated or paid endpoints for any other provider.
 - Multi-node collector leadership and distributed deduplication.
 - Alerting, analytics, dashboards, or source-specific historical exploration.
 - Retention or compaction changes to append-only loom history.
