@@ -82,13 +82,19 @@ defmodule WorldloomWeb.WorldLive do
 
   @impl true
   def handle_info(
-        {:loom_snapshot, %LiveSnapshot{} = snapshot},
-        %{assigns: %{live?: true}} = socket
+        {:loom_snapshot, %LiveSnapshot{commit_watermark: commit_watermark} = snapshot},
+        %{assigns: %{live?: true, commit_watermark: current_watermark}} = socket
       ) do
-    {:noreply,
-     socket
-     |> assign_live_snapshot(snapshot)
-     |> push_event("worldloom:snapshot", encode_snapshot(snapshot))}
+    if commit_watermark > current_watermark do
+      encoded_snapshot = encode_snapshot(snapshot)
+
+      {:noreply,
+       socket
+       |> assign_live_snapshot(snapshot, encoded_snapshot)
+       |> push_event("worldloom:snapshot", encoded_snapshot)}
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_info({:loom_snapshot, %LiveSnapshot{}}, socket), do: {:noreply, socket}
@@ -131,7 +137,10 @@ defmodule WorldloomWeb.WorldLive do
        socket
        |> assign(:history_requested_at, now_ms)
        |> assign(:oldest_loaded_sequence, older_sequence(events, socket))
-       |> assign(:trusted_events, bounded_events(socket.assigns.trusted_events, events))
+       |> assign(
+         :trusted_events,
+         bounded_events(socket.assigns.trusted_events, events, socket.assigns.at_live_edge)
+       )
        |> push_event("worldloom:history", %{
          instructions: instructions,
          scaffold: public_scaffold(events, nil),
@@ -193,13 +202,14 @@ defmodule WorldloomWeb.WorldLive do
 
   def handle_event("return-live", _payload, socket) do
     snapshot = Coordinator.current_snapshot()
+    encoded_snapshot = encode_snapshot(snapshot)
     scaffold_events = load_live_scaffold(snapshot.commit_watermark)
 
     {:noreply,
      socket
      |> assign(:at_live_edge, true)
-     |> assign_live_snapshot(snapshot, scaffold_events)
-     |> push_event("worldloom:return-live", encode_snapshot(snapshot))}
+     |> assign_live_snapshot(snapshot, encoded_snapshot, scaffold_events)
+     |> push_event("worldloom:return-live", encoded_snapshot)}
   end
 
   def handle_event("select-formation", %{"sequence" => sequence}, socket)
@@ -318,6 +328,7 @@ defmodule WorldloomWeb.WorldLive do
   defp enter_live_route(socket, uri) do
     socket = transition_coordinator_subscription(socket, true)
     snapshot = Coordinator.current_snapshot()
+    encoded_snapshot = encode_snapshot(snapshot)
     scaffold_events = load_live_scaffold(snapshot.commit_watermark)
     route_changed? = route_changed?(socket, uri)
 
@@ -332,10 +343,10 @@ defmodule WorldloomWeb.WorldLive do
       |> assign(:permalink, URI.parse(uri).path || "/")
       |> assign(:current_url, uri)
       |> restore_live_gesture_state()
-      |> assign_live_snapshot(snapshot, scaffold_events)
+      |> assign_live_snapshot(snapshot, encoded_snapshot, scaffold_events)
 
     if route_changed? do
-      push_event(socket, "worldloom:return-live", encode_snapshot(snapshot))
+      push_event(socket, "worldloom:return-live", encoded_snapshot)
     else
       socket
     end
@@ -423,28 +434,24 @@ defmodule WorldloomWeb.WorldLive do
     |> stream(:accessible_formations, Enum.take(instructions, -@accessible_limit), reset: true)
   end
 
-  defp assign_live_snapshot(socket, snapshot) do
-    encoded_snapshot = encode_snapshot(snapshot)
-
+  defp assign_live_snapshot(socket, snapshot, encoded_snapshot) do
     scaffold =
       live_scaffold(socket.assigns.scaffold ++ encoded_snapshot.display_events)
 
-    assign_live_snapshot(socket, snapshot, encoded_snapshot, scaffold)
+    assign_encoded_live_snapshot(socket, snapshot, encoded_snapshot, scaffold)
   end
 
-  defp assign_live_snapshot(socket, snapshot, scaffold_events) do
-    encoded_snapshot = encode_snapshot(snapshot)
-
+  defp assign_live_snapshot(socket, snapshot, encoded_snapshot, scaffold_events) do
     scaffold =
       scaffold_events
       |> Enum.map(&Instruction.from_event/1)
       |> Kernel.++(encoded_snapshot.display_events)
       |> live_scaffold()
 
-    assign_live_snapshot(socket, snapshot, encoded_snapshot, scaffold)
+    assign_encoded_live_snapshot(socket, snapshot, encoded_snapshot, scaffold)
   end
 
-  defp assign_live_snapshot(socket, snapshot, encoded_snapshot, scaffold) do
+  defp assign_encoded_live_snapshot(socket, snapshot, encoded_snapshot, scaffold) do
     trusted_events = snapshot.display_events ++ snapshot.memory_events
     accessible_formations = encoded_snapshot.display_events ++ encoded_snapshot.memory_events
 
@@ -582,15 +589,18 @@ defmodule WorldloomWeb.WorldLive do
     end
   end
 
-  defp bounded_events(existing_events, new_events) do
+  defp bounded_events(existing_events, new_events, at_live_edge) do
     existing_events
     |> Map.values()
     |> Kernel.++(new_events)
     |> Enum.uniq_by(& &1.id)
     |> Enum.sort_by(& &1.id)
-    |> Enum.take(-@maximum_window)
+    |> take_bounded_events(at_live_edge)
     |> trusted_event_map()
   end
+
+  defp take_bounded_events(events, true), do: Enum.take(events, -@maximum_window)
+  defp take_bounded_events(events, false), do: Enum.take(events, @maximum_window)
 
   defp history_before(nil), do: []
   defp history_before(sequence), do: Store.before(sequence, @history_page_limit)

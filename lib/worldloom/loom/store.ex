@@ -135,30 +135,6 @@ defmodule Worldloom.Loom.Store do
     validate_limit!(limit)
   end
 
-  @spec unquote(:after)(non_neg_integer(), non_neg_integer(), pos_integer()) :: [Event.t()]
-  def unquote(:after)(sequence, through_sequence, limit \\ 600)
-
-  def unquote(:after)(sequence, through_sequence, limit)
-      when is_integer(sequence) and sequence >= 0 and is_integer(through_sequence) and
-             through_sequence >= sequence and is_integer(limit) and limit in 1..@maximum_limit do
-    Event
-    |> where([event], event.id > ^sequence and event.id <= ^through_sequence)
-    |> order_by([event], asc: event.id)
-    |> limit(^limit)
-    |> Repo.all()
-  end
-
-  def unquote(:after)(sequence, through_sequence, limit) do
-    validate_non_negative_sequence!(sequence)
-    validate_non_negative_sequence!(through_sequence)
-
-    if through_sequence < sequence do
-      raise ArgumentError, "through sequence must not precede sequence"
-    end
-
-    validate_limit!(limit)
-  end
-
   @spec before(pos_integer(), pos_integer()) :: [Event.t()]
   def before(sequence, limit \\ 400)
 
@@ -442,13 +418,6 @@ defmodule Worldloom.Loom.Store do
 
   defp validate_sequence!(sequence) when is_integer(sequence) and sequence > 0, do: :ok
   defp validate_sequence!(_sequence), do: raise(ArgumentError, "sequence must be positive")
-
-  defp validate_non_negative_sequence!(sequence)
-       when is_integer(sequence) and sequence >= 0,
-       do: :ok
-
-  defp validate_non_negative_sequence!(_sequence),
-    do: raise(ArgumentError, "sequence must be non-negative")
 
   defp validate_limit!(limit) when is_integer(limit) and limit in 1..@maximum_limit, do: :ok
   defp validate_limit!(_limit), do: invalid_limit!()

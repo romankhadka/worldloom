@@ -5,6 +5,7 @@ defmodule WorldloomWeb.WorldLiveTest do
 
   alias Worldloom.Loom.Coordinator
   alias Worldloom.Loom.CoordinatorTestStore
+  alias Worldloom.Loom.Event
   alias Worldloom.Loom.Instruction
   alias Worldloom.Loom.LiveSnapshot
   alias Worldloom.Loom.SourceEvent
@@ -82,7 +83,8 @@ defmodule WorldloomWeb.WorldLiveTest do
   end
 
   test "exposes separate initial snapshot fields with scaffold and ambient", %{conn: conn} do
-    snapshot = seed_live_snapshot_fixture()
+    snapshot = synthetic_live_snapshot_fixture()
+    put_current_snapshot(snapshot)
 
     {:ok, live_view, _html} = live(conn, "/")
 
@@ -343,7 +345,7 @@ defmodule WorldloomWeb.WorldLiveTest do
     _initial_snapshot = seed_live_snapshot_fixture()
     {:ok, live_view, _html} = live(conn, "/")
 
-    updated_snapshot = seed_live_snapshot_fixture(907, ~U[2026-08-08 12:02:00Z])
+    updated_snapshot = seed_live_snapshot_fixture(~U[2026-08-08 12:02:00Z])
     put_current_snapshot(updated_snapshot)
     send(live_view.pid, {:loom_snapshot, updated_snapshot})
 
@@ -361,7 +363,7 @@ defmodule WorldloomWeb.WorldLiveTest do
 
     assert payload.snapshot_version == 1
     assert payload.window_end == "2026-08-08T12:02:00Z"
-    assert payload.commit_watermark == 907
+    assert payload.commit_watermark == updated_snapshot.commit_watermark
 
     assert payload.display_events ==
              Enum.map(updated_snapshot.display_events, &Instruction.from_event/1)
@@ -374,7 +376,6 @@ defmodule WorldloomWeb.WorldLiveTest do
     refute_push_event live_view, "worldloom:event", _legacy_event
     refute_push_event live_view, "worldloom:catch-up", _legacy_catch_up
     refute_push_event live_view, "worldloom:reload", _legacy_reload
-    refute_push_event live_view, "sequence-gap", _legacy_gap
 
     trusted_events = updated_snapshot.display_events ++ updated_snapshot.memory_events
     trusted_pairs = source_sequence_pairs(trusted_events)
@@ -413,29 +414,73 @@ defmodule WorldloomWeb.WorldLiveTest do
 
     assert_push_event live_view, "worldloom:snapshot", %{
       window_end: "2026-08-08T12:01:00Z",
-      commit_watermark: 907,
+      commit_watermark: commit_watermark,
       display_events: display_events,
       memory_events: memory_events
     }
 
+    assert commit_watermark == recovery_snapshot.commit_watermark
     assert display_events == Enum.map(snapshot.display_events, &Instruction.from_event/1)
     assert memory_events == Enum.map(snapshot.memory_events, &Instruction.from_event/1)
     refute_push_event live_view, "worldloom:event", _legacy_event
     refute_push_event live_view, "worldloom:catch-up", _legacy_catch_up
     refute_push_event live_view, "worldloom:reload", _legacy_reload
-    refute_push_event live_view, "sequence-gap", _legacy_gap
   end
 
   test "return-live refreshes the complete current snapshot including ambient", %{conn: conn} do
     _initial_snapshot = seed_live_snapshot_fixture()
     {:ok, live_view, _html} = live(conn, "/")
-    current_snapshot = seed_live_snapshot_fixture(908, ~U[2026-08-08 12:03:00Z])
+    current_snapshot = seed_live_snapshot_fixture(~U[2026-08-08 12:03:00Z])
     put_current_snapshot(current_snapshot)
 
     render_hook(live_view, "return-live", %{})
 
     assert_push_event live_view, "worldloom:return-live", payload
     assert payload == encoded_snapshot(current_snapshot)
+  end
+
+  test "return-live ignores queued stale snapshots and equal duplicates", %{conn: conn} do
+    older_events = seed_events(2, ~U[2026-08-08 12:00:00Z])
+
+    older_snapshot = %LiveSnapshot{
+      window_end: ~U[2026-08-08 12:00:01Z],
+      commit_watermark: List.last(older_events).id,
+      display_events: older_events,
+      memory_events: [],
+      ambient: nil
+    }
+
+    put_current_snapshot(older_snapshot)
+    {:ok, live_view, _html} = live(conn, "/")
+
+    [older_event | _events] = older_events
+    render_hook(live_view, "select-formation", %{"sequence" => older_event.id})
+    assert_patch live_view, chapter_path(older_event)
+
+    current_events = seed_events(2, ~U[2026-08-08 12:01:00Z])
+
+    current_snapshot = %LiveSnapshot{
+      window_end: ~U[2026-08-08 12:01:01Z],
+      commit_watermark: List.last(current_events).id,
+      display_events: current_events,
+      memory_events: [],
+      ambient: nil
+    }
+
+    put_current_snapshot(current_snapshot)
+    render_patch(live_view, "/")
+    assert_push_event live_view, "worldloom:return-live", return_payload
+    assert return_payload == encoded_snapshot(current_snapshot)
+
+    send(live_view.pid, {:loom_snapshot, older_snapshot})
+    refute_push_event live_view, "worldloom:snapshot", _stale_payload
+    assert live_assign(live_view, :commit_watermark) == current_snapshot.commit_watermark
+    assert accessible_sequence_ids(live_view) == Enum.map(current_events, & &1.id)
+
+    send(live_view.pid, {:loom_snapshot, current_snapshot})
+    refute_push_event live_view, "worldloom:snapshot", _duplicate_payload
+    assert live_assign(live_view, :commit_watermark) == current_snapshot.commit_watermark
+    assert accessible_sequence_ids(live_view) == Enum.map(current_events, & &1.id)
   end
 
   test "uses a server-owned cursor for throttled bounded history", %{conn: conn} do
@@ -465,6 +510,36 @@ defmodule WorldloomWeb.WorldLiveTest do
 
     render_hook(live_view, "history-before", %{"sequence" => 1})
     refute_push_event live_view, "worldloom:history", _throttled
+  end
+
+  test "keeps the oldest trusted history selectable while panned away", %{conn: conn} do
+    events = seed_events(1_000)
+    history_events = Enum.take(events, 400)
+    live_events = Enum.take(events, -600)
+
+    put_current_snapshot(%LiveSnapshot{
+      window_end: List.last(live_events).occurred_at,
+      commit_watermark: List.last(live_events).id,
+      display_events: live_events,
+      memory_events: [],
+      ambient: nil
+    })
+
+    {:ok, live_view, _html} = live(conn, "/")
+    render_hook(live_view, "viewport-state", %{"at_live_edge" => false})
+    render_hook(live_view, "history-before", %{})
+
+    assert_push_event live_view, "worldloom:history", %{instructions: instructions}
+    assert instruction_sequence_ids(instructions) == Enum.map(history_events, & &1.id)
+    assert map_size(live_assign(live_view, :trusted_events)) == 600
+
+    [oldest_history_event | _events] = history_events
+    render_hook(live_view, "select-formation", %{"sequence" => oldest_history_event.id})
+
+    expected_path = chapter_path(oldest_history_event)
+    assert_patch live_view, expected_path
+    assert has_element?(live_view, "#signal-detail", "Public formation 1")
+    assert has_element?(live_view, "#share-link[readonly][value$='#{expected_path}']")
   end
 
   test "history paging starts before primary display rather than older contextual memory", %{
@@ -997,10 +1072,7 @@ defmodule WorldloomWeb.WorldLiveTest do
     event
   end
 
-  defp seed_live_snapshot_fixture(
-         commit_watermark \\ 906,
-         window_end \\ ~U[2026-08-08 12:01:00Z]
-       ) do
+  defp seed_live_snapshot_fixture(window_end \\ ~U[2026-08-08 12:01:00Z]) do
     display_events = seed_events(2, DateTime.add(window_end, -10, :second))
     contextual_earthquake = seed_earthquake_event(DateTime.add(window_end, -90, :second))
     [contextual_visitor] = seed_visitor_events(1, DateTime.add(window_end, -80, :second))
@@ -1008,7 +1080,7 @@ defmodule WorldloomWeb.WorldLiveTest do
 
     snapshot = %LiveSnapshot{
       window_end: window_end,
-      commit_watermark: commit_watermark,
+      commit_watermark: Store.highest_sequence(),
       display_events: display_events,
       memory_events: [contextual_earthquake, contextual_visitor],
       ambient: ambient
@@ -1016,6 +1088,42 @@ defmodule WorldloomWeb.WorldLiveTest do
 
     put_current_snapshot(snapshot)
     snapshot
+  end
+
+  defp synthetic_live_snapshot_fixture do
+    window_end = ~U[2026-08-08 12:01:00Z]
+
+    %LiveSnapshot{
+      window_end: window_end,
+      commit_watermark: 906,
+      display_events: [
+        synthetic_event(901, "wikimedia", "wikimedia", DateTime.add(window_end, -10, :second)),
+        synthetic_event(902, "wikimedia", "wikimedia", DateTime.add(window_end, -9, :second))
+      ],
+      memory_events: [
+        synthetic_event(903, "earthquake", "usgs", DateTime.add(window_end, -90, :second)),
+        synthetic_event(904, "illuminate", "visitor", DateTime.add(window_end, -80, :second))
+      ],
+      ambient:
+        synthetic_event(905, "weather", "open_meteo", DateTime.add(window_end, 30, :second))
+    }
+  end
+
+  defp synthetic_event(sequence, kind, source, occurred_at) do
+    %Event{
+      id: sequence,
+      kind: kind,
+      source: source,
+      occurred_at: occurred_at,
+      render_version: 1,
+      render_seed: sequence,
+      lane: 0.4,
+      intensity: 0.6,
+      payload: %{
+        "summary" => "Synthetic #{kind} formation #{sequence}",
+        "visual" => %{"bend" => 0.1, "pulse" => 0.2, "spread" => 0.3}
+      }
+    }
   end
 
   defp append_current_display(events) do

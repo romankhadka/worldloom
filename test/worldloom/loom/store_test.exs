@@ -288,7 +288,7 @@ defmodule Worldloom.Loom.StoreTest do
            ]
   end
 
-  test "around, after, before, ambient, fetch, and highest sequence are bounded and ordered" do
+  test "around, before, ambient, fetch, and highest sequence are bounded and ordered" do
     weather = weather_event(0, ~U[2026-08-03 11:59:59.000000Z])
     wikimedia = Enum.map(1..6, &source_event/1)
 
@@ -304,9 +304,6 @@ defmodule Worldloom.Loom.StoreTest do
     assert Enum.map(Store.around(target.id, 5), & &1.id) ==
              all |> Enum.slice(1, 5) |> Enum.map(& &1.id)
 
-    assert Enum.map(Store.after(stored_weather.id, Enum.at(all, 4).id, 3), & &1.id) ==
-             all |> Enum.slice(1, 3) |> Enum.map(& &1.id)
-
     assert Enum.map(Store.before(target.id, 2), & &1.id) ==
              all |> Enum.slice(1, 2) |> Enum.map(& &1.id)
 
@@ -315,7 +312,6 @@ defmodule Worldloom.Loom.StoreTest do
     assert :error = Store.fetch(List.last(all).id + 10_000)
     assert Store.highest_sequence() == List.last(all).id
 
-    assert_raise ArgumentError, fn -> Store.after(target.id, target.id - 1, 10) end
     assert_raise ArgumentError, fn -> Store.before(target.id, 0) end
   end
 
