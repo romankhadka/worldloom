@@ -230,6 +230,24 @@ defmodule Worldloom.Loom.StoreTest do
     assert primary_definition =~ "<> 'open_meteo'"
   end
 
+  test "live event-time index migration is concurrent and recoverable" do
+    migration_path =
+      Path.expand(
+        "../../../priv/repo/migrations/20260808140000_add_live_event_time_indexes.exs",
+        __DIR__
+      )
+
+    Code.require_file(migration_path)
+    migration_source = File.read!(migration_path)
+
+    assert apply(Worldloom.Repo.Migrations.AddLiveEventTimeIndexes, :__migration__, []) ==
+             [disable_ddl_transaction: true, disable_migration_lock: true]
+
+    assert length(Regex.scan(~r/\bcreate_if_not_exists index\(/, migration_source)) == 2
+    assert length(Regex.scan(~r/\bdrop_if_exists index\(/, migration_source)) == 2
+    assert length(Regex.scan(~r/concurrently: true/, migration_source)) == 4
+  end
+
   test "around, after, before, ambient, fetch, and highest sequence are bounded and ordered" do
     weather = weather_event(0, ~U[2026-08-03 11:59:59.000000Z])
     wikimedia = Enum.map(1..6, &source_event/1)
@@ -346,6 +364,15 @@ defmodule Worldloom.Loom.StoreTest do
     assert snapshot.display_events == []
     assert snapshot.memory_events == []
     assert snapshot.ambient == nil
+  end
+
+  @tag :committed_storage
+  test "live snapshot rejects an existing transaction" do
+    assert_raise ArgumentError,
+                 ~r/live snapshot must be loaded outside an existing transaction/,
+                 fn ->
+                   Repo.transaction(fn -> Store.live_snapshot(nil) end)
+                 end
   end
 
   @tag :committed_storage

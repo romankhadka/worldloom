@@ -68,6 +68,10 @@ defmodule Worldloom.Loom.Store do
 
   @spec live_snapshot(DateTime.t() | nil) :: LiveSnapshot.t()
   def live_snapshot(previous_window_end \\ nil) do
+    if Repo.in_transaction?() do
+      raise ArgumentError, "live snapshot must be loaded outside an existing transaction"
+    end
+
     case Repo.transaction(fn ->
            Repo.query!("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
            load_live_snapshot(previous_window_end)
