@@ -6,6 +6,7 @@ defmodule WorldloomWeb.WorldLiveTest do
   alias Worldloom.Loom.Coordinator
   alias Worldloom.Loom.CoordinatorTestStore
   alias Worldloom.Loom.Instruction
+  alias Worldloom.Loom.LiveSnapshot
   alias Worldloom.Loom.SourceEvent
   alias Worldloom.Loom.Store
   alias Worldloom.Signals.HealthMonitor
@@ -80,40 +81,46 @@ defmodule WorldloomWeb.WorldLiveTest do
     refute has_element?(live_view, "#signal-detail")
   end
 
-  test "caps initial history and every trusted detail window", %{conn: conn} do
-    seed_events(605)
+  test "exposes separate initial snapshot fields with scaffold and ambient", %{conn: conn} do
+    snapshot = seed_live_snapshot_fixture()
 
     {:ok, live_view, _html} = live(conn, "/")
 
-    assert has_element?(live_view, "#loom-canvas[data-instruction-count='400']")
-    assert has_element?(live_view, "#worldloom[data-event-window-size='400']")
-  end
+    assert has_element?(live_view, "#loom-canvas[data-window-end='2026-08-08T12:01:00Z']")
+    assert has_element?(live_view, "#loom-canvas[data-commit-watermark='906']")
+    assert render(live_view) =~ "data-display-events"
+    assert render(live_view) =~ "data-memory-events"
+    assert has_element?(live_view, "#loom-canvas[data-instruction-count='2']")
+    assert has_element?(live_view, "#loom-canvas[data-scaffold-count='2']")
+    assert has_element?(live_view, "#worldloom[data-event-window-size='4']")
 
-  test "supplies a separate public scaffold behind an all-visitor live window", %{conn: conn} do
-    public_events = seed_events(12)
-    visitor_events = seed_visitor_events(405)
+    canvas = live_view |> render() |> LazyHTML.from_fragment() |> LazyHTML.query("#loom-canvas")
 
-    {:ok, live_view, _html} = live(conn, "/")
+    [encoded_display_events] = LazyHTML.attribute(canvas, "data-display-events")
+    [encoded_memory_events] = LazyHTML.attribute(canvas, "data-memory-events")
+    [encoded_ambient] = LazyHTML.attribute(canvas, "data-ambient")
+    [encoded_scaffold] = LazyHTML.attribute(canvas, "data-scaffold")
 
-    assert has_element?(live_view, "#loom-canvas[data-instruction-count='400']")
-    assert has_element?(live_view, "#loom-canvas[data-scaffold-count='12']")
-    assert has_element?(live_view, "#worldloom[data-event-window-size='400']")
+    display_events = Jason.decode!(encoded_display_events)
+    memory_events = Jason.decode!(encoded_memory_events)
+    ambient = Jason.decode!(encoded_ambient)
+    scaffold = Jason.decode!(encoded_scaffold)
 
-    render_hook(live_view, "sequence-gap", %{
-      "after" => List.last(visitor_events).id,
-      "through" => List.last(visitor_events).id + 601
-    })
+    assert source_sequence_pairs(display_events) == source_sequence_pairs(snapshot.display_events)
+    assert source_sequence_pairs(memory_events) == source_sequence_pairs(snapshot.memory_events)
+    assert source_sequence_pairs(scaffold) == source_sequence_pairs(snapshot.display_events)
 
-    assert_push_event live_view, "worldloom:reload", %{
-      instructions: instructions,
-      scaffold: scaffold,
-      watermark: watermark
-    }
+    assert MapSet.disjoint?(
+             MapSet.new(source_sequence_pairs(display_events)),
+             MapSet.new(source_sequence_pairs(memory_events))
+           )
 
-    assert length(instructions) == 400
-    assert Enum.all?(instructions, &(&1["source"] == "visitor"))
-    assert Enum.map(scaffold, & &1["sequence"]) == Enum.map(public_events, & &1.id)
-    assert watermark == List.last(visitor_events).id
+    assert {ambient["source"], ambient["sequence"]} ==
+             {snapshot.ambient.source, snapshot.ambient.id}
+
+    assert ambient["kind"] == "weather"
+    refute {ambient["source"], ambient["sequence"]} in source_sequence_pairs(display_events)
+    refute {ambient["source"], ambient["sequence"]} in source_sequence_pairs(memory_events)
   end
 
   test "validates chapter permalinks and keeps historical views read-only", %{conn: conn} do
@@ -128,13 +135,9 @@ defmodule WorldloomWeb.WorldLiveTest do
       assert has_element?(chapter_view, "#gesture-#{gesture}[disabled]")
     end
 
-    Phoenix.PubSub.broadcast(
-      Worldloom.PubSub,
-      Worldloom.Loom.Coordinator.topic(),
-      {:loom_event, Instruction.from_event(event)}
-    )
+    send(chapter_view.pid, {:loom_snapshot, seed_live_snapshot_fixture()})
 
-    refute_push_event chapter_view, "worldloom:event", _payload
+    refute_push_event chapter_view, "worldloom:snapshot", _payload
 
     for invalid_path <- [
           "/chapters/not-a-date/#{event.id}",
@@ -173,15 +176,17 @@ defmodule WorldloomWeb.WorldLiveTest do
     assert URI.parse(root_url).path == "/"
 
     [broadcast_event] = seed_events(1, ~U[2026-08-03 16:00:00.000000Z])
-    broadcast_instruction = Instruction.from_event(broadcast_event)
+    broadcast_snapshot = Coordinator.current_snapshot()
 
-    Phoenix.PubSub.broadcast(
-      Worldloom.PubSub,
-      Worldloom.Loom.Coordinator.topic(),
-      {:loom_event, broadcast_instruction}
-    )
+    send(live_view.pid, {:loom_snapshot, broadcast_snapshot})
 
-    assert_push_event live_view, "worldloom:event", ^broadcast_instruction
+    assert_push_event live_view, "worldloom:snapshot", %{
+      display_events: [%{"sequence" => broadcast_sequence}]
+    }
+
+    assert broadcast_sequence == broadcast_event.id
+    refute_push_event live_view, "worldloom:event", _legacy_event
+    refute_push_event live_view, "worldloom:catch-up", _legacy_catch_up
 
     render_patch(live_view, chapter_path)
 
@@ -213,15 +218,15 @@ defmodule WorldloomWeb.WorldLiveTest do
 
     assert calls == [
              {Phoenix.PubSub, :subscribe, [Worldloom.PubSub, Worldloom.Loom.Coordinator.topic()]},
-             {Store, :latest, [400]}
+             {Coordinator, :current_snapshot, []}
            ]
   end
 
-  test "loads each initial live lifecycle event window once", %{conn: conn} do
-    {{:ok, _live_view, _html}, latest_call_count} =
-      count_function_calls({Store, :latest, 1}, fn -> live(conn, "/") end)
+  test "loads each initial live lifecycle snapshot once", %{conn: conn} do
+    {{:ok, _live_view, _html}, snapshot_call_count} =
+      count_function_calls({Coordinator, :current_snapshot, 0}, fn -> live(conn, "/") end)
 
-    assert latest_call_count == 2
+    assert snapshot_call_count == 2
   end
 
   test "loads each initial chapter lifecycle event window once", %{conn: conn} do
@@ -242,89 +247,116 @@ defmodule WorldloomWeb.WorldLiveTest do
     assert eventually(fn -> has_element?(second_view, "#viewer-count", "2") end)
   end
 
-  test "pushes committed events and bounded catch-up watermarks", %{conn: conn} do
-    [first] = seed_events(1)
+  test "atomically pushes live snapshots and rebuilds trust and accessibility", %{conn: conn} do
+    _initial_snapshot = seed_live_snapshot_fixture()
     {:ok, live_view, _html} = live(conn, "/")
-    [second] = seed_events(1, DateTime.add(first.occurred_at, 1, :second))
-    second_instruction = Instruction.from_event(second)
 
-    Phoenix.PubSub.broadcast(
-      Worldloom.PubSub,
-      Worldloom.Loom.Coordinator.topic(),
-      {:loom_event, second_instruction}
-    )
+    updated_snapshot = seed_live_snapshot_fixture(907, ~U[2026-08-08 12:02:00Z])
+    put_current_snapshot(updated_snapshot)
+    send(live_view.pid, {:loom_snapshot, updated_snapshot})
 
-    assert_push_event live_view, "worldloom:event", ^second_instruction
+    assert_push_event live_view, "worldloom:snapshot", payload
 
-    render_hook(live_view, "sequence-gap", %{
-      "after" => first.id,
-      "through" => second.id
-    })
+    assert Map.keys(payload) |> Enum.sort() ==
+             [
+               :ambient,
+               :commit_watermark,
+               :display_events,
+               :memory_events,
+               :snapshot_version,
+               :window_end
+             ]
 
-    assert_push_event live_view, "worldloom:catch-up", %{
-      instructions: [^second_instruction],
-      watermark: watermark
-    }
+    assert payload.snapshot_version == 1
+    assert payload.window_end == "2026-08-08T12:02:00Z"
+    assert payload.commit_watermark == 907
 
-    assert watermark == second.id
+    assert payload.display_events ==
+             Enum.map(updated_snapshot.display_events, &Instruction.from_event/1)
 
-    render_hook(live_view, "sequence-gap", %{
-      "after" => second.id,
-      "through" => second.id + 2
-    })
+    assert payload.memory_events ==
+             Enum.map(updated_snapshot.memory_events, &Instruction.from_event/1)
 
-    assert_push_event live_view, "worldloom:catch-up", %{instructions: [], watermark: empty_mark}
-    assert empty_mark == second.id + 2
+    assert payload.ambient == Instruction.from_event(updated_snapshot.ambient)
+    refute_push_event live_view, "worldloom:snapshot", _duplicate_snapshot
+    refute_push_event live_view, "worldloom:event", _legacy_event
+    refute_push_event live_view, "worldloom:catch-up", _legacy_catch_up
+    refute_push_event live_view, "worldloom:reload", _legacy_reload
+    refute_push_event live_view, "sequence-gap", _legacy_gap
 
-    render_hook(live_view, "sequence-gap", %{
-      "after" => second.id,
-      "through" => second.id + 601
-    })
+    trusted_events = updated_snapshot.display_events ++ updated_snapshot.memory_events
+    trusted_pairs = source_sequence_pairs(trusted_events)
 
-    assert_push_event live_view, "worldloom:reload", %{
-      instructions: reloaded,
-      watermark: reload_watermark
-    }
+    assert accessible_sequence_ids(live_view) == Enum.map(trusted_events, & &1.id)
 
-    assert length(reloaded) <= 400
-    assert reload_watermark >= second.id
+    for {source, sequence} <- trusted_pairs do
+      assert has_element?(live_view, "#formation-#{sequence}[phx-value-sequence='#{sequence}']")
+      assert Enum.any?(trusted_events, &(&1.source == source and &1.id == sequence))
+    end
+
+    refute has_element?(live_view, "#formation-#{updated_snapshot.ambient.id}")
+
+    [display_event | _events] = updated_snapshot.display_events
+    render_hook(live_view, "select-formation", %{"sequence" => display_event.id})
+    assert_patch live_view, chapter_path(display_event)
+
+    render_patch(live_view, "/")
+
+    [memory_event | _events] = updated_snapshot.memory_events
+    render_hook(live_view, "select-formation", %{"sequence" => memory_event.id})
+    assert_patch live_view, chapter_path(memory_event)
+
+    render_patch(live_view, "/")
+    render_hook(live_view, "select-formation", %{"sequence" => updated_snapshot.ambient.id})
+    assert has_element?(live_view, "#worldloom[data-mode='live']")
+    refute has_element?(live_view, "#signal-detail")
   end
 
-  test "reload and return-live payloads refresh held ambient weather", %{conn: conn} do
-    _old_weather = seed_weather_event(~U[2026-08-03 11:00:00.000000Z])
+  test "late recovery advances only the snapshot commit watermark", %{conn: conn} do
+    snapshot = seed_live_snapshot_fixture()
     {:ok, live_view, _html} = live(conn, "/")
-    new_weather = seed_weather_event(~U[2026-08-03 12:00:00.000000Z])
 
-    render_hook(live_view, "sequence-gap", %{
-      "after" => new_weather.id,
-      "through" => new_weather.id + 601
-    })
+    recovery_snapshot = %{snapshot | commit_watermark: snapshot.commit_watermark + 1}
+    send(live_view.pid, {:loom_snapshot, recovery_snapshot})
 
-    assert_push_event live_view, "worldloom:reload", %{
-      ambient: %{
-        "sequence" => reload_ambient_sequence,
-        "source" => "open_meteo",
-        "kind" => "weather"
-      }
+    assert_push_event live_view, "worldloom:snapshot", %{
+      window_end: "2026-08-08T12:01:00Z",
+      commit_watermark: 907,
+      display_events: display_events,
+      memory_events: memory_events
     }
 
-    assert reload_ambient_sequence == new_weather.id
+    assert display_events == Enum.map(snapshot.display_events, &Instruction.from_event/1)
+    assert memory_events == Enum.map(snapshot.memory_events, &Instruction.from_event/1)
+    refute_push_event live_view, "worldloom:event", _legacy_event
+    refute_push_event live_view, "worldloom:catch-up", _legacy_catch_up
+    refute_push_event live_view, "worldloom:reload", _legacy_reload
+    refute_push_event live_view, "sequence-gap", _legacy_gap
+  end
+
+  test "return-live refreshes the complete current snapshot including ambient", %{conn: conn} do
+    _initial_snapshot = seed_live_snapshot_fixture()
+    {:ok, live_view, _html} = live(conn, "/")
+    current_snapshot = seed_live_snapshot_fixture(908, ~U[2026-08-08 12:03:00Z])
+    put_current_snapshot(current_snapshot)
 
     render_hook(live_view, "return-live", %{})
 
-    assert_push_event live_view, "worldloom:return-live", %{
-      ambient: %{
-        "sequence" => live_ambient_sequence,
-        "source" => "open_meteo",
-        "kind" => "weather"
-      }
-    }
-
-    assert live_ambient_sequence == new_weather.id
+    assert_push_event live_view, "worldloom:return-live", payload
+    assert payload == encoded_snapshot(current_snapshot)
   end
 
   test "uses a server-owned cursor for throttled bounded history", %{conn: conn} do
     events = seed_events(405)
+
+    put_current_snapshot(%LiveSnapshot{
+      window_end: ~U[2026-08-03 12:06:44Z],
+      commit_watermark: List.last(events).id,
+      display_events: Enum.take(events, -400),
+      memory_events: [],
+      ambient: nil
+    })
+
     {:ok, live_view, _html} = live(conn, "/")
 
     render_hook(live_view, "history-before", %{"sequence" => 999_999_999})
@@ -403,14 +435,15 @@ defmodule WorldloomWeb.WorldLiveTest do
     |> form("#gesture-lane-form", %{"lane" => "0.7"})
     |> render_submit(%{"gesture" => "illuminate"})
 
-    assert_push_event live_view, "worldloom:event", %{
-      "kind" => "illuminate",
-      "source" => "visitor",
-      "lane" => 0.7
-    }
-
     assert_push_event live_view, "worldloom:gesture-accepted", %{"sequence" => sequence}
     assert is_integer(sequence)
+
+    assert_push_event live_view, "worldloom:snapshot", %{
+      commit_watermark: ^sequence,
+      window_end: nil
+    }
+
+    refute_push_event live_view, "worldloom:event", _legacy_event
 
     assert has_element?(live_view, "#gesture-status", "Gesture joined the living edge")
     assert has_element?(live_view, "#gesture-status", "Gesture controls return in 30 seconds.")
@@ -512,6 +545,7 @@ defmodule WorldloomWeb.WorldLiveTest do
 
     assert has_element?(live_view, "#gesture-status", "Choose a valid gesture and lane")
     refute_push_event live_view, "worldloom:event", _rejected
+    refute_push_event live_view, "worldloom:snapshot", _rejected_snapshot
   end
 
   test "renders the Living Fiber semantics and public source attribution", %{conn: conn} do
@@ -599,7 +633,7 @@ defmodule WorldloomWeb.WorldLiveTest do
            )
   end
 
-  test "renders a gesture only from its committed broadcast and exposes cooldown safely", %{
+  test "commits a gesture before its snapshot broadcast and exposes cooldown safely", %{
     conn: conn
   } do
     peer_id = System.unique_integer([:positive, :monotonic])
@@ -614,26 +648,31 @@ defmodule WorldloomWeb.WorldLiveTest do
 
     render_hook(live_view, "gesture", %{"gesture" => "illuminate", "lane" => 0.72})
 
-    assert_push_event live_view, "worldloom:event", %{
-      "kind" => "illuminate",
-      "source" => "visitor",
-      "lane" => 0.72,
-      "sequence" => sequence
+    assert_push_event live_view, "worldloom:gesture-accepted", %{"sequence" => sequence}
+
+    assert_push_event live_view, "worldloom:snapshot", %{
+      commit_watermark: ^sequence,
+      window_end: nil
     }
 
     assert {:ok, stored_event} = Store.fetch(sequence)
+    assert stored_event.kind == "illuminate"
+    assert stored_event.source == "visitor"
+    assert stored_event.lane == 0.72
     assert stored_event.payload["summary"] == "A visitor illuminated a thread"
     assert Enum.sort(Map.keys(stored_event.payload)) == ["summary", "visual"]
     assert Enum.sort(Map.keys(stored_event.payload["visual"])) == ["bend", "pulse", "spread"]
     refute Map.has_key?(stored_event.payload, "visitor_identity")
     refute Map.has_key?(stored_event.payload, "peer_address")
     refute_push_event live_view, "worldloom:event", _duplicate
+    refute_push_event live_view, "worldloom:snapshot", _duplicate_snapshot
 
     render_hook(live_view, "gesture", %{"gesture" => "illuminate", "lane" => 0.72})
     assert has_element?(live_view, "#gesture-status", "Try again in 30 seconds")
     assert has_element?(live_view, "#gesture-status", "Gesture controls return in 30 seconds.")
     assert has_element?(live_view, "#gesture-cooldown-ring[data-seconds='30']")
     refute_push_event live_view, "worldloom:event", _rejected
+    refute_push_event live_view, "worldloom:snapshot", _rejected_snapshot
   end
 
   test "rejects forged, panned-away, and historical gestures with safe text", %{conn: conn} do
@@ -738,29 +777,34 @@ defmodule WorldloomWeb.WorldLiveTest do
                metadata: %{}
              })
 
+    append_current_display(events)
     events
   end
 
-  defp seed_visitor_events(count) do
+  defp seed_visitor_events(count, start_time) do
     unique = System.unique_integer([:positive, :monotonic])
 
-    Enum.map(1..count, fn index ->
-      visitor =
-        SourceEvent.new!(%{
-          kind: :illuminate,
-          source: :visitor,
-          external_id: nil,
-          occurred_at: DateTime.add(~U[2026-08-03 13:00:00.000000Z], index, :second),
-          lane: 0.5,
-          intensity: 0.6,
-          payload: %{"summary" => "Visitor formation #{index}"}
-        })
+    events =
+      Enum.map(1..count, fn index ->
+        visitor =
+          SourceEvent.new!(%{
+            kind: :illuminate,
+            source: :visitor,
+            external_id: nil,
+            occurred_at: DateTime.add(start_time, index - 1, :second),
+            lane: 0.5,
+            intensity: 0.6,
+            payload: %{"summary" => "Visitor formation #{index}"}
+          })
 
-      assert {:ok, event} =
-               Store.commit_visitor(visitor, "world-live-visitor-#{unique}-#{index}")
+        assert {:ok, event} =
+                 Store.commit_visitor(visitor, "world-live-visitor-#{unique}-#{index}")
 
-      event
-    end)
+        event
+      end)
+
+    append_current_display(events)
+    events
   end
 
   defp seed_weather_event(occurred_at) do
@@ -786,7 +830,134 @@ defmodule WorldloomWeb.WorldLiveTest do
                metadata: %{}
              })
 
+    update_current_ambient(event)
     event
+  end
+
+  defp seed_earthquake_event(occurred_at) do
+    unique = System.unique_integer([:positive, :monotonic])
+
+    earthquake =
+      SourceEvent.new!(%{
+        kind: :earthquake,
+        source: :usgs,
+        external_id: "world-live-earthquake-#{unique}",
+        occurred_at: occurred_at,
+        lane: 0.3,
+        intensity: 0.8,
+        payload: %{"summary" => "Earthquake formation #{unique}"}
+      })
+
+    assert {:ok, [event]} =
+             Store.commit_external([earthquake], %{
+               source: "usgs",
+               cursor: "world-live-earthquake-cursor-#{unique}",
+               etag: nil,
+               last_successful_at: occurred_at,
+               metadata: %{}
+             })
+
+    append_current_display([event])
+    event
+  end
+
+  defp seed_live_snapshot_fixture(
+         commit_watermark \\ 906,
+         window_end \\ ~U[2026-08-08 12:01:00Z]
+       ) do
+    display_events = seed_events(2, DateTime.add(window_end, -10, :second))
+    contextual_earthquake = seed_earthquake_event(DateTime.add(window_end, -90, :second))
+    [contextual_visitor] = seed_visitor_events(1, DateTime.add(window_end, -80, :second))
+    ambient = seed_weather_event(DateTime.add(window_end, 30, :second))
+
+    snapshot = %LiveSnapshot{
+      window_end: window_end,
+      commit_watermark: commit_watermark,
+      display_events: display_events,
+      memory_events: [contextual_earthquake, contextual_visitor],
+      ambient: ambient
+    }
+
+    put_current_snapshot(snapshot)
+    snapshot
+  end
+
+  defp append_current_display(events) do
+    snapshot = Coordinator.current_snapshot()
+    candidates = snapshot.display_events ++ events
+
+    window_end =
+      candidates
+      |> Enum.max_by(&{&1.occurred_at, &1.id})
+      |> Map.fetch!(:occurred_at)
+      |> DateTime.truncate(:second)
+
+    display_events =
+      candidates
+      |> Enum.uniq_by(& &1.id)
+      |> Enum.filter(&(DateTime.diff(&1.occurred_at, window_end, :second) in -60..0))
+      |> Enum.sort_by(&{&1.occurred_at, &1.id})
+
+    commit_watermark =
+      Enum.reduce(events, snapshot.commit_watermark, fn event, watermark ->
+        max(event.id, watermark)
+      end)
+
+    put_current_snapshot(%{
+      snapshot
+      | window_end: window_end,
+        commit_watermark: commit_watermark,
+        display_events: display_events
+    })
+  end
+
+  defp update_current_ambient(event) do
+    snapshot = Coordinator.current_snapshot()
+
+    put_current_snapshot(%{
+      snapshot
+      | commit_watermark: max(event.id, snapshot.commit_watermark),
+        ambient: event
+    })
+  end
+
+  defp put_current_snapshot(snapshot) do
+    CoordinatorTestStore.put_snapshot(snapshot)
+
+    :sys.replace_state(Coordinator, fn state ->
+      %{state | snapshot: snapshot, highest_sequence: snapshot.commit_watermark}
+    end)
+  end
+
+  defp encoded_snapshot(snapshot) do
+    %{
+      snapshot_version: snapshot.snapshot_version,
+      window_end: snapshot.window_end && DateTime.to_iso8601(snapshot.window_end),
+      commit_watermark: snapshot.commit_watermark,
+      display_events: Enum.map(snapshot.display_events, &Instruction.from_event/1),
+      memory_events: Enum.map(snapshot.memory_events, &Instruction.from_event/1),
+      ambient: snapshot.ambient && Instruction.from_event(snapshot.ambient)
+    }
+  end
+
+  defp source_sequence_pairs(events) do
+    Enum.map(events, fn
+      %{source: source, id: sequence} -> {source, sequence}
+      %{"source" => source, "sequence" => sequence} -> {source, sequence}
+    end)
+  end
+
+  defp accessible_sequence_ids(live_view) do
+    live_view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("#accessible-formations button")
+    |> LazyHTML.attribute("id")
+    |> Enum.map(fn "formation-" <> sequence -> String.to_integer(sequence) end)
+  end
+
+  defp chapter_path(event) do
+    "/chapters/#{Date.to_iso8601(DateTime.to_date(event.occurred_at))}/#{event.id}"
   end
 
   defp eventually(assertion, attempts \\ 20)
@@ -804,7 +975,7 @@ defmodule WorldloomWeb.WorldLiveTest do
   defp trace_route_calls(pid, route_change) do
     traced_functions = [
       {Phoenix.PubSub, :subscribe, 2},
-      {Store, :latest, 1}
+      {Coordinator, :current_snapshot, 0}
     ]
 
     Enum.each(traced_functions, &:erlang.trace_pattern(&1, true, []))

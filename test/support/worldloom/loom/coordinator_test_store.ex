@@ -34,6 +34,11 @@ defmodule Worldloom.Loom.CoordinatorTestStore do
     Agent.get(__MODULE__, fn state -> Enum.reverse(state.calls) end)
   end
 
+  @spec put_snapshot(LiveSnapshot.t()) :: :ok
+  def put_snapshot(%LiveSnapshot{} = snapshot) do
+    Agent.update(__MODULE__, &Map.put(&1, :commit_snapshot, snapshot))
+  end
+
   @spec empty_snapshot(non_neg_integer()) :: LiveSnapshot.t()
   def empty_snapshot(commit_watermark \\ 0) do
     %LiveSnapshot{

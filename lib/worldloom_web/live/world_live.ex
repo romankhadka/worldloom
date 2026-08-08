@@ -5,6 +5,7 @@ defmodule WorldloomWeb.WorldLive do
   alias Worldloom.Loom.Event
   alias Worldloom.Loom.GesturePolicy
   alias Worldloom.Loom.Instruction
+  alias Worldloom.Loom.LiveSnapshot
   alias Worldloom.Loom.Store
   alias Worldloom.Signals.HealthMonitor
   alias WorldloomWeb.Presence
@@ -29,6 +30,11 @@ defmodule WorldloomWeb.WorldLive do
       |> assign(:live?, action == :live)
       |> assign(:mode, action)
       |> assign(:instructions, [])
+      |> assign(:snapshot_version, 1)
+      |> assign(:window_end, nil)
+      |> assign(:commit_watermark, 0)
+      |> assign(:display_events, [])
+      |> assign(:memory_events, [])
       |> assign(:scaffold, [])
       |> assign(:ambient, nil)
       |> assign(:trusted_events, %{})
@@ -75,22 +81,17 @@ defmodule WorldloomWeb.WorldLive do
   end
 
   @impl true
-  def handle_info({:loom_event, instruction}, %{assigns: %{live?: true}} = socket) do
-    socket =
-      case Store.fetch(instruction["sequence"]) do
-        {:ok, event} ->
-          socket
-          |> assign(:trusted_events, bounded_events(socket.assigns.trusted_events, [event]))
-          |> stream_insert(:accessible_formations, instruction, at: -1, limit: -@accessible_limit)
-
-        :error ->
-          socket
-      end
-
-    {:noreply, push_event(socket, "worldloom:event", instruction)}
+  def handle_info(
+        {:loom_snapshot, %LiveSnapshot{} = snapshot},
+        %{assigns: %{live?: true}} = socket
+      ) do
+    {:noreply,
+     socket
+     |> assign_live_snapshot(snapshot)
+     |> push_event("worldloom:snapshot", encode_snapshot(snapshot))}
   end
 
-  def handle_info({:loom_event, _instruction}, socket), do: {:noreply, socket}
+  def handle_info({:loom_snapshot, %LiveSnapshot{}}, socket), do: {:noreply, socket}
 
   def handle_info({:feed_health, health}, socket) do
     {:noreply, assign(socket, :feed_health, health)}
@@ -119,52 +120,6 @@ defmodule WorldloomWeb.WorldLive do
   end
 
   @impl true
-  def handle_event(
-        "sequence-gap",
-        %{"after" => after_sequence, "through" => through_sequence},
-        socket
-      )
-      when is_integer(after_sequence) and is_integer(through_sequence) and
-             after_sequence >= 0 and through_sequence >= after_sequence do
-    if through_sequence - after_sequence > @maximum_window do
-      events = Store.latest(@initial_history_limit)
-      instructions = Enum.map(events, &Instruction.from_event/1)
-      scaffold = public_scaffold(events, nil)
-      ambient = ambient_instruction(events, nil)
-
-      {:noreply,
-       socket
-       |> assign(:trusted_events, trusted_event_map(events))
-       |> push_event("worldloom:reload", %{
-         instructions: instructions,
-         scaffold: scaffold,
-         ambient: ambient,
-         watermark: Store.highest_sequence()
-       })}
-    else
-      events = Store.after(after_sequence, through_sequence, @maximum_window)
-      instructions = Enum.map(events, &Instruction.from_event/1)
-
-      socket =
-        Enum.reduce(instructions, socket, fn instruction, updated_socket ->
-          stream_insert(updated_socket, :accessible_formations, instruction,
-            at: -1,
-            limit: -@accessible_limit
-          )
-        end)
-
-      {:noreply,
-       socket
-       |> assign(:trusted_events, bounded_events(socket.assigns.trusted_events, events))
-       |> push_event("worldloom:catch-up", %{
-         instructions: instructions,
-         watermark: through_sequence
-       })}
-    end
-  end
-
-  def handle_event("sequence-gap", _payload, socket), do: {:noreply, socket}
-
   def handle_event("history-before", _payload, socket) do
     now_ms = System.monotonic_time(:millisecond)
 
@@ -237,21 +192,13 @@ defmodule WorldloomWeb.WorldLive do
   def handle_event("gesture", payload, socket), do: commit_gesture(payload, socket)
 
   def handle_event("return-live", _payload, socket) do
-    events = Store.latest(@initial_history_limit)
-    instructions = Enum.map(events, &Instruction.from_event/1)
-    scaffold = public_scaffold(events, nil)
-    ambient = ambient_instruction(events, nil)
+    snapshot = Coordinator.current_snapshot()
 
     {:noreply,
      socket
      |> assign(:at_live_edge, true)
-     |> assign(:trusted_events, trusted_event_map(events))
-     |> push_event("worldloom:return-live", %{
-       instructions: instructions,
-       scaffold: scaffold,
-       ambient: ambient,
-       watermark: Store.highest_sequence()
-     })}
+     |> assign_live_snapshot(snapshot)
+     |> push_event("worldloom:return-live", encode_snapshot(snapshot))}
   end
 
   def handle_event("select-formation", %{"sequence" => sequence}, socket)
@@ -369,7 +316,7 @@ defmodule WorldloomWeb.WorldLive do
 
   defp enter_live_route(socket, uri) do
     socket = transition_coordinator_subscription(socket, true)
-    events = Store.latest(@initial_history_limit)
+    snapshot = Coordinator.current_snapshot()
     route_changed? = route_changed?(socket, uri)
 
     socket =
@@ -383,15 +330,10 @@ defmodule WorldloomWeb.WorldLive do
       |> assign(:permalink, URI.parse(uri).path || "/")
       |> assign(:current_url, uri)
       |> restore_live_gesture_state()
-      |> assign_event_window(events, nil)
+      |> assign_live_snapshot(snapshot)
 
     if route_changed? do
-      push_event(socket, "worldloom:return-live", %{
-        instructions: socket.assigns.instructions,
-        scaffold: socket.assigns.scaffold,
-        ambient: encode_ambient(socket.assigns.ambient),
-        watermark: instruction_watermark(socket.assigns.instructions)
-      })
+      push_event(socket, "worldloom:return-live", encode_snapshot(snapshot))
     else
       socket
     end
@@ -466,6 +408,11 @@ defmodule WorldloomWeb.WorldLive do
     socket
     |> assign(:utc_chapter, utc_chapter(events, selected_event))
     |> assign(:instructions, instructions)
+    |> assign(:snapshot_version, 1)
+    |> assign(:window_end, nil)
+    |> assign(:commit_watermark, instruction_watermark(instructions))
+    |> assign(:display_events, [])
+    |> assign(:memory_events, [])
     |> assign(:scaffold, public_scaffold(events, selected_event))
     |> assign(:ambient, ambient_event(events, selected_event))
     |> assign(:trusted_events, trusted_event_map(events))
@@ -474,18 +421,54 @@ defmodule WorldloomWeb.WorldLive do
     |> stream(:accessible_formations, Enum.take(instructions, -@accessible_limit), reset: true)
   end
 
+  defp assign_live_snapshot(socket, snapshot) do
+    encoded_snapshot = encode_snapshot(snapshot)
+    trusted_events = snapshot.display_events ++ snapshot.memory_events
+    accessible_formations = encoded_snapshot.display_events ++ encoded_snapshot.memory_events
+
+    socket
+    |> assign(:utc_chapter, snapshot_utc_chapter(snapshot.window_end))
+    |> assign(:snapshot_version, encoded_snapshot.snapshot_version)
+    |> assign(:window_end, encoded_snapshot.window_end)
+    |> assign(:commit_watermark, encoded_snapshot.commit_watermark)
+    |> assign(:display_events, encoded_snapshot.display_events)
+    |> assign(:memory_events, encoded_snapshot.memory_events)
+    |> assign(:instructions, encoded_snapshot.display_events)
+    |> assign(:scaffold, live_scaffold(snapshot.display_events))
+    |> assign(:ambient, snapshot.ambient)
+    |> assign(:trusted_events, trusted_event_map(trusted_events))
+    |> assign(:oldest_loaded_sequence, minimum_sequence(trusted_events))
+    |> assign(:history_requested_at, nil)
+    |> stream(:accessible_formations, accessible_formations, reset: true)
+  end
+
+  defp encode_snapshot(snapshot) do
+    %{
+      snapshot_version: snapshot.snapshot_version,
+      window_end: encode_window_end(snapshot.window_end),
+      commit_watermark: snapshot.commit_watermark,
+      display_events: Enum.map(snapshot.display_events, &Instruction.from_event/1),
+      memory_events: Enum.map(snapshot.memory_events, &Instruction.from_event/1),
+      ambient: snapshot.ambient && Instruction.from_event(snapshot.ambient)
+    }
+  end
+
+  defp encode_window_end(nil), do: nil
+  defp encode_window_end(window_end), do: DateTime.to_iso8601(window_end)
+
+  defp live_scaffold(events) do
+    events
+    |> Enum.filter(&(&1.source == "wikimedia"))
+    |> Enum.take(-@public_scaffold_limit)
+    |> Enum.map(&Instruction.from_event/1)
+  end
+
   defp public_scaffold([], _selected_event), do: []
 
   defp public_scaffold(events, selected_event) do
     (selected_event || List.last(events)).id
     |> Store.wikimedia_before(@public_scaffold_limit)
     |> Enum.map(&Instruction.from_event/1)
-  end
-
-  defp ambient_instruction(events, selected_event) do
-    events
-    |> ambient_event(selected_event)
-    |> encode_ambient()
   end
 
   defp encode_ambient(nil), do: nil
@@ -588,6 +571,8 @@ defmodule WorldloomWeb.WorldLive do
   defp older_sequence(events, _socket), do: oldest_sequence(events)
   defp oldest_sequence([]), do: nil
   defp oldest_sequence([event | _events]), do: event.id
+  defp minimum_sequence([]), do: nil
+  defp minimum_sequence(events), do: events |> Enum.map(& &1.id) |> Enum.min()
   defp trusted_event_map(events), do: Map.new(events, &{&1.id, &1})
   defp formation_dom_id(instruction), do: "formation-#{instruction["sequence"]}"
   defp chapter_dom_id(chapter), do: "chapter-#{Date.to_iso8601(chapter.date)}"
@@ -607,6 +592,14 @@ defmodule WorldloomWeb.WorldLive do
 
   defp utc_chapter(events, selected_event) do
     (selected_event || List.last(events)).occurred_at
+    |> DateTime.to_date()
+    |> Date.to_iso8601()
+  end
+
+  defp snapshot_utc_chapter(nil), do: utc_chapter([], nil)
+
+  defp snapshot_utc_chapter(window_end) do
+    window_end
     |> DateTime.to_date()
     |> Date.to_iso8601()
   end
