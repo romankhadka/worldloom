@@ -3,10 +3,40 @@ defmodule WorldloomWeb.WorldLiveTest do
 
   import Phoenix.LiveViewTest
 
+  alias Worldloom.Loom.Coordinator
+  alias Worldloom.Loom.CoordinatorTestStore
   alias Worldloom.Loom.Instruction
   alias Worldloom.Loom.SourceEvent
   alias Worldloom.Loom.Store
   alias Worldloom.Signals.HealthMonitor
+
+  setup do
+    start_supervised!(
+      {CoordinatorTestStore,
+       delegate: Store,
+       commit_snapshot: CoordinatorTestStore.empty_snapshot(Store.highest_sequence())}
+    )
+
+    previous_coordinator_state = :sys.get_state(Coordinator)
+    snapshot = CoordinatorTestStore.live_snapshot(nil)
+
+    :sys.replace_state(Coordinator, fn state ->
+      %{
+        state
+        | store: CoordinatorTestStore,
+          snapshot: snapshot,
+          highest_sequence: snapshot.commit_watermark
+      }
+    end)
+
+    on_exit(fn ->
+      if Process.whereis(Coordinator) do
+        :sys.replace_state(Coordinator, fn _state -> previous_coordinator_state end)
+      end
+    end)
+
+    :ok
+  end
 
   test "serves every public mode with the stable loom skeleton", %{conn: conn} do
     [_event] = seed_events(1)

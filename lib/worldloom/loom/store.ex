@@ -72,24 +72,16 @@ defmodule Worldloom.Loom.Store do
       raise ArgumentError, "live snapshot must be loaded outside an existing transaction"
     end
 
-    if sandbox_pool?() do
-      load_live_snapshot(previous_window_end)
-    else
-      case Repo.transaction(fn ->
-             Repo.query!("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-             load_live_snapshot(previous_window_end)
-           end) do
-        {:ok, snapshot} ->
-          snapshot
+    case Repo.transaction(fn ->
+           Repo.query!("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+           load_live_snapshot(previous_window_end)
+         end) do
+      {:ok, snapshot} ->
+        snapshot
 
-        {:error, reason} ->
-          raise "live snapshot transaction rolled back unexpectedly: #{inspect(reason)}"
-      end
+      {:error, reason} ->
+        raise "live snapshot transaction rolled back unexpectedly: #{inspect(reason)}"
     end
-  end
-
-  defp sandbox_pool? do
-    Repo.get_dynamic_repo() == Repo and Repo.config()[:pool] == Ecto.Adapters.SQL.Sandbox
   end
 
   defp load_live_snapshot(previous_window_end) do

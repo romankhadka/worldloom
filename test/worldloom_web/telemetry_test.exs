@@ -4,7 +4,9 @@ defmodule WorldloomWeb.TelemetryTest do
   import ExUnit.CaptureLog
 
   alias Worldloom.Loom.Coordinator
+  alias Worldloom.Loom.CoordinatorTestStore
   alias Worldloom.Loom.SourceEvent
+  alias Worldloom.Loom.Store
   alias WorldloomWeb.Telemetry
 
   @events [
@@ -190,7 +192,16 @@ defmodule WorldloomWeb.TelemetryTest do
 
   defp start_coordinator do
     topic = "loom:telemetry-test:#{System.unique_integer([:positive, :monotonic])}"
-    {:ok, coordinator} = Coordinator.start_link(name: nil, topic: topic)
+
+    start_supervised!(
+      {CoordinatorTestStore,
+       delegate: Store,
+       commit_snapshot: CoordinatorTestStore.empty_snapshot(Store.highest_sequence())}
+    )
+
+    {:ok, coordinator} =
+      Coordinator.start_link(name: nil, topic: topic, store: CoordinatorTestStore)
+
     on_exit(fn -> if Process.alive?(coordinator), do: GenServer.stop(coordinator) end)
     coordinator
   end

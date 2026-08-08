@@ -128,17 +128,26 @@ defmodule Worldloom.Loom.CoordinatorTest do
     assert Coordinator.highest_sequence(coordinator) == sequence
   end
 
-  test "a separate sandbox process sees the row before the snapshot is received" do
-    {coordinator, topic} = start_coordinator(store: Store)
+  @tag :committed_storage
+  test "a separate committed connection sees the durable row before the snapshot is received", %{
+    independent_repo: independent_repo,
+    storage_token: storage_token
+  } do
+    {coordinator, topic} = start_database_coordinator(independent_repo)
 
     assert {:ok, [event]} =
              Coordinator.commit_external(
                coordinator,
-               [source_event(1)],
-               checkpoint("cursor-1")
+               [source_event(1, nil, storage_token)],
+               checkpoint("cursor-1", storage_token)
              )
 
-    visible_event = Task.async(fn -> Store.fetch(event.id) end) |> Task.await()
+    visible_event =
+      Task.async(fn ->
+        Repo.put_dynamic_repo(independent_repo)
+        Store.fetch(event.id)
+      end)
+      |> Task.await()
 
     assert visible_event == {:ok, event}
     sequence = event.id

@@ -2,6 +2,7 @@ defmodule Worldloom.Signals.BufferTest do
   use Worldloom.DataCase
 
   alias Worldloom.Loom.Coordinator
+  alias Worldloom.Loom.CoordinatorTestStore
   alias Worldloom.Loom.FeedCheckpoint
   alias Worldloom.Loom.SourceEvent
   alias Worldloom.Loom.Store
@@ -217,7 +218,19 @@ defmodule Worldloom.Signals.BufferTest do
           coordinator
 
         :error ->
-          {:ok, coordinator} = Coordinator.start_link(name: nil, topic: topic)
+          start_supervised!(
+            {CoordinatorTestStore,
+             delegate: Store,
+             commit_snapshot: CoordinatorTestStore.empty_snapshot(Store.highest_sequence())}
+          )
+
+          {:ok, coordinator} =
+            Coordinator.start_link(
+              name: nil,
+              topic: topic,
+              store: CoordinatorTestStore
+            )
+
           coordinator
       end
 
