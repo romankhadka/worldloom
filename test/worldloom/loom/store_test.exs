@@ -6,6 +6,43 @@ defmodule Worldloom.Loom.StoreTest do
   alias Worldloom.Loom.SourceEvent
   alias Worldloom.Loom.Store
 
+  @live_source_count 3
+  @contextual_source_count 2
+  @snapshot_metadata_select_count 3
+  @live_snapshot_select_ceiling @live_source_count + @contextual_source_count +
+                                  @snapshot_metadata_select_count
+
+  setup context do
+    if context[:committed_storage] do
+      {:ok, independent_repo} =
+        Repo.start_link(name: nil, pool: DBConnection.ConnectionPool, pool_size: 4)
+
+      Process.unlink(independent_repo)
+      Repo.put_dynamic_repo(independent_repo)
+      storage_token = "store-test-#{System.unique_integer([:positive, :monotonic])}"
+      Process.put(:store_test_storage_token, storage_token)
+
+      on_exit(fn ->
+        if Process.alive?(independent_repo) do
+          Repo.put_dynamic_repo(independent_repo)
+
+          Event
+          |> where(
+            [event],
+            fragment("?->>'store_test_storage_token'", event.payload) == ^storage_token
+          )
+          |> Repo.delete_all()
+
+          Supervisor.stop(independent_repo)
+        end
+      end)
+
+      {:ok, independent_repo: independent_repo, storage_token: storage_token}
+    else
+      :ok
+    end
+  end
+
   test "commits a source batch in sequence order with deterministic visuals" do
     events = [source_event(2), source_event(1)]
 
@@ -169,6 +206,30 @@ defmodule Worldloom.Loom.StoreTest do
     assert definition =~ "USING btree (source, id)"
   end
 
+  test "live event-time lookups have source and primary-anchor indexes" do
+    indexes =
+      Repo.query!("""
+      SELECT indexname, indexdef
+      FROM pg_indexes
+      WHERE schemaname = 'public'
+        AND indexname IN (
+          'loom_events_source_occurred_at_id_index',
+          'loom_events_primary_occurred_at_id_index'
+        )
+      """)
+      |> Map.fetch!(:rows)
+      |> Map.new(fn [name, definition] -> {name, definition} end)
+
+    assert indexes["loom_events_source_occurred_at_id_index"] =~
+             "USING btree (source, occurred_at, id)"
+
+    primary_definition = indexes["loom_events_primary_occurred_at_id_index"]
+    assert primary_definition =~ "USING btree (occurred_at, id)"
+    assert primary_definition =~ "WHERE"
+    assert primary_definition =~ "source"
+    assert primary_definition =~ "<> 'open_meteo'"
+  end
+
   test "around, after, before, ambient, fetch, and highest sequence are bounded and ordered" do
     weather = weather_event(0, ~U[2026-08-03 11:59:59.000000Z])
     wikimedia = Enum.map(1..6, &source_event/1)
@@ -200,6 +261,7 @@ defmodule Worldloom.Loom.StoreTest do
     assert_raise ArgumentError, fn -> Store.before(target.id, 0) end
   end
 
+  @tag :committed_storage
   test "live snapshot loads bounded source candidates and the authoritative watermark" do
     stored_wikimedia =
       insert_stored_events("wikimedia", 1..241, fn index ->
@@ -232,6 +294,7 @@ defmodule Worldloom.Loom.StoreTest do
     refute weather in snapshot.display_events
   end
 
+  @tag :committed_storage
   test "live snapshot supplies contextual memory behind full current source sets" do
     [_anchor] =
       insert_stored_events("wikimedia", [1], fn _index -> ~U[2026-08-08 12:01:00Z] end)
@@ -257,6 +320,7 @@ defmodule Worldloom.Loom.StoreTest do
              [contextual_earthquake.id | contextual_visitor_ids]
   end
 
+  @tag :committed_storage
   test "live snapshot query count does not grow with Wikimedia row volume" do
     insert_stored_events("wikimedia", 1..240, fn _index -> ~U[2026-08-08 12:01:00Z] end)
 
@@ -268,10 +332,11 @@ defmodule Worldloom.Loom.StoreTest do
 
     {_snapshot, query_count_at_2_400} = count_repo_queries(fn -> Store.live_snapshot(nil) end)
 
-    assert query_count_at_240 == 8
     assert query_count_at_2_400 == query_count_at_240
+    assert query_count_at_240 <= @live_snapshot_select_ceiling
   end
 
+  @tag :committed_storage
   test "live snapshot has an empty version one envelope when storage is empty" do
     snapshot = Store.live_snapshot(nil)
 
@@ -281,6 +346,118 @@ defmodule Worldloom.Loom.StoreTest do
     assert snapshot.display_events == []
     assert snapshot.memory_events == []
     assert snapshot.ambient == nil
+  end
+
+  @tag :committed_storage
+  test "live snapshot never partially represents an atomic concurrent batch", %{
+    independent_repo: independent_repo,
+    storage_token: storage_token
+  } do
+    [_anchor] =
+      insert_stored_events("wikimedia", [10_001], fn _index ->
+        ~U[2026-08-08 12:01:00Z]
+      end)
+
+    test_process = self()
+
+    writer =
+      Task.async(fn ->
+        Repo.put_dynamic_repo(independent_repo)
+
+        Repo.transaction(fn ->
+          rows = [
+            concurrent_event_row(
+              "wikimedia",
+              "#{storage_token}-batch-wikimedia",
+              10_002,
+              ~U[2026-08-08 12:00:50Z],
+              storage_token
+            ),
+            concurrent_event_row(
+              "usgs",
+              "#{storage_token}-batch-current-earthquake",
+              10_003,
+              ~U[2026-08-08 12:00:40Z],
+              storage_token
+            ),
+            concurrent_event_row(
+              "usgs",
+              "#{storage_token}-batch-contextual-earthquake",
+              10_004,
+              ~U[2026-08-08 11:59:59Z],
+              storage_token
+            )
+          ]
+
+          {_count, batch_events} = Repo.insert_all(Event, rows, returning: true)
+          send(test_process, {:concurrent_batch_inserted, batch_events})
+
+          receive do
+            {:commit_concurrent_batch, ^storage_token} -> batch_events
+          after
+            5_000 -> raise "timed out waiting to commit concurrent batch"
+          end
+        end)
+      end)
+
+    assert_receive {:concurrent_batch_inserted, batch_events}, 1_000
+
+    [watermark] =
+      insert_stored_events("open_meteo", [10_005], fn _index ->
+        ~U[2026-08-08 13:00:00Z]
+      end)
+
+    handler_id = {__MODULE__, :concurrent_snapshot, make_ref()}
+    synchronization_ref = make_ref()
+    event_name = Repo.config()[:telemetry_prefix] ++ [:query]
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        event_name,
+        fn _event_name, _measurements, metadata, {parent, synchronization_ref} ->
+          direct_wikimedia_select? =
+            String.starts_with?(metadata.query, "SELECT") and
+              String.contains?(metadata.query, ~s(l0."source" = $)) and
+              Enum.any?(metadata.params, &(&1 == "wikimedia"))
+
+          if direct_wikimedia_select? do
+            send(parent, {:wikimedia_select_complete, self(), synchronization_ref})
+
+            receive do
+              {:resume_live_snapshot, ^synchronization_ref} -> :ok
+            after
+              5_000 -> raise "timed out waiting to resume live snapshot"
+            end
+          end
+        end,
+        {self(), synchronization_ref}
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    snapshot_reader =
+      Task.async(fn ->
+        Repo.put_dynamic_repo(independent_repo)
+        Store.live_snapshot(nil)
+      end)
+
+    assert_receive {:wikimedia_select_complete, snapshot_process, ^synchronization_ref}, 1_000
+    send(writer.pid, {:commit_concurrent_batch, storage_token})
+    assert {:ok, ^batch_events} = Task.await(writer, 1_000)
+    send(snapshot_process, {:resume_live_snapshot, synchronization_ref})
+    snapshot = Task.await(snapshot_reader, 1_000)
+
+    batch_ids = batch_events |> Enum.map(& &1.id) |> Enum.sort()
+
+    represented_batch_ids =
+      (snapshot.display_events ++ snapshot.memory_events)
+      |> Enum.map(& &1.id)
+      |> Enum.filter(&(&1 in batch_ids))
+      |> Enum.sort()
+
+    assert snapshot.commit_watermark == watermark.id
+    assert represented_batch_ids in [[], batch_ids]
   end
 
   test "UTC chapters honor day seams and report counts and sequence bounds" do
@@ -342,15 +519,17 @@ defmodule Worldloom.Loom.StoreTest do
   end
 
   defp insert_stored_events(source, indices, occurred_at) do
+    storage_token = Process.get(:store_test_storage_token)
+
     rows =
       Enum.map(indices, fn index ->
         event_occurred_at = occurred_at.(index)
 
         {kind, external_id} =
           case source do
-            "wikimedia" -> {"wikimedia", "stored-revision-#{index}"}
-            "usgs" -> {"earthquake", "stored-earthquake-#{index}"}
-            "open_meteo" -> {"weather", "stored-weather-#{index}"}
+            "wikimedia" -> {"wikimedia", stored_external_id("revision", index, storage_token)}
+            "usgs" -> {"earthquake", stored_external_id("earthquake", index, storage_token)}
+            "open_meteo" -> {"weather", stored_external_id("weather", index, storage_token)}
             "visitor" -> {"illuminate", nil}
           end
 
@@ -366,7 +545,7 @@ defmodule Worldloom.Loom.StoreTest do
           render_seed: index,
           lane: 0.5,
           intensity: 0.5,
-          payload: %{},
+          payload: stored_payload(storage_token),
           inserted_at: ~U[2026-08-08 00:00:00.000000Z]
         }
       end)
@@ -374,6 +553,29 @@ defmodule Worldloom.Loom.StoreTest do
     {_count, events} = Repo.insert_all(Event, rows, returning: true)
     events
   end
+
+  defp concurrent_event_row(source, external_id, render_seed, occurred_at, storage_token) do
+    kind = if source == "wikimedia", do: "wikimedia", else: "earthquake"
+
+    %{
+      kind: kind,
+      source: source,
+      external_id: external_id,
+      occurred_at: %{occurred_at | microsecond: {elem(occurred_at.microsecond, 0), 6}},
+      render_version: 1,
+      render_seed: render_seed,
+      lane: 0.5,
+      intensity: 0.5,
+      payload: stored_payload(storage_token),
+      inserted_at: ~U[2026-08-08 00:00:00.000000Z]
+    }
+  end
+
+  defp stored_external_id(kind, index, nil), do: "stored-#{kind}-#{index}"
+  defp stored_external_id(kind, index, token), do: "#{token}-stored-#{kind}-#{index}"
+
+  defp stored_payload(nil), do: %{}
+  defp stored_payload(token), do: %{"store_test_storage_token" => token}
 
   defp count_repo_queries(operation) do
     handler_id = {__MODULE__, make_ref()}
@@ -384,8 +586,10 @@ defmodule Worldloom.Loom.StoreTest do
       :telemetry.attach(
         handler_id,
         event_name,
-        fn _event_name, _measurements, _metadata, {test_process, query_ref} ->
-          send(test_process, {:store_query, query_ref})
+        fn _event_name, _measurements, metadata, {test_process, query_ref} ->
+          if String.starts_with?(metadata.query, "SELECT") do
+            send(test_process, {:store_query, query_ref})
+          end
         end,
         {self(), message_ref}
       )

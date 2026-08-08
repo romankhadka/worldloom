@@ -68,6 +68,19 @@ defmodule Worldloom.Loom.Store do
 
   @spec live_snapshot(DateTime.t() | nil) :: LiveSnapshot.t()
   def live_snapshot(previous_window_end \\ nil) do
+    case Repo.transaction(fn ->
+           Repo.query!("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+           load_live_snapshot(previous_window_end)
+         end) do
+      {:ok, snapshot} ->
+        snapshot
+
+      {:error, reason} ->
+        raise "live snapshot transaction rolled back unexpectedly: #{inspect(reason)}"
+    end
+  end
+
+  defp load_live_snapshot(previous_window_end) do
     commit_watermark = highest_sequence()
 
     if commit_watermark == 0 do
@@ -236,8 +249,7 @@ defmodule Worldloom.Loom.Store do
       Event
       |> where(
         [event],
-        event.id <= ^commit_watermark and event.kind != "weather" and
-          event.source != "open_meteo"
+        event.id <= ^commit_watermark and fragment("? <> 'open_meteo'", event.source)
       )
       |> order_by([event], desc: event.occurred_at, desc: event.id)
       |> limit(1)
