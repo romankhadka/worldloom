@@ -40,7 +40,7 @@ defmodule WorldloomWeb.WorldLive do
       |> assign(:ambient, nil)
       |> assign(:trusted_events, %{})
       |> assign(:trusted_history_events, %{})
-      |> assign(:oldest_loaded_sequence, nil)
+      |> assign(:history_cursor, nil)
       |> assign(:history_requested_at, nil)
       |> assign(:selected_event, nil)
       |> assign(:selected_detail, nil)
@@ -132,16 +132,15 @@ defmodule WorldloomWeb.WorldLive do
     now_ms = System.monotonic_time(:millisecond)
 
     if history_request_allowed?(socket.assigns.history_requested_at, now_ms) do
-      before_sequence =
-        history_before_sequence(payload, socket.assigns.oldest_loaded_sequence)
+      history_cursor = requested_history_cursor(payload, socket.assigns.history_cursor)
 
-      events = history_before(before_sequence)
+      events = history_events(history_cursor)
       instructions = Enum.map(events, &Instruction.from_event/1)
 
       {:noreply,
        socket
        |> assign(:history_requested_at, now_ms)
-       |> assign(:oldest_loaded_sequence, older_sequence(events, socket))
+       |> assign(:history_cursor, older_history_cursor(events, socket))
        |> assign(
          :trusted_history_events,
          bounded_history_events(socket.assigns.trusted_history_events, events)
@@ -444,7 +443,7 @@ defmodule WorldloomWeb.WorldLive do
     |> assign(:ambient, ambient_event(events, selected_event))
     |> assign(:trusted_events, trusted_event_map(events))
     |> clear_history_authorization()
-    |> assign(:oldest_loaded_sequence, oldest_sequence(events))
+    |> assign(:history_cursor, event_history_cursor(events))
     |> assign(:history_requested_at, nil)
     |> stream(:accessible_formations, Enum.take(instructions, -@accessible_limit), reset: true)
   end
@@ -482,7 +481,7 @@ defmodule WorldloomWeb.WorldLive do
     |> assign(:ambient, snapshot.ambient)
     |> assign(:trusted_events, trusted_event_map(trusted_events))
     |> assign(
-      :oldest_loaded_sequence,
+      :history_cursor,
       live_history_cursor(snapshot.display_events, snapshot.commit_watermark)
     )
     |> assign(:history_requested_at, nil)
@@ -616,14 +615,18 @@ defmodule WorldloomWeb.WorldLive do
 
   defp clear_history_authorization(socket), do: assign(socket, :trusted_history_events, %{})
 
-  defp history_before(nil), do: []
-  defp history_before(sequence), do: Store.before(sequence, @history_page_limit)
+  defp history_events(nil), do: []
+  defp history_events({:before, sequence}), do: Store.before(sequence, @history_page_limit)
+  defp history_events({:through, sequence}), do: Store.through(sequence, @history_page_limit)
 
-  defp history_before_sequence(%{"before" => sequence}, fallback_sequence) do
-    positive_sequence(sequence) || fallback_sequence
+  defp requested_history_cursor(%{"before" => sequence}, fallback_cursor) do
+    case positive_sequence(sequence) do
+      nil -> fallback_cursor
+      sequence -> {:before, sequence}
+    end
   end
 
-  defp history_before_sequence(_payload, fallback_sequence), do: fallback_sequence
+  defp requested_history_cursor(_payload, fallback_cursor), do: fallback_cursor
 
   defp positive_sequence(sequence)
        when is_integer(sequence) and sequence > 0 and sequence <= @maximum_sequence,
@@ -647,15 +650,15 @@ defmodule WorldloomWeb.WorldLive do
   defp history_request_allowed?(requested_at, now_ms),
     do: now_ms - requested_at >= @history_throttle_ms
 
-  defp older_sequence([], socket), do: socket.assigns.oldest_loaded_sequence
-  defp older_sequence(events, _socket), do: oldest_sequence(events)
-  defp oldest_sequence([]), do: nil
-  defp oldest_sequence([event | _events]), do: event.id
+  defp older_history_cursor([], socket), do: socket.assigns.history_cursor
+  defp older_history_cursor(events, _socket), do: event_history_cursor(events)
+  defp event_history_cursor([]), do: nil
+  defp event_history_cursor([event | _events]), do: {:before, event.id}
   defp live_history_cursor([], 0), do: nil
-  defp live_history_cursor([], commit_watermark), do: commit_watermark + 1
+  defp live_history_cursor([], commit_watermark), do: {:through, commit_watermark}
 
   defp live_history_cursor(display_events, _commit_watermark),
-    do: minimum_sequence(display_events)
+    do: {:before, minimum_sequence(display_events)}
 
   defp minimum_sequence(events), do: events |> Enum.map(& &1.id) |> Enum.min()
   defp trusted_event_map(events), do: Map.new(events, &{&1.id, &1})

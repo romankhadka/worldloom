@@ -315,6 +315,38 @@ defmodule Worldloom.Loom.StoreTest do
     assert_raise ArgumentError, fn -> Store.before(target.id, 0) end
   end
 
+  test "through includes the maximum signed bigint sequence" do
+    maximum_sequence = 9_223_372_036_854_775_807
+
+    {1, [maximum_event]} =
+      Repo.insert_all(
+        Event,
+        [
+          %{
+            id: maximum_sequence,
+            kind: "wikimedia",
+            source: "wikimedia",
+            external_id: "maximum-signed-bigint-sequence",
+            occurred_at: ~U[2026-08-03 12:00:00.000000Z],
+            render_version: 1,
+            render_seed: 1,
+            lane: 0.4,
+            intensity: 0.6,
+            payload: %{
+              "summary" => "Maximum sequence entered the weave",
+              "visual" => %{"bend" => 0.1, "pulse" => 0.2, "spread" => 0.3}
+            },
+            inserted_at: ~U[2026-08-03 12:00:00.000000Z]
+          }
+        ],
+        returning: true
+      )
+
+    assert Enum.map(Store.through(maximum_sequence, 1), & &1.id) == [maximum_event.id]
+
+    assert_raise ArgumentError, fn -> Store.through(maximum_sequence + 1, 1) end
+  end
+
   @tag :committed_storage
   test "live snapshot loads bounded source candidates and the authoritative watermark" do
     stored_wikimedia =

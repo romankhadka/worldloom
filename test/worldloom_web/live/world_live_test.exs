@@ -10,6 +10,7 @@ defmodule WorldloomWeb.WorldLiveTest do
   alias Worldloom.Loom.LiveSnapshot
   alias Worldloom.Loom.SourceEvent
   alias Worldloom.Loom.Store
+  alias Worldloom.Repo
   alias Worldloom.Signals.HealthMonitor
 
   setup do
@@ -546,6 +547,65 @@ defmodule WorldloomWeb.WorldLiveTest do
 
     assert_push_event live_view, "worldloom:history", %{instructions: instructions}
     assert instruction_sequence_ids(instructions) == Enum.map(Enum.take(events, 5), & &1.id)
+  end
+
+  test "empty maximum-watermark snapshots page inclusively through safe fallbacks", %{
+    conn: conn
+  } do
+    maximum_sequence = 9_223_372_036_854_775_807
+
+    {1, [maximum_event]} =
+      Repo.insert_all(
+        Event,
+        [
+          %{
+            id: maximum_sequence,
+            kind: "wikimedia",
+            source: "wikimedia",
+            external_id: "world-live-maximum-signed-bigint-sequence",
+            occurred_at: ~U[2026-08-03 12:00:00.000000Z],
+            render_version: 1,
+            render_seed: 1,
+            lane: 0.4,
+            intensity: 0.6,
+            payload: %{
+              "summary" => "Maximum sequence entered the weave",
+              "visual" => %{"bend" => 0.1, "pulse" => 0.2, "spread" => 0.3}
+            },
+            inserted_at: ~U[2026-08-03 12:00:00.000000Z]
+          }
+        ],
+        returning: true
+      )
+
+    put_current_snapshot(%LiveSnapshot{
+      window_end: nil,
+      commit_watermark: maximum_sequence,
+      display_events: [],
+      memory_events: [],
+      ambient: nil
+    })
+
+    payloads = [
+      %{},
+      %{"before" => "not-a-sequence"},
+      %{"before" => maximum_sequence + 1},
+      %{"before" => Integer.to_string(maximum_sequence + 1)}
+    ]
+
+    live_views =
+      Enum.map(payloads, fn payload ->
+        {:ok, live_view, _html} = live(recycle(conn), "/")
+        render_hook(live_view, "history-before", payload)
+        assert_push_event live_view, "worldloom:history", %{instructions: instructions}
+        assert List.last(instructions)["sequence"] == maximum_event.id
+        assert Map.has_key?(live_assign(live_view, :trusted_history_events), maximum_event.id)
+        live_view
+      end)
+
+    [live_view | _views] = live_views
+    render_hook(live_view, "select-formation", %{"sequence" => maximum_event.id})
+    assert_patch live_view, chapter_path(maximum_event)
   end
 
   test "keeps live and delayed history windows selectable across viewport changes", %{conn: conn} do

@@ -14,6 +14,7 @@ defmodule Worldloom.Loom.Store do
   @memory_lookback_seconds 24 * 60 * 60
   @live_window_seconds 60
   @maximum_limit 600
+  @maximum_sequence 9_223_372_036_854_775_807
 
   @spec commit_external([SourceEvent.t()], map() | nil) ::
           {:ok, [Event.t()]} | {:error, term()}
@@ -131,6 +132,25 @@ defmodule Worldloom.Loom.Store do
   end
 
   def around(sequence, limit) do
+    validate_sequence!(sequence)
+    validate_limit!(limit)
+  end
+
+  @spec through(pos_integer(), pos_integer()) :: [Event.t()]
+  def through(sequence, limit \\ 400)
+
+  def through(sequence, limit)
+      when is_integer(sequence) and sequence > 0 and sequence <= @maximum_sequence and
+             is_integer(limit) and limit in 1..@maximum_limit do
+    Event
+    |> where([event], event.id <= ^sequence)
+    |> order_by([event], desc: event.id)
+    |> limit(^limit)
+    |> Repo.all()
+    |> Enum.reverse()
+  end
+
+  def through(sequence, limit) do
     validate_sequence!(sequence)
     validate_limit!(limit)
   end
@@ -416,8 +436,12 @@ defmodule Worldloom.Loom.Store do
     |> Repo.all()
   end
 
-  defp validate_sequence!(sequence) when is_integer(sequence) and sequence > 0, do: :ok
-  defp validate_sequence!(_sequence), do: raise(ArgumentError, "sequence must be positive")
+  defp validate_sequence!(sequence)
+       when is_integer(sequence) and sequence > 0 and sequence <= @maximum_sequence,
+       do: :ok
+
+  defp validate_sequence!(_sequence),
+    do: raise(ArgumentError, "sequence must fit a positive signed bigint")
 
   defp validate_limit!(limit) when is_integer(limit) and limit in 1..@maximum_limit, do: :ok
   defp validate_limit!(_limit), do: invalid_limit!()
