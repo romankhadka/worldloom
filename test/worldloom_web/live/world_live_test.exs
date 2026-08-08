@@ -483,7 +483,7 @@ defmodule WorldloomWeb.WorldLiveTest do
     assert accessible_sequence_ids(live_view) == Enum.map(current_events, & &1.id)
   end
 
-  test "uses a server-owned cursor for throttled bounded history", %{conn: conn} do
+  test "uses a safe fallback cursor for invalid throttled history requests", %{conn: conn} do
     events = seed_events(405)
 
     put_current_snapshot(%LiveSnapshot{
@@ -496,7 +496,7 @@ defmodule WorldloomWeb.WorldLiveTest do
 
     {:ok, live_view, _html} = live(conn, "/")
 
-    render_hook(live_view, "history-before", %{"sequence" => 999_999_999})
+    render_hook(live_view, "history-before", %{"before" => "not-a-sequence"})
 
     assert_push_event live_view, "worldloom:history", %{
       instructions: instructions,
@@ -508,11 +508,11 @@ defmodule WorldloomWeb.WorldLiveTest do
     assert Enum.map(instructions, & &1["sequence"]) == expected_sequences
     assert Enum.map(scaffold, & &1["sequence"]) == expected_sequences
 
-    render_hook(live_view, "history-before", %{"sequence" => 1})
+    render_hook(live_view, "history-before", %{"before" => 1})
     refute_push_event live_view, "worldloom:history", _throttled
   end
 
-  test "keeps the oldest trusted history selectable while panned away", %{conn: conn} do
+  test "keeps live and delayed history windows selectable across viewport changes", %{conn: conn} do
     events = seed_events(1_000)
     history_events = Enum.take(events, 400)
     live_events = Enum.take(events, -600)
@@ -527,19 +527,127 @@ defmodule WorldloomWeb.WorldLiveTest do
 
     {:ok, live_view, _html} = live(conn, "/")
     render_hook(live_view, "viewport-state", %{"at_live_edge" => false})
-    render_hook(live_view, "history-before", %{})
+    render_hook(live_view, "history-before", %{"before" => hd(live_events).id})
+    render_hook(live_view, "viewport-state", %{"at_live_edge" => true})
 
     assert_push_event live_view, "worldloom:history", %{instructions: instructions}
     assert instruction_sequence_ids(instructions) == Enum.map(history_events, & &1.id)
-    assert map_size(live_assign(live_view, :trusted_events)) == 600
 
+    live_event = List.last(live_events)
     [oldest_history_event | _events] = history_events
-    render_hook(live_view, "select-formation", %{"sequence" => oldest_history_event.id})
 
-    expected_path = chapter_path(oldest_history_event)
-    assert_patch live_view, expected_path
-    assert has_element?(live_view, "#signal-detail", "Public formation 1")
-    assert has_element?(live_view, "#share-link[readonly][value$='#{expected_path}']")
+    render_hook(live_view, "select-formation", %{"sequence" => live_event.id})
+    assert_patch live_view, chapter_path(live_event)
+
+    {:ok, history_view, _html} = live(recycle(conn), "/")
+    render_hook(history_view, "viewport-state", %{"at_live_edge" => false})
+    render_hook(history_view, "history-before", %{"before" => hd(live_events).id})
+    render_hook(history_view, "viewport-state", %{"at_live_edge" => true})
+    assert_push_event history_view, "worldloom:history", _history_payload
+
+    assert map_size(live_assign(history_view, :trusted_events)) == 600
+    assert map_size(live_assign(history_view, :trusted_history_events)) == 400
+
+    render_hook(history_view, "select-formation", %{"sequence" => oldest_history_event.id})
+    assert_patch history_view, chapter_path(oldest_history_event)
+
+    render_patch(history_view, chapter_path(oldest_history_event))
+    assert live_assign(history_view, :trusted_history_events) == %{}
+  end
+
+  test "replays a discarded history page from the browser cursor", %{conn: conn} do
+    events = seed_events(1_400)
+    expected_page = Enum.slice(events, 400, 400)
+    live_events = Enum.take(events, -600)
+    original_before = hd(live_events).id
+
+    put_current_snapshot(%LiveSnapshot{
+      window_end: List.last(live_events).occurred_at,
+      commit_watermark: List.last(live_events).id,
+      display_events: live_events,
+      memory_events: [],
+      ambient: nil
+    })
+
+    {:ok, live_view, _html} = live(conn, "/")
+    render_hook(live_view, "viewport-state", %{"at_live_edge" => false})
+    render_hook(live_view, "history-before", %{"before" => original_before})
+
+    assert_push_event live_view, "worldloom:history", %{instructions: first_instructions}
+    assert instruction_sequence_ids(first_instructions) == Enum.map(expected_page, & &1.id)
+
+    render_hook(live_view, "viewport-state", %{"at_live_edge" => true})
+    allow_history_request(live_view)
+
+    render_hook(live_view, "history-before", %{
+      "before" => Integer.to_string(original_before)
+    })
+
+    assert_push_event live_view, "worldloom:history", %{instructions: replayed_instructions}
+    assert instruction_sequence_ids(replayed_instructions) == Enum.map(expected_page, & &1.id)
+
+    replayed_event = hd(expected_page)
+    assert map_size(live_assign(live_view, :trusted_history_events)) == 400
+    render_hook(live_view, "select-formation", %{"sequence" => replayed_event.id})
+    assert_patch live_view, chapter_path(replayed_event)
+  end
+
+  test "bounds history authorization without evicting live trust", %{conn: conn} do
+    events = seed_events(1_612)
+    live_events = Enum.slice(events, 1_000, 600)
+    scaffold_only_event = List.last(events)
+    ambient = seed_weather_event(~U[2026-08-03 13:00:00Z])
+
+    put_current_snapshot(%LiveSnapshot{
+      window_end: List.last(live_events).occurred_at,
+      commit_watermark: ambient.id,
+      display_events: live_events,
+      memory_events: [],
+      ambient: ambient
+    })
+
+    {:ok, live_view, _html} = live(conn, "/")
+
+    assert Enum.any?(live_assign(live_view, :scaffold), fn instruction ->
+             instruction["sequence"] == scaffold_only_event.id
+           end)
+
+    first_cursor = hd(live_events).id
+    render_hook(live_view, "history-before", %{"before" => first_cursor})
+    assert_push_event live_view, "worldloom:history", %{instructions: first_page}
+
+    allow_history_request(live_view)
+    second_cursor = hd(first_page)["sequence"]
+    render_hook(live_view, "history-before", %{"before" => second_cursor})
+    assert_push_event live_view, "worldloom:history", %{instructions: second_page}
+
+    allow_history_request(live_view)
+    third_cursor = hd(second_page)["sequence"]
+    render_hook(live_view, "history-before", %{"before" => third_cursor})
+    assert_push_event live_view, "worldloom:history", %{instructions: third_page}
+
+    assert length(first_page) == 400
+    assert length(second_page) == 400
+    assert length(third_page) == 200
+
+    live_trust = live_assign(live_view, :trusted_events)
+    history_trust = live_assign(live_view, :trusted_history_events)
+
+    assert map_size(live_trust) == 600
+    assert MapSet.new(Map.keys(live_trust)) == MapSet.new(live_events, & &1.id)
+    assert map_size(history_trust) == 600
+    assert MapSet.new(Map.keys(history_trust)) == MapSet.new(Enum.take(events, 600), & &1.id)
+    assert map_size(live_trust) + map_size(history_trust) == 1_200
+
+    for unauthorized_sequence <- [ambient.id, scaffold_only_event.id, ambient.id + 10_000] do
+      render_hook(live_view, "select-formation", %{"sequence" => unauthorized_sequence})
+      refute_patched live_view
+    end
+
+    render_hook(live_view, "return-live", %{})
+    assert_push_event live_view, "worldloom:return-live", _payload
+    assert live_assign(live_view, :trusted_history_events) == %{}
+    assert map_size(live_assign(live_view, :trusted_events)) == 600
   end
 
   test "history paging starts before primary display rather than older contextual memory", %{
@@ -1206,6 +1314,17 @@ defmodule WorldloomWeb.WorldLiveTest do
     |> Map.fetch!(:socket)
     |> Map.fetch!(:assigns)
     |> Map.fetch!(assign_name)
+  end
+
+  defp allow_history_request(live_view) do
+    :sys.replace_state(live_view.pid, fn state ->
+      socket =
+        state
+        |> Map.fetch!(:socket)
+        |> Map.update!(:assigns, &Map.put(&1, :history_requested_at, nil))
+
+      Map.put(state, :socket, socket)
+    end)
   end
 
   defp instruction_sequence_ids(instructions) do

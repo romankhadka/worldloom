@@ -38,6 +38,7 @@ defmodule WorldloomWeb.WorldLive do
       |> assign(:scaffold, [])
       |> assign(:ambient, nil)
       |> assign(:trusted_events, %{})
+      |> assign(:trusted_history_events, %{})
       |> assign(:oldest_loaded_sequence, nil)
       |> assign(:history_requested_at, nil)
       |> assign(:selected_event, nil)
@@ -126,11 +127,14 @@ defmodule WorldloomWeb.WorldLive do
   end
 
   @impl true
-  def handle_event("history-before", _payload, socket) do
+  def handle_event("history-before", payload, socket) do
     now_ms = System.monotonic_time(:millisecond)
 
     if history_request_allowed?(socket.assigns.history_requested_at, now_ms) do
-      events = history_before(socket.assigns.oldest_loaded_sequence)
+      before_sequence =
+        history_before_sequence(payload, socket.assigns.oldest_loaded_sequence)
+
+      events = history_before(before_sequence)
       instructions = Enum.map(events, &Instruction.from_event/1)
 
       {:noreply,
@@ -138,8 +142,8 @@ defmodule WorldloomWeb.WorldLive do
        |> assign(:history_requested_at, now_ms)
        |> assign(:oldest_loaded_sequence, older_sequence(events, socket))
        |> assign(
-         :trusted_events,
-         bounded_events(socket.assigns.trusted_events, events, socket.assigns.at_live_edge)
+         :trusted_history_events,
+         bounded_history_events(socket.assigns.trusted_history_events, events)
        )
        |> push_event("worldloom:history", %{
          instructions: instructions,
@@ -208,6 +212,7 @@ defmodule WorldloomWeb.WorldLive do
     {:noreply,
      socket
      |> assign(:at_live_edge, true)
+     |> clear_history_authorization()
      |> assign_live_snapshot(snapshot, encoded_snapshot, scaffold_events)
      |> push_event("worldloom:return-live", encoded_snapshot)}
   end
@@ -242,7 +247,7 @@ defmodule WorldloomWeb.WorldLive do
   end
 
   defp select_formation(sequence, socket) do
-    case Map.fetch(socket.assigns.trusted_events, sequence) do
+    case trusted_event(socket, sequence) do
       {:ok, event} ->
         permalink = event_permalink(event)
 
@@ -255,6 +260,13 @@ defmodule WorldloomWeb.WorldLive do
 
       :error ->
         {:noreply, socket}
+    end
+  end
+
+  defp trusted_event(socket, sequence) do
+    case Map.fetch(socket.assigns.trusted_events, sequence) do
+      {:ok, event} -> {:ok, event}
+      :error -> Map.fetch(socket.assigns.trusted_history_events, sequence)
     end
   end
 
@@ -342,6 +354,7 @@ defmodule WorldloomWeb.WorldLive do
       |> assign(:selected_detail, nil)
       |> assign(:permalink, URI.parse(uri).path || "/")
       |> assign(:current_url, uri)
+      |> clear_history_authorization()
       |> restore_live_gesture_state()
       |> assign_live_snapshot(snapshot, encoded_snapshot, scaffold_events)
 
@@ -429,6 +442,7 @@ defmodule WorldloomWeb.WorldLive do
     |> assign(:scaffold, public_scaffold(events, selected_event))
     |> assign(:ambient, ambient_event(events, selected_event))
     |> assign(:trusted_events, trusted_event_map(events))
+    |> clear_history_authorization()
     |> assign(:oldest_loaded_sequence, oldest_sequence(events))
     |> assign(:history_requested_at, nil)
     |> stream(:accessible_formations, Enum.take(instructions, -@accessible_limit), reset: true)
@@ -589,21 +603,38 @@ defmodule WorldloomWeb.WorldLive do
     end
   end
 
-  defp bounded_events(existing_events, new_events, at_live_edge) do
+  defp bounded_history_events(existing_events, new_events) do
     existing_events
     |> Map.values()
     |> Kernel.++(new_events)
     |> Enum.uniq_by(& &1.id)
     |> Enum.sort_by(& &1.id)
-    |> take_bounded_events(at_live_edge)
+    |> Enum.take(@maximum_window)
     |> trusted_event_map()
   end
 
-  defp take_bounded_events(events, true), do: Enum.take(events, -@maximum_window)
-  defp take_bounded_events(events, false), do: Enum.take(events, @maximum_window)
+  defp clear_history_authorization(socket), do: assign(socket, :trusted_history_events, %{})
 
   defp history_before(nil), do: []
   defp history_before(sequence), do: Store.before(sequence, @history_page_limit)
+
+  defp history_before_sequence(%{"before" => sequence}, fallback_sequence) do
+    positive_sequence(sequence) || fallback_sequence
+  end
+
+  defp history_before_sequence(_payload, fallback_sequence), do: fallback_sequence
+
+  defp positive_sequence(sequence) when is_integer(sequence) and sequence > 0, do: sequence
+
+  defp positive_sequence(sequence) when is_binary(sequence) do
+    case Integer.parse(sequence) do
+      {parsed_sequence, ""} when parsed_sequence > 0 -> parsed_sequence
+      _invalid -> nil
+    end
+  end
+
+  defp positive_sequence(_sequence), do: nil
+
   defp history_request_allowed?(nil, _now_ms), do: true
 
   defp history_request_allowed?(requested_at, now_ms),
