@@ -10,6 +10,7 @@ import {
   pushLiveViewEvent,
 } from "./phoenix_live_view.js"
 import {viewerHoldMsFor} from "./viewer_profile.js"
+import {mergeSnapshotObservations} from "./snapshot_observer.js"
 
 const baseURL = __ENV.WORLDLOOM_BASE_URL ?? "http://localhost:4000"
 const profile = __ENV.WORLDLOOM_PROFILE ?? "smoke"
@@ -89,9 +90,12 @@ export function gesture() {
       })
     },
     onMessage: (message, client) => {
-      for (const event of liveViewPushes(message, "worldloom:event")) {
-        if (Number.isSafeInteger(event.sequence))
-          state.observedAt[event.sequence] = Date.now()
+      for (const snapshot of liveViewPushes(message, "worldloom:snapshot")) {
+        state.observedAt = mergeSnapshotObservations(
+          state.observedAt,
+          snapshot,
+          Date.now(),
+        )
       }
 
       for (const acknowledgement of liveViewPushes(
