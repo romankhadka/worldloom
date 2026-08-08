@@ -512,6 +512,42 @@ defmodule WorldloomWeb.WorldLiveTest do
     refute_push_event live_view, "worldloom:history", _throttled
   end
 
+  test "uses the safe history fallback for an oversized integer cursor", %{conn: conn} do
+    events = seed_events(405)
+
+    put_current_snapshot(%LiveSnapshot{
+      window_end: ~U[2026-08-03 12:06:44Z],
+      commit_watermark: List.last(events).id,
+      display_events: Enum.take(events, -400),
+      memory_events: [],
+      ambient: nil
+    })
+
+    {:ok, live_view, _html} = live(conn, "/")
+    render_hook(live_view, "history-before", %{"before" => 9_223_372_036_854_775_808})
+
+    assert_push_event live_view, "worldloom:history", %{instructions: instructions}
+    assert instruction_sequence_ids(instructions) == Enum.map(Enum.take(events, 5), & &1.id)
+  end
+
+  test "uses the safe history fallback for an oversized decimal cursor", %{conn: conn} do
+    events = seed_events(405)
+
+    put_current_snapshot(%LiveSnapshot{
+      window_end: ~U[2026-08-03 12:06:44Z],
+      commit_watermark: List.last(events).id,
+      display_events: Enum.take(events, -400),
+      memory_events: [],
+      ambient: nil
+    })
+
+    {:ok, live_view, _html} = live(conn, "/")
+    render_hook(live_view, "history-before", %{"before" => "9223372036854775808"})
+
+    assert_push_event live_view, "worldloom:history", %{instructions: instructions}
+    assert instruction_sequence_ids(instructions) == Enum.map(Enum.take(events, 5), & &1.id)
+  end
+
   test "keeps live and delayed history windows selectable across viewport changes", %{conn: conn} do
     events = seed_events(1_000)
     history_events = Enum.take(events, 400)

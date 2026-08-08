@@ -17,6 +17,7 @@ defmodule WorldloomWeb.WorldLive do
   @history_throttle_ms 500
   @accessible_limit 20
   @public_scaffold_limit 12
+  @maximum_sequence 9_223_372_036_854_775_807
 
   @impl true
   def mount(_params, session, socket) do
@@ -624,12 +625,18 @@ defmodule WorldloomWeb.WorldLive do
 
   defp history_before_sequence(_payload, fallback_sequence), do: fallback_sequence
 
-  defp positive_sequence(sequence) when is_integer(sequence) and sequence > 0, do: sequence
+  defp positive_sequence(sequence)
+       when is_integer(sequence) and sequence > 0 and sequence <= @maximum_sequence,
+       do: sequence
 
   defp positive_sequence(sequence) when is_binary(sequence) do
     case Integer.parse(sequence) do
-      {parsed_sequence, ""} when parsed_sequence > 0 -> parsed_sequence
-      _invalid -> nil
+      {parsed_sequence, ""}
+      when parsed_sequence > 0 and parsed_sequence <= @maximum_sequence ->
+        parsed_sequence
+
+      _invalid ->
+        nil
     end
   end
 
