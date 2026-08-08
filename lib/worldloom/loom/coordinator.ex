@@ -1,7 +1,7 @@
 defmodule Worldloom.Loom.Coordinator do
   use GenServer
 
-  alias Worldloom.Loom.Instruction
+  alias Worldloom.Loom.LiveSnapshot
   alias Worldloom.Loom.Store
 
   @topic "loom:events"
@@ -35,12 +35,21 @@ defmodule Worldloom.Loom.Coordinator do
   @spec highest_sequence(GenServer.server()) :: non_neg_integer()
   def highest_sequence(server \\ __MODULE__), do: GenServer.call(server, :highest_sequence)
 
+  @spec current_snapshot(GenServer.server()) :: LiveSnapshot.t()
+  def current_snapshot(server \\ __MODULE__), do: GenServer.call(server, :current_snapshot)
+
   @spec start_count() :: non_neg_integer()
   def start_count, do: :persistent_term.get(@start_count_key, 0)
 
   @impl true
   def init(state) do
-    initialized_state = Map.put(state, :highest_sequence, state.store.highest_sequence())
+    snapshot = state.store.live_snapshot(nil)
+
+    initialized_state =
+      state
+      |> Map.put(:snapshot, snapshot)
+      |> Map.put(:highest_sequence, snapshot.commit_watermark)
+
     :persistent_term.put(@start_count_key, start_count() + 1)
     :telemetry.execute([:worldloom, :loom, :coordinator, :start], %{count: 1}, %{})
     {:ok, initialized_state}
@@ -59,12 +68,20 @@ defmodule Worldloom.Loom.Coordinator do
     {:reply, state.highest_sequence, state}
   end
 
+  def handle_call(:current_snapshot, _from, state) do
+    {:reply, state.snapshot, state}
+  end
+
   defp commit(state, kind, operation) do
     started_at = System.monotonic_time()
 
     case operation.() do
+      {:ok, []} ->
+        emit_commit_telemetry(started_at, kind, :ok, 0, state.highest_sequence)
+        {:reply, {:ok, []}, state}
+
       {:ok, events} when is_list(events) ->
-        updated_state = publish_committed(events, state)
+        updated_state = publish_snapshot(state)
 
         emit_commit_telemetry(
           started_at,
@@ -77,7 +94,7 @@ defmodule Worldloom.Loom.Coordinator do
         {:reply, {:ok, events}, updated_state}
 
       {:ok, event} ->
-        updated_state = publish_committed([event], state)
+        updated_state = publish_snapshot(state)
         emit_commit_telemetry(started_at, kind, :ok, 1, updated_state.highest_sequence)
         {:reply, {:ok, event}, updated_state}
 
@@ -87,18 +104,11 @@ defmodule Worldloom.Loom.Coordinator do
     end
   end
 
-  defp publish_committed(events, state) do
-    Enum.each(events, fn event ->
-      instruction = Instruction.from_event(event)
-      :ok = Phoenix.PubSub.broadcast(state.pubsub, state.topic, {:loom_event, instruction})
-    end)
+  defp publish_snapshot(state) do
+    snapshot = state.store.live_snapshot(state.snapshot.window_end)
+    :ok = Phoenix.PubSub.broadcast(state.pubsub, state.topic, {:loom_snapshot, snapshot})
 
-    highest_sequence =
-      Enum.reduce(events, state.highest_sequence, fn event, highest_sequence ->
-        max(event.id, highest_sequence)
-      end)
-
-    %{state | highest_sequence: highest_sequence}
+    %{state | snapshot: snapshot, highest_sequence: snapshot.commit_watermark}
   end
 
   defp emit_commit_telemetry(started_at, kind, status, count, highest_sequence) do
