@@ -1,0 +1,69 @@
+{
+  "snapshot_version": 1,
+  "window_end": "2026-08-08T12:01:00Z",
+  "commit_watermark": 906,
+  "display_events": [
+    {
+      "sequence": 901,
+      "kind": "wikimedia",
+      "source": "wikimedia",
+      "occurred_at": "2026-08-08T12:00:08Z",
+      "render_version": 1,
+      "seed": 901,
+      "lane": 0.2,
+      "intensity": 0.48,
+      "visual": {"spread": 0.38, "bend": -0.12, "pulse": 0.44},
+      "summary": "Wikimedia editing activity"
+    },
+    {
+      "sequence": 903,
+      "kind": "wikimedia",
+      "source": "wikimedia",
+      "occurred_at": "2026-08-08T12:00:31Z",
+      "render_version": 1,
+      "seed": 903,
+      "lane": 0.64,
+      "intensity": 0.55,
+      "visual": {"spread": 0.52, "bend": 0.18, "pulse": 0.61},
+      "summary": "Wikimedia editing activity"
+    },
+    {
+      "sequence": 905,
+      "kind": "earthquake",
+      "source": "usgs",
+      "occurred_at": "2026-08-08T12:00:52Z",
+      "render_version": 1,
+      "seed": 905,
+      "lane": 0.82,
+      "intensity": 0.72,
+      "visual": {"spread": 0.7, "bend": 0.08, "pulse": 0.76},
+      "summary": "USGS earthquake activity"
+    }
+  ],
+  "memory_events": [
+    {
+      "sequence": 899,
+      "kind": "illuminate",
+      "source": "visitor",
+      "occurred_at": "2026-08-08T11:03:17Z",
+      "render_version": 1,
+      "seed": 899,
+      "lane": 0.43,
+      "intensity": 0.64,
+      "visual": {"spread": 0.58, "bend": -0.06, "pulse": 0.82},
+      "summary": "A visitor illuminated the weave"
+    }
+  ],
+  "ambient": {
+    "sequence": 906,
+    "kind": "weather",
+    "source": "open_meteo",
+    "occurred_at": "2026-08-08T12:00:45Z",
+    "render_version": 1,
+    "seed": 906,
+    "lane": 0.5,
+    "intensity": 0.35,
+    "visual": {"spread": 0.66, "bend": 0.02, "pulse": 0.3},
+    "summary": "Open-Meteo weather atmosphere"
+  }
+}

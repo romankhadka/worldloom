@@ -1,8 +1,14 @@
 import assert from "node:assert/strict"
+import {readFileSync} from "node:fs"
 import test from "node:test"
 
 import {commandsForScene} from "../js/worldloom/geometry.js"
 import {Renderer} from "../js/worldloom/renderer.js"
+
+const balancedSnapshot = JSON.parse(readFileSync(
+  new URL("../../test/support/fixtures/live_snapshots/balanced_v1.json", import.meta.url),
+  "utf8",
+))
 
 const instruction = sequence => ({
   sequence,
@@ -15,6 +21,191 @@ const instruction = sequence => ({
   intensity: 0.5,
   visual: {spread: 0.5, bend: 0.1, pulse: 0.7},
   summary: `Formation ${sequence}`,
+})
+
+test("replaces live state from one complete snapshot envelope", () => {
+  const renderer = new Renderer(null)
+
+  renderer.setSnapshot(structuredClone(balancedSnapshot))
+
+  assert.equal(renderer.commitWatermark, balancedSnapshot.commit_watermark)
+  assert.equal(renderer.watermark, balancedSnapshot.commit_watermark)
+  assert.equal(renderer.snapshotVersion, 1)
+  assert.deepEqual(renderer.instructions, balancedSnapshot.display_events)
+  assert.deepEqual(renderer.memoryInstructions, balancedSnapshot.memory_events)
+  assert.equal(renderer.windowEnd, balancedSnapshot.window_end)
+  assert.deepEqual(renderer.ambient, balancedSnapshot.ambient)
+})
+
+test("accepts legal display omissions as full replacements without gap repair", () => {
+  const gaps = []
+  const renderer = new Renderer(null, {onGap: gap => gaps.push(gap)})
+  renderer.setSnapshot(structuredClone(balancedSnapshot))
+  const replacement = {
+    ...structuredClone(balancedSnapshot),
+    commit_watermark: 907,
+    display_events: [
+      balancedSnapshot.display_events[1],
+      {...instruction(907), occurred_at: "2026-08-08T12:01:00Z"},
+    ],
+  }
+
+  renderer.setSnapshot(replacement)
+
+  assert.deepEqual(renderer.instructions, replacement.display_events)
+  assert.equal(renderer.commitWatermark, 907)
+  assert.deepEqual(gaps, [])
+})
+
+test("validates an entire snapshot before mutating live state", () => {
+  const renderer = new Renderer(null)
+  renderer.setSnapshot(structuredClone(balancedSnapshot))
+  renderer.setSelection(balancedSnapshot.display_events[0].sequence)
+  const before = {
+    commitWatermark: renderer.commitWatermark,
+    snapshotVersion: renderer.snapshotVersion,
+    instructions: structuredClone(renderer.instructions),
+    memoryInstructions: structuredClone(renderer.memoryInstructions),
+    ambient: structuredClone(renderer.ambient),
+    windowEnd: renderer.windowEnd,
+    selectedSequence: renderer.selectedSequence,
+  }
+  const malformed = structuredClone(balancedSnapshot)
+  malformed.memory_events[0].sequence = Number.NaN
+
+  assert.throws(() => renderer.setSnapshot(malformed), /sequence/i)
+  assert.deepEqual({
+    commitWatermark: renderer.commitWatermark,
+    snapshotVersion: renderer.snapshotVersion,
+    instructions: renderer.instructions,
+    memoryInstructions: renderer.memoryInstructions,
+    ambient: renderer.ambient,
+    windowEnd: renderer.windowEnd,
+    selectedSequence: renderer.selectedSequence,
+  }, before)
+})
+
+test("accepts watermark zero only for the empty initial snapshot", () => {
+  const renderer = new Renderer(null)
+  const emptySnapshot = {
+    snapshot_version: 1,
+    window_end: null,
+    commit_watermark: 0,
+    display_events: [],
+    memory_events: [],
+    ambient: null,
+  }
+
+  renderer.setSnapshot(emptySnapshot)
+  assert.equal(renderer.commitWatermark, 0)
+  assert.equal(renderer.windowEnd, null)
+
+  assert.throws(
+    () => renderer.setSnapshot({...emptySnapshot, display_events: [instruction(1)]}),
+    /watermark/i,
+  )
+})
+
+test("rejects unsupported versions and non-UTC window anchors transactionally", () => {
+  const renderer = new Renderer(null)
+  renderer.setSnapshot(structuredClone(balancedSnapshot))
+
+  assert.throws(
+    () => renderer.setSnapshot({...structuredClone(balancedSnapshot), snapshot_version: 2}),
+    /snapshot_version/i,
+  )
+  assert.throws(
+    () => renderer.setSnapshot({
+      ...structuredClone(balancedSnapshot),
+      window_end: "2026-08-08T06:01:00-06:00",
+    }),
+    /window_end/i,
+  )
+  assert.equal(renderer.windowEnd, balancedSnapshot.window_end)
+})
+
+test("caps live roles, preserves bounded history separately, and reconciles selection", () => {
+  const renderer = new Renderer(null)
+  renderer.setEvents([instruction(1)])
+  renderer.prependHistory([instruction(1), instruction(2)])
+  renderer.setSelection(2)
+  const display = Array.from({length: 601}, (_entry, index) => instruction(index + 100))
+  const memory = Array.from({length: 5}, (_entry, index) => instruction(index + 701))
+  const envelope = {
+    snapshot_version: 1,
+    window_end: "2026-08-08T12:01:00Z",
+    commit_watermark: 705,
+    display_events: display,
+    memory_events: memory,
+    ambient: null,
+  }
+
+  renderer.setSnapshot(envelope)
+
+  assert.equal(renderer.instructions.length, 600)
+  assert.equal(renderer.memoryInstructions.length, 4)
+  assert.deepEqual(renderer.historyInstructions.map(event => event.sequence), [1, 2])
+  assert.equal(renderer.selectedSequence, null)
+
+  renderer.setSelection(701)
+  renderer.setSnapshot(envelope)
+  assert.equal(renderer.selectedSequence, 701)
+})
+
+test("returns from retained history to the latest complete live snapshot", () => {
+  const renderer = new Renderer(null, {width: 300, height: 200, reducedMotion: true})
+  renderer.setSnapshot(structuredClone(balancedSnapshot))
+  renderer.panOffset = 100
+  renderer.prependHistory([instruction(12), instruction(13)])
+  renderer.setSelection(12)
+  const replacement = {
+    ...structuredClone(balancedSnapshot),
+    commit_watermark: 907,
+    display_events: [{...instruction(907), occurred_at: "2026-08-08T12:01:00Z"}],
+  }
+  renderer.setSnapshot(replacement)
+  assert.deepEqual(renderer.historyInstructions.map(event => event.sequence), [12, 13])
+  assert.equal(renderer.selectedSequence, 12)
+
+  renderer.returnLive()
+
+  assert.deepEqual(renderer.events, replacement.display_events)
+  assert.deepEqual(renderer.instructions, replacement.display_events)
+  assert.deepEqual(renderer.historyInstructions, [])
+  assert.equal(renderer.archiveStart, false)
+  assert.equal(renderer.historyInFlight, false)
+  assert.equal(renderer.selectedSequence, null)
+  assert.equal(renderer.panOffset, 0)
+})
+
+test("restores the live public scaffold after browsing historical pages", () => {
+  const renderer = new Renderer(null, {width: 300, height: 200, reducedMotion: true})
+  const liveScaffold = [publicInstruction(900)]
+  const liveVisitor = {...instruction(951), kind: "illuminate", source: "visitor"}
+  renderer.setScaffold(liveScaffold)
+  renderer.setSnapshot({
+    snapshot_version: 1,
+    window_end: "2026-08-08T12:01:00Z",
+    commit_watermark: 951,
+    display_events: [liveVisitor],
+    memory_events: [],
+    ambient: null,
+  })
+  renderer.panOffset = 100
+  renderer.prependHistory([instruction(20)], {scaffold: [publicInstruction(10)]})
+  assert.deepEqual(renderer.scaffold.map(event => event.sequence), [10])
+
+  renderer.setSnapshot({
+    snapshot_version: 1,
+    window_end: "2026-08-08T12:01:00Z",
+    commit_watermark: 952,
+    display_events: [{...liveVisitor, sequence: 952, seed: 952}],
+    memory_events: [],
+    ambient: null,
+  })
+  renderer.returnLive()
+
+  assert.deepEqual(renderer.scaffold.map(event => event.sequence), [900])
 })
 
 test("bounds events and drawing commands", () => {

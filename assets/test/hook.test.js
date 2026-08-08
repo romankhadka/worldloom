@@ -1,11 +1,18 @@
 import assert from "node:assert/strict"
+import {readFileSync} from "node:fs"
 import test from "node:test"
 
 import {
   Worldloom,
   selectedSequenceFromClick,
   shouldClearSelectionFromClick,
+  snapshotFromDataset,
 } from "../js/worldloom/hook.js"
+
+const balancedSnapshot = JSON.parse(readFileSync(
+  new URL("../../test/support/fixtures/live_snapshots/balanced_v1.json", import.meta.url),
+  "utf8",
+))
 
 test("stops propagation only when a canvas click selects a formation", () => {
   let stopped = false
@@ -62,6 +69,50 @@ test("classifies only ordinary clicks outside formation detail for dismissal", (
   assert.equal(shouldClearSelectionFromClick({target: accessibleTarget}, detail), false)
   assert.equal(shouldClearSelectionFromClick({target: shareTarget}, detail), false)
   assert.equal(shouldClearSelectionFromClick({target: outsideTarget}, detail), true)
+})
+
+test("decodes and installs the initial six-field snapshot exactly once", t => {
+  const harness = hookHarness(t)
+  harness.el.dataset.snapshotVersion = String(balancedSnapshot.snapshot_version)
+  harness.el.dataset.windowEnd = balancedSnapshot.window_end
+  harness.el.dataset.commitWatermark = String(balancedSnapshot.commit_watermark)
+  harness.el.dataset.displayEvents = JSON.stringify(balancedSnapshot.display_events)
+  harness.el.dataset.memoryEvents = JSON.stringify(balancedSnapshot.memory_events)
+  harness.el.dataset.ambient = JSON.stringify(balancedSnapshot.ambient)
+
+  assert.deepEqual(snapshotFromDataset(harness.el.dataset), balancedSnapshot)
+
+  harness.hook.installInitialSnapshot()
+  assert.deepEqual(harness.renderer.snapshots, [balancedSnapshot])
+})
+
+test("replaces a server snapshot once without sequence-gap repair", t => {
+  const harness = hookHarness(t)
+
+  harness.serverEvents.get("worldloom:snapshot")(balancedSnapshot)
+
+  assert.deepEqual(harness.renderer.snapshots, [balancedSnapshot])
+  assert.equal(harness.serverEvents.has("worldloom:event"), false)
+  assert.equal(harness.serverEvents.has("worldloom:catch-up"), false)
+  assert.deepEqual(
+    harness.pushes.filter(push => push.name === "sequence-gap"),
+    [],
+  )
+  assert.equal(harness.el.dataset.renderedSequence, "906")
+  assert.equal(harness.el.dataset.commitWatermark, "906")
+  assert.equal(harness.el.dataset.snapshotVersion, "1")
+  assert.equal(harness.el.dataset.windowEnd, "2026-08-08T12:01:00Z")
+})
+
+test("forwards the renderer history cursor unchanged", t => {
+  const harness = hookHarness(t)
+
+  harness.hook.rendererOptions(false).onHistoryRequest({before: 31})
+
+  assert.deepEqual(harness.pushes.at(-1), {
+    name: "history-before",
+    payload: {before: 31},
+  })
 })
 
 test("captures direct pointer placement and commits only its final lane", t => {
@@ -236,7 +287,7 @@ test("outside dismissal clears local selection before one trusted server push", 
   assert.deepEqual(harness.clearPushes(), [{}])
 })
 
-test("reload and return-live server events reconcile local selection", t => {
+test("reload and snapshot-based return-live events reconcile local selection", t => {
   const harness = hookHarness(t)
   const scaffold = [{sequence: 3}, {sequence: 7}]
   const ambient = {sequence: 11, source: "open_meteo", kind: "weather"}
@@ -257,17 +308,10 @@ test("reload and return-live server events reconcile local selection", t => {
   harness.serverEvents.get("worldloom:reload")({instructions: [], watermark: 18})
   assert.equal(harness.renderer.clearSelections, 1)
 
-  harness.serverEvents.get("worldloom:return-live")({
-    instructions: [],
-    scaffold,
-    ambient,
-    watermark: 19,
-  })
+  const returnSnapshot = {...structuredClone(balancedSnapshot), commit_watermark: 919}
+  harness.serverEvents.get("worldloom:return-live")(returnSnapshot)
   assert.equal(harness.renderer.clearSelections, 2)
-  assert.deepEqual(
-    harness.renderer.lifecycle.at(-3),
-    ["reload", [], 19, {scaffold, ambient}],
-  )
+  assert.deepEqual(harness.renderer.snapshots, [returnSnapshot])
   assert.deepEqual(harness.renderer.lifecycle.slice(-2), ["returnLive", "clearSelection"])
 })
 
@@ -805,6 +849,9 @@ function fakeRenderer(effects = []) {
   return {
     reducedMotion: false,
     watermark: 0,
+    commitWatermark: 0,
+    snapshotVersion: null,
+    windowEnd: null,
     targetLanes: [],
     pointerDowns: [],
     pointerMoves: [],
@@ -815,6 +862,7 @@ function fakeRenderer(effects = []) {
     hitTests: [],
     selections: [],
     clearSelections: 0,
+    snapshots: [],
     lifecycle: [],
     atLiveEdge: () => true,
     setTargetLane(lane) { this.targetLanes.push(lane) },
@@ -838,8 +886,20 @@ function fakeRenderer(effects = []) {
       this.lifecycle.push("clearSelection")
       effects.push("renderer.clearSelection")
     },
+    setSnapshot(snapshot) {
+      this.snapshots.push(snapshot)
+      this.watermark = snapshot.commit_watermark
+      this.commitWatermark = snapshot.commit_watermark
+      this.snapshotVersion = snapshot.snapshot_version
+      this.windowEnd = snapshot.window_end
+    },
+    setScaffold() {},
     reload(instructions, watermark, options) {
       this.lifecycle.push(["reload", instructions, watermark, options])
+      this.watermark = watermark
+      this.commitWatermark = watermark
+      this.snapshotVersion = null
+      this.windowEnd = null
     },
     returnLive() { this.lifecycle.push("returnLive") },
     receiveEvent() {},

@@ -1,6 +1,7 @@
 import {commandsForScene, cubicPrefix, laneToY} from "./geometry.js"
 
 const maximumEvents = 600
+const maximumMemoryEvents = 4
 const maximumCommands = 4000
 const maximumViewerPulses = 12
 const maximumActiveTransitions = 8
@@ -28,12 +29,19 @@ export class Renderer {
     this.onSelect = options.onSelect ?? (() => {})
     this.onReloadRequest = options.onReloadRequest ?? (() => {})
     this.events = []
+    this.instructions = []
+    this.memoryInstructions = []
+    this.historyInstructions = []
     this.scaffold = []
+    this.liveScaffold = []
     this.commands = []
     this.ambient = null
     this.panOffset = 0
     this.projectedPanOffset = 0
     this.watermark = 0
+    this.commitWatermark = 0
+    this.snapshotVersion = null
+    this.windowEnd = null
     this.queuedEvents = new Map()
     this.gapInFlight = false
     this.historyInFlight = false
@@ -57,13 +65,59 @@ export class Renderer {
   }
 
   setEvents(instructions, {ambient = this.ambient, scaffold = []} = {}) {
-    this.events = boundedInstructions(instructions, "newest")
-    this.scaffold = scaffoldInstructions([...scaffold, ...this.events])
+    this.instructions = boundedInstructions(instructions, "newest")
+    this.memoryInstructions = []
+    this.historyInstructions = []
+    this.events = this.instructions
+    this.liveScaffold = scaffoldInstructions([...scaffold, ...this.events])
+    this.scaffold = this.liveScaffold
     this.ambient = latestAmbientInstruction([ambient, ...this.events])
     this.watermark = this.events.at(-1)?.sequence ?? 0
+    this.commitWatermark = this.watermark
+    this.snapshotVersion = null
+    this.windowEnd = null
     this.queuedEvents.clear()
     this.activeTransitions.clear()
     this.gapInFlight = false
+    this.rebuild()
+  }
+
+  setScaffold(instructions) {
+    this.liveScaffold = scaffoldInstructions(instructions)
+    this.scaffold = this.liveScaffold
+  }
+
+  setSnapshot(envelope) {
+    const snapshot = validatedSnapshot(envelope)
+    const instructions = snapshot.displayEvents.slice(0, maximumEvents)
+    const memoryInstructions = snapshot.memoryEvents.slice(0, maximumMemoryEvents)
+    const events = this.atLiveEdge()
+      ? instructions
+      : boundedInstructions([...this.historyInstructions, ...instructions], "oldest")
+    const authorizedSequences = new Set(
+      [...events, ...memoryInstructions].map(instruction => instruction.sequence),
+    )
+    const selectedSequence = authorizedSequences.has(this.selectedSequence)
+      ? this.selectedSequence
+      : null
+    const liveScaffold = scaffoldInstructions([...this.liveScaffold, ...instructions])
+    const scaffold = this.atLiveEdge() ? liveScaffold : this.scaffold
+
+    this.instructions = instructions
+    this.memoryInstructions = memoryInstructions
+    this.events = events
+    this.liveScaffold = liveScaffold
+    this.scaffold = scaffold
+    this.ambient = snapshot.ambient
+    this.commitWatermark = snapshot.commitWatermark
+    this.watermark = snapshot.commitWatermark
+    this.snapshotVersion = snapshot.snapshotVersion
+    this.windowEnd = snapshot.windowEnd
+    this.selectedSequence = selectedSequence
+    this.queuedEvents.clear()
+    this.activeTransitions.clear()
+    this.gapInFlight = false
+    this.newerEventsDropped = false
     this.rebuild()
   }
 
@@ -169,14 +223,21 @@ export class Renderer {
     this.panOffset = 0
     this.returningToLive = false
     this.setEvents(instructions, {ambient, scaffold})
-    if (Number.isSafeInteger(watermark)) this.watermark = watermark
+    if (Number.isSafeInteger(watermark)) {
+      this.watermark = watermark
+      this.commitWatermark = watermark
+    }
     this.newerEventsDropped = false
     this.notifyViewport()
   }
 
   prependHistory(instructions, {archiveStart = false, scaffold = []} = {}) {
     this.activeTransitions.clear()
-    const combined = [...instructions, ...this.events]
+    this.historyInstructions = boundedInstructions(
+      [...instructions, ...this.historyInstructions],
+      "oldest",
+    )
+    const combined = [...this.historyInstructions, ...this.instructions]
     const preference = this.atLiveEdge() ? "newest" : "oldest"
     this.newerEventsDropped = preference === "oldest" && uniqueCount(combined) > maximumEvents
     this.events = boundedInstructions(combined, preference)
@@ -251,7 +312,20 @@ export class Renderer {
   returnLive() {
     if (this.newerEventsDropped) this.onReloadRequest()
     const hadTransitions = this.activeTransitions.size > 0
+    const showingHistory = this.events !== this.instructions
     this.activeTransitions.clear()
+    if (showingHistory) {
+      this.events = this.instructions
+      this.scaffold = this.liveScaffold
+      this.newerEventsDropped = false
+    }
+    this.historyInstructions = []
+    this.historyInFlight = false
+    this.archiveStart = false
+    const liveSequences = new Set(
+      [...this.instructions, ...this.memoryInstructions].map(instruction => instruction.sequence),
+    )
+    if (!liveSequences.has(this.selectedSequence)) this.selectedSequence = null
     if (hadTransitions) this.rebuildCache()
 
     if (this.reducedMotion) {
@@ -259,6 +333,7 @@ export class Renderer {
       this.rebuild()
       this.notifyViewport()
     } else {
+      if (showingHistory) this.rebuild()
       this.returningToLive = true
     }
   }
@@ -343,7 +418,11 @@ export class Renderer {
     if (this.frameHandle !== null) this.cancelFrame(this.frameHandle)
     this.frameHandle = null
     this.activeTransitions.clear()
+    this.instructions = []
+    this.memoryInstructions = []
+    this.historyInstructions = []
     this.scaffold = []
+    this.liveScaffold = []
     this.cacheCanvas = null
     this.cacheContext = null
   }
@@ -421,14 +500,17 @@ export class Renderer {
   }
 
   appendCommitted(instruction, rebuild = true, animate = !this.reducedMotion) {
+    this.instructions = boundedInstructions([...this.instructions, instruction], "newest")
     this.events = boundedInstructions([...this.events, instruction], "newest")
     if (instruction.source === "wikimedia") {
-      this.scaffold = scaffoldInstructions([...this.scaffold, instruction])
+      this.liveScaffold = scaffoldInstructions([...this.liveScaffold, instruction])
+      this.scaffold = this.liveScaffold
     }
     if (instruction.source === "open_meteo" && instruction.kind === "weather") {
       this.ambient = instruction
     }
     this.watermark = Math.max(this.watermark, instruction.sequence)
+    this.commitWatermark = this.watermark
     if (animate && animatedKinds.has(instruction.kind)) {
       this.activeTransitions.set(instruction.sequence, {
         sequence: instruction.sequence,
@@ -618,6 +700,75 @@ function boundedInstructions(instructions, preference) {
   }
   const ordered = [...bySequence.values()].sort((left, right) => left.sequence - right.sequence)
   return preference === "oldest" ? ordered.slice(0, maximumEvents) : ordered.slice(-maximumEvents)
+}
+
+function validatedSnapshot(envelope) {
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) {
+    throw new TypeError("snapshot envelope must be an object")
+  }
+  if (envelope.snapshot_version !== 1) {
+    throw new TypeError("snapshot_version must be 1")
+  }
+  if (!Number.isSafeInteger(envelope.commit_watermark) || envelope.commit_watermark < 0) {
+    throw new TypeError("commit watermark must be a non-negative safe integer")
+  }
+  if (!Array.isArray(envelope.display_events) || !Array.isArray(envelope.memory_events)) {
+    throw new TypeError("snapshot event roles must be arrays")
+  }
+  if (envelope.ambient !== null && (typeof envelope.ambient !== "object" || Array.isArray(envelope.ambient))) {
+    throw new TypeError("snapshot ambient must be an instruction or null")
+  }
+  if (envelope.window_end !== null && !validUtcWindowEnd(envelope.window_end)) {
+    throw new TypeError("window_end must be a parseable canonical UTC timestamp or null")
+  }
+
+  const allInstructions = [
+    ...envelope.display_events,
+    ...envelope.memory_events,
+    ...(envelope.ambient === null ? [] : [envelope.ambient]),
+  ]
+  for (const instruction of allInstructions) {
+    if (!Number.isSafeInteger(instruction?.sequence) || instruction.sequence <= 0) {
+      throw new TypeError("snapshot instruction sequence must be a positive safe integer")
+    }
+    if (instruction.sequence > envelope.commit_watermark) {
+      throw new TypeError("snapshot instruction sequence cannot exceed its commit watermark")
+    }
+  }
+  if (envelope.commit_watermark === 0 && allInstructions.length > 0) {
+    throw new TypeError("commit watermark zero is reserved for an empty snapshot")
+  }
+
+  return {
+    snapshotVersion: envelope.snapshot_version,
+    windowEnd: envelope.window_end,
+    commitWatermark: envelope.commit_watermark,
+    displayEvents: envelope.display_events,
+    memoryEvents: envelope.memory_events,
+    ambient: envelope.ambient,
+  }
+}
+
+function validUtcWindowEnd(windowEnd) {
+  if (typeof windowEnd !== "string") return false
+  const match = windowEnd.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,6})?Z$/,
+  )
+  if (!match) return false
+  const timestamp = Date.parse(windowEnd)
+  if (!Number.isFinite(timestamp)) return false
+
+  const parsed = new Date(timestamp)
+  const expected = match.slice(1, 7).map(Number)
+  const actual = [
+    parsed.getUTCFullYear(),
+    parsed.getUTCMonth() + 1,
+    parsed.getUTCDate(),
+    parsed.getUTCHours(),
+    parsed.getUTCMinutes(),
+    parsed.getUTCSeconds(),
+  ]
+  return actual.every((component, index) => component === expected[index])
 }
 
 function scaffoldInstructions(instructions) {

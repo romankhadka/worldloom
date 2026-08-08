@@ -38,23 +38,17 @@ export const Worldloom = {
     this.shareWriteQueue = Promise.resolve()
     this.shareDestroyed = false
 
-    this.renderer = new Renderer(this.canvas, {
-      reducedMotion,
-      onGap: ({after, through}) => this.pushEvent("sequence-gap", {after, through}),
-      onHistoryRequest: () => this.pushEvent("history-before", {}),
-      onViewportChange: ({atLiveEdge}) =>
-        this.pushEvent("viewport-state", {at_live_edge: atLiveEdge}),
-      onSelect: sequence => {
-        this.renderer.setSelection(sequence)
-        this.pushEvent("select-formation", {sequence})
-      },
-      onReloadRequest: () => this.pushEvent("return-live", {}),
-    })
+    this.renderer = new Renderer(this.canvas, this.rendererOptions(reducedMotion))
 
-    this.renderer.setEvents(parseJson(this.el.dataset.instructions, []), {
-      ambient: parseJson(this.el.dataset.ambient, null),
-      scaffold: parseJson(this.el.dataset.scaffold, []),
-    })
+    this.renderer.setScaffold(parseJson(this.el.dataset.scaffold, []))
+    if (this.el.dataset.live === "true") {
+      this.installInitialSnapshot()
+    } else {
+      this.renderer.setEvents(parseJson(this.el.dataset.instructions, []), {
+        ambient: parseJson(this.el.dataset.ambient, null),
+        scaffold: parseJson(this.el.dataset.scaffold, []),
+      })
+    }
     this.laneInput = document.querySelector("#gesture-lane")
     this.localLane = normalizedLane(this.el.dataset.gestureLane, 0.5)
     this.lastServerLane = this.localLane
@@ -70,6 +64,24 @@ export const Worldloom = {
     this.renderer.start()
     this.syncRenderedSequence()
     this.el.dataset.ready = "true"
+  },
+
+  rendererOptions(reducedMotion) {
+    return {
+      reducedMotion,
+      onHistoryRequest: payload => this.pushEvent("history-before", payload),
+      onViewportChange: ({atLiveEdge}) =>
+        this.pushEvent("viewport-state", {at_live_edge: atLiveEdge}),
+      onSelect: sequence => {
+        this.renderer.setSelection(sequence)
+        this.pushEvent("select-formation", {sequence})
+      },
+      onReloadRequest: () => this.pushEvent("return-live", {}),
+    }
+  },
+
+  installInitialSnapshot() {
+    this.renderer.setSnapshot(snapshotFromDataset(this.el.dataset))
   },
 
   destroyed() {
@@ -96,13 +108,8 @@ export const Worldloom = {
   },
 
   installServerEvents() {
-    this.handleEvent("worldloom:event", instruction => {
-      this.renderer.receiveEvent(instruction)
-      this.syncRenderedSequence()
-    })
-
-    this.handleEvent("worldloom:catch-up", payload => {
-      this.renderer.applyCatchUp(payload.instructions ?? [], payload.watermark)
+    this.handleEvent("worldloom:snapshot", envelope => {
+      this.renderer.setSnapshot(envelope)
       this.syncRenderedSequence()
     })
 
@@ -128,12 +135,7 @@ export const Worldloom = {
     })
 
     this.handleEvent("worldloom:return-live", payload => {
-      if (payload?.instructions) {
-        this.renderer.reload(payload.instructions, payload.watermark, {
-          ambient: payload.ambient ?? null,
-          scaffold: payload.scaffold ?? [],
-        })
-      }
+      this.renderer.setSnapshot(payload)
       this.renderer.returnLive()
       this.renderer.clearSelection()
       this.syncRenderedSequence()
@@ -518,7 +520,18 @@ export const Worldloom = {
   },
 
   syncRenderedSequence() {
-    this.el.dataset.renderedSequence = String(this.renderer.watermark)
+    this.el.dataset.renderedSequence = String(this.renderer.commitWatermark)
+    this.el.dataset.commitWatermark = String(this.renderer.commitWatermark)
+    if (this.renderer.snapshotVersion === null) {
+      delete this.el.dataset.snapshotVersion
+    } else {
+      this.el.dataset.snapshotVersion = String(this.renderer.snapshotVersion)
+    }
+    if (this.renderer.windowEnd === null) {
+      delete this.el.dataset.windowEnd
+    } else {
+      this.el.dataset.windowEnd = this.renderer.windowEnd
+    }
   },
 
   copyLink(url) {
@@ -574,6 +587,17 @@ export const Worldloom = {
     this.shareWriteQueue = completion.catch(() => false)
     return completion
   },
+}
+
+export function snapshotFromDataset(dataset) {
+  return {
+    snapshot_version: Number(dataset.snapshotVersion),
+    window_end: dataset.windowEnd || null,
+    commit_watermark: Number(dataset.commitWatermark),
+    display_events: parseJson(dataset.displayEvents, []),
+    memory_events: parseJson(dataset.memoryEvents, []),
+    ambient: parseJson(dataset.ambient, null),
+  }
 }
 
 function parseJson(encoded, fallback) {
