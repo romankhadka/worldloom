@@ -135,6 +135,7 @@ export const Worldloom = {
     })
 
     this.handleEvent("worldloom:return-live", payload => {
+      if (this.renderer.snapshotVersion !== 1) this.renderer.resetLiveScaffold()
       this.renderer.setSnapshot(payload)
       this.renderer.returnLive()
       this.renderer.clearSelection()

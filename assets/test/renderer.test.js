@@ -38,8 +38,7 @@ test("replaces live state from one complete snapshot envelope", () => {
 })
 
 test("accepts legal display omissions as full replacements without gap repair", () => {
-  const gaps = []
-  const renderer = new Renderer(null, {onGap: gap => gaps.push(gap)})
+  const renderer = new Renderer(null)
   renderer.setSnapshot(structuredClone(balancedSnapshot))
   const replacement = {
     ...structuredClone(balancedSnapshot),
@@ -54,7 +53,8 @@ test("accepts legal display omissions as full replacements without gap repair", 
 
   assert.deepEqual(renderer.instructions, replacement.display_events)
   assert.equal(renderer.commitWatermark, 907)
-  assert.deepEqual(gaps, [])
+  assert.equal(renderer.receiveEvent, undefined)
+  assert.equal(renderer.applyCatchUp, undefined)
 })
 
 test("validates an entire snapshot before mutating live state", () => {
@@ -83,6 +83,48 @@ test("validates an entire snapshot before mutating live state", () => {
     windowEnd: renderer.windowEnd,
     selectedSequence: renderer.selectedSequence,
   }, before)
+})
+
+test("rejects invalid instruction occurrence times before mutating state", () => {
+  const malformedSnapshots = [
+    snapshotWithInstructionMutation("display_events", instruction => {
+      delete instruction.occurred_at
+    }),
+    snapshotWithInstructionMutation("display_events", instruction => {
+      instruction.occurred_at = "not-a-timestamp"
+    }),
+    snapshotWithInstructionMutation("memory_events", instruction => {
+      instruction.occurred_at = "2026-08-08T06:01:00-06:00"
+    }),
+    snapshotWithInstructionMutation("ambient", instruction => {
+      instruction.occurred_at = "2026-02-31T12:01:00Z"
+    }),
+  ]
+
+  for (const malformed of malformedSnapshots) {
+    const renderer = new Renderer(null)
+    renderer.setSnapshot(structuredClone(balancedSnapshot))
+    const before = rendererState(renderer)
+
+    assert.throws(() => renderer.setSnapshot(malformed), /occurred_at/i)
+    assert.deepEqual(rendererState(renderer), before)
+  }
+})
+
+test("owns a deep copy of every accepted snapshot instruction", () => {
+  const renderer = new Renderer(null)
+  const envelope = structuredClone(balancedSnapshot)
+
+  renderer.setSnapshot(envelope)
+  const installed = rendererState(renderer)
+  envelope.display_events[0].summary = "mutated outside renderer"
+  envelope.display_events[0].visual.spread = 99
+  envelope.memory_events[0].visual.pulse = 99
+  envelope.ambient.visual.bend = 99
+
+  assert.deepEqual(rendererState(renderer), installed)
+  assert.notEqual(renderer.instructions[0], envelope.display_events[0])
+  assert.notEqual(renderer.instructions[0].visual, envelope.display_events[0].visual)
 })
 
 test("accepts watermark zero only for the empty initial snapshot", () => {
@@ -208,6 +250,23 @@ test("restores the live public scaffold after browsing historical pages", () => 
   assert.deepEqual(renderer.scaffold.map(event => event.sequence), [900])
 })
 
+test("reseeds live scaffold when a historical route returns to a snapshot", () => {
+  const renderer = new Renderer(null, {reducedMotion: true})
+  renderer.reload([publicInstruction(10)], 10, {scaffold: [publicInstruction(10)]})
+  renderer.resetLiveScaffold()
+  renderer.setSnapshot(snapshotEnvelope([
+    {...instruction(20), kind: "illuminate", source: "visitor"},
+  ], {watermark: 20}))
+  renderer.returnLive()
+  assert.deepEqual(renderer.scaffold, [])
+
+  renderer.reload([publicInstruction(10)], 10, {scaffold: [publicInstruction(10)]})
+  renderer.resetLiveScaffold()
+  renderer.setSnapshot(snapshotEnvelope([publicInstruction(21)], {watermark: 21}))
+  renderer.returnLive()
+  assert.deepEqual(renderer.scaffold.map(event => event.sequence), [21])
+})
+
 test("bounds events and drawing commands", () => {
   const renderer = new Renderer(null, {width: 800, height: 600})
   renderer.setEvents(Array.from({length: 700}, (_entry, index) => instruction(index + 1)))
@@ -276,19 +335,16 @@ test("requests one bounded older page near the edge and stops at archive start",
   assert.equal(requests.length, 1)
 })
 
-test("queues out-of-order events, consumes empty-gap watermarks, and drains in order", () => {
-  const gaps = []
-  const renderer = new Renderer(null, {onGap: gap => gaps.push(gap)})
-  renderer.setEvents([instruction(10)])
+test("exposes no incremental event or sequence-gap ingestion state", () => {
+  const renderer = new Renderer(null, {onGap: () => assert.fail("obsolete gap callback")})
 
-  renderer.receiveEvent(instruction(13))
-  renderer.receiveEvent(instruction(14))
-  assert.deepEqual(gaps, [{after: 10, through: 12}])
-  assert.deepEqual(renderer.events.map(event => event.sequence), [10])
-
-  renderer.applyCatchUp([], 12)
-  assert.deepEqual(renderer.events.map(event => event.sequence), [10, 13, 14])
-  assert.equal(renderer.watermark, 14)
+  assert.equal(renderer.receiveEvent, undefined)
+  assert.equal(renderer.applyCatchUp, undefined)
+  assert.equal(renderer.appendCommitted, undefined)
+  assert.equal(renderer.setAmbient, undefined)
+  assert.equal(renderer.onGap, undefined)
+  assert.equal(renderer.queuedEvents, undefined)
+  assert.equal(renderer.gapInFlight, undefined)
 })
 
 test("supports hit testing and keyboard formation traversal", () => {
@@ -407,7 +463,7 @@ test("bounds archive panning to the compressed visitor projection", () => {
   assert.equal(archivedHits[0].x, renderer.width - renderer.padding)
 })
 
-test("retains a bounded public scaffold through all-visitor reloads and live appends", () => {
+test("retains a bounded public scaffold through all-visitor reloads and snapshots", () => {
   const renderer = new Renderer(null, {
     width: 1000,
     height: 600,
@@ -440,14 +496,19 @@ test("retains a bounded public scaffold through all-visitor reloads and live app
   assert.ok(renderer.commands.length <= 4000)
 
   renderer.reload(visitors, 645, {scaffold})
-  for (let sequence = 646; sequence <= 715; sequence++) {
-    renderer.receiveEvent({
+  const laterVisitors = Array.from({length: 70}, (_entry, index) => {
+    const sequence = index + 646
+    return {
       ...instruction(sequence),
       kind: visitorKinds[sequence % visitorKinds.length],
       source: "visitor",
       lane: 0.5,
-    })
-  }
+    }
+  })
+  renderer.setSnapshot(snapshotEnvelope(
+    [...visitors, ...laterVisitors].slice(-600),
+    {watermark: 715},
+  ))
 
   assertVisibleScaffold(renderer)
   assert.equal(visitorBandWidth(renderer), renderer.spacing * 8)
@@ -590,23 +651,28 @@ test("retains newer ambient weather after it ages out of the live window", () =>
     kind: "illuminate",
     source: "visitor",
   }))
-  renderer.setEvents([publicInstruction(1), oldAmbient, ...initialVisitors], {
-    ambient: oldAmbient,
-  })
+  renderer.setSnapshot(snapshotEnvelope(
+    [publicInstruction(1), ...initialVisitors],
+    {ambient: oldAmbient, watermark: 600},
+  ))
 
   const newAmbient = {
     ...instruction(601),
     kind: "weather",
     source: "open_meteo",
   }
-  renderer.receiveEvent(newAmbient)
-  for (let sequence = 602; sequence <= 1201; sequence++) {
-    renderer.receiveEvent({
+  const laterVisitors = Array.from({length: 600}, (_entry, index) => {
+    const sequence = index + 602
+    return {
       ...instruction(sequence),
       kind: "illuminate",
       source: "visitor",
-    })
-  }
+    }
+  })
+  renderer.setSnapshot(snapshotEnvelope(laterVisitors, {
+    ambient: newAmbient,
+    watermark: 1201,
+  }))
 
   const ambientCommands = renderer.commands.filter(command => command.type === "ambient")
   assert.equal(renderer.events.length, 600)
@@ -689,8 +755,8 @@ test("uses aggregate viewer pulses and stepped reduced motion", () => {
     requestFrame: () => frameRequests++,
   })
 
-  renderer.setEvents([instruction(1)])
-  renderer.receiveEvent(instruction(2))
+  renderer.setSnapshot(snapshotEnvelope([instruction(1)]))
+  renderer.setSnapshot(snapshotEnvelope([instruction(1), instruction(2)]))
   renderer.setViewerCount(23)
   renderer.start()
   canvas.calls.length = 0
@@ -715,7 +781,7 @@ test("rebuilds projection on scene changes but never during animation ticks", ()
   })
 
   const beforeSceneChange = projections
-  renderer.setEvents([instruction(1), instruction(2)])
+  renderer.setSnapshot(snapshotEnvelope([instruction(1), instruction(2)]))
   assert.equal(projections, beforeSceneChange + 1)
   const afterSceneChange = projections
 
@@ -723,7 +789,7 @@ test("rebuilds projection on scene changes but never during animation ticks", ()
   renderer.step(32)
   assert.equal(projections, afterSceneChange)
 
-  renderer.receiveEvent(instruction(3))
+  renderer.setSnapshot(snapshotEnvelope([instruction(1), instruction(2), instruction(3)]))
   assert.equal(projections, afterSceneChange + 1)
 })
 
@@ -797,10 +863,15 @@ test("draws a bounded lane seed and selected-formation halo", () => {
 
 test("bounds active transitions and settles the oldest when a ninth arrives", () => {
   const renderer = new Renderer(null, {width: 800, height: 600})
-  renderer.setEvents([instruction(1)])
+  let instructions = [instruction(1)]
+  renderer.setSnapshot(snapshotEnvelope(instructions))
 
   for (let sequence = 2; sequence <= 10; sequence++) {
-    renderer.receiveEvent({...instruction(sequence), kind: "wikimedia", source: "wikimedia"})
+    instructions = [
+      ...instructions,
+      {...instruction(sequence), kind: "wikimedia", source: "wikimedia"},
+    ]
+    renderer.setSnapshot(snapshotEnvelope(instructions))
   }
 
   assert.equal(renderer.activeTransitions.size, 8)
@@ -810,18 +881,21 @@ test("bounds active transitions and settles the oldest when a ninth arrives", ()
 
 test("settles ambient weather directly without an empty transition", () => {
   const renderer = new Renderer(null)
-  renderer.setEvents([instruction(1)])
+  renderer.setSnapshot(snapshotEnvelope([instruction(1)]))
 
-  renderer.receiveEvent({...instruction(2), kind: "weather", source: "open_meteo"})
+  renderer.setSnapshot(snapshotEnvelope([instruction(1)], {
+    ambient: {...instruction(2), kind: "weather", source: "open_meteo"},
+    watermark: 2,
+  }))
 
   assert.equal(renderer.activeTransitions.size, 0)
 })
 
 test("settles unsupported render versions as fallback marks without empty transitions", () => {
   const renderer = new Renderer(null)
-  renderer.setEvents([instruction(1)])
+  renderer.setSnapshot(snapshotEnvelope([instruction(1)]))
 
-  renderer.receiveEvent({...instruction(2), render_version: 99})
+  renderer.setSnapshot(snapshotEnvelope([instruction(1), {...instruction(2), render_version: 99}]))
 
   assert.equal(renderer.activeTransitions.size, 0)
   assert.equal(renderer.commands.some(command => command.type === "fallback"), true)
@@ -835,8 +909,8 @@ test("destroy cancels animation and releases transition and cache state", () => 
     requestFrame: () => 41,
     cancelFrame: handle => cancelled.push(handle),
   })
-  renderer.setEvents([instruction(1)])
-  renderer.receiveEvent(instruction(2))
+  renderer.setSnapshot(snapshotEnvelope([instruction(1)]))
+  renderer.setSnapshot(snapshotEnvelope([instruction(1), instruction(2)]))
   renderer.start()
 
   renderer.destroy()
@@ -875,11 +949,11 @@ test("grows a newly committed spline outside the settled cache then settles it",
         : []
     },
   })
-  renderer.setEvents([instruction(1)])
+  renderer.setSnapshot(snapshotEnvelope([instruction(1)]))
   cache.calls.length = 0
   canvas.calls.length = 0
 
-  renderer.receiveEvent(instruction(2))
+  renderer.setSnapshot(snapshotEnvelope([instruction(1), instruction(2)]))
 
   assert.equal(cache.calls.some(([name]) => name === "bezierCurveTo"), false)
   assert.equal(canvas.calls.some(([name]) => name === "bezierCurveTo"), true)
@@ -991,10 +1065,10 @@ test("animates each visitor response for its bounded gesture duration", () => {
       createCanvas: () => cache,
       projectScene: instructions => instructions.some(item => item.sequence === 2) ? [command] : [],
     })
-    renderer.setEvents([instruction(1)])
+    renderer.setSnapshot(snapshotEnvelope([instruction(1)]))
     canvas.calls.length = 0
 
-    renderer.receiveEvent(instruction(2))
+    renderer.setSnapshot(snapshotEnvelope([instruction(1), instruction(2)]))
 
     assert.equal(canvas.calls.some(([name]) => name === expectedCall), true)
     renderer.step(duration - 1)
@@ -1028,8 +1102,8 @@ test("grows a knot bridge from both ends toward its crossover", () => {
     createCanvas: () => cache,
     projectScene: instructions => instructions.some(item => item.sequence === 2) ? [command] : [],
   })
-  renderer.setEvents([instruction(1)])
-  renderer.receiveEvent(instruction(2))
+  renderer.setSnapshot(snapshotEnvelope([instruction(1)]))
+  renderer.setSnapshot(snapshotEnvelope([instruction(1), instruction(2)]))
   canvas.calls.length = 0
 
   renderer.step(450)
@@ -1062,8 +1136,8 @@ test("carries an illuminate bloom along its connected curves", () => {
     createCanvas: () => cache,
     projectScene: instructions => instructions.some(item => item.sequence === 2) ? [command] : [],
   })
-  renderer.setEvents([instruction(1)])
-  renderer.receiveEvent(instruction(2))
+  renderer.setSnapshot(snapshotEnvelope([instruction(1)]))
+  renderer.setSnapshot(snapshotEnvelope([instruction(1), instruction(2)]))
   canvas.calls.length = 0
 
   renderer.step(600)
@@ -1076,9 +1150,7 @@ test("scene reconstruction settles active transitions immediately", () => {
   const mutations = [
     ["resize", renderer => renderer.resize(120, 80, 2)],
     ["history", renderer => renderer.prependHistory([instruction(0)])],
-    ["catch-up", renderer => renderer.applyCatchUp([], 2)],
     ["pan", renderer => renderer.panBy(10)],
-    ["ambient", renderer => renderer.setAmbient(instruction(3))],
     ["reload", renderer => renderer.reload([instruction(1), instruction(2)])],
     ["return live", renderer => renderer.returnLive()],
   ]
@@ -1106,14 +1178,55 @@ function rendererWithActiveTransition() {
       segments: [{sequence: 2, transitionSequence: 2, length: 100, curve}],
     }],
   })
-  renderer.setEvents([instruction(1)])
-  renderer.receiveEvent(instruction(2))
+  renderer.setSnapshot(snapshotEnvelope([instruction(1)]))
+  renderer.setSnapshot(snapshotEnvelope([instruction(1), instruction(2)]))
   assert.equal(renderer.activeTransitions.size, 1)
   return renderer
 }
 
 function publicInstruction(sequence) {
   return {...instruction(sequence), kind: "wikimedia", source: "wikimedia"}
+}
+
+function snapshotEnvelope(
+  displayEvents,
+  {memoryEvents = [], ambient = null, watermark = null, windowEnd = "2026-08-08T12:01:00Z"} = {},
+) {
+  const sequences = [
+    ...displayEvents,
+    ...memoryEvents,
+    ...(ambient === null ? [] : [ambient]),
+  ].map(event => event.sequence)
+
+  return {
+    snapshot_version: 1,
+    window_end: windowEnd,
+    commit_watermark: watermark ?? Math.max(0, ...sequences),
+    display_events: displayEvents,
+    memory_events: memoryEvents,
+    ambient,
+  }
+}
+
+function snapshotWithInstructionMutation(role, mutate) {
+  const snapshot = structuredClone(balancedSnapshot)
+  const instruction = role === "ambient" ? snapshot.ambient : snapshot[role][0]
+  mutate(instruction)
+  return snapshot
+}
+
+function rendererState(renderer) {
+  return structuredClone({
+    commitWatermark: renderer.commitWatermark,
+    snapshotVersion: renderer.snapshotVersion,
+    instructions: renderer.instructions,
+    memoryInstructions: renderer.memoryInstructions,
+    ambient: renderer.ambient,
+    windowEnd: renderer.windowEnd,
+    selectedSequence: renderer.selectedSequence,
+    scaffold: renderer.scaffold,
+    commands: renderer.commands,
+  })
 }
 
 function visitorSurgeInstructions({visitorLane = null} = {}) {

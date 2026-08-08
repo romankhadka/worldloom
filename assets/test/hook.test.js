@@ -312,7 +312,26 @@ test("reload and snapshot-based return-live events reconcile local selection", t
   harness.serverEvents.get("worldloom:return-live")(returnSnapshot)
   assert.equal(harness.renderer.clearSelections, 2)
   assert.deepEqual(harness.renderer.snapshots, [returnSnapshot])
-  assert.deepEqual(harness.renderer.lifecycle.slice(-2), ["returnLive", "clearSelection"])
+  assert.deepEqual(harness.renderer.lifecycle.slice(-4), [
+    "resetLiveScaffold",
+    ["setSnapshot", returnSnapshot],
+    "returnLive",
+    "clearSelection",
+  ])
+})
+
+test("ordinary panned return-live keeps the existing live scaffold seed", t => {
+  const harness = hookHarness(t)
+  harness.renderer.snapshotVersion = 1
+
+  harness.serverEvents.get("worldloom:return-live")(balancedSnapshot)
+
+  assert.equal(harness.renderer.lifecycle.includes("resetLiveScaffold"), false)
+  assert.deepEqual(harness.renderer.lifecycle.slice(-3), [
+    ["setSnapshot", balancedSnapshot],
+    "returnLive",
+    "clearSelection",
+  ])
 })
 
 test("history paging forwards a scaffold for the retained historical window", t => {
@@ -888,12 +907,14 @@ function fakeRenderer(effects = []) {
     },
     setSnapshot(snapshot) {
       this.snapshots.push(snapshot)
+      this.lifecycle.push(["setSnapshot", snapshot])
       this.watermark = snapshot.commit_watermark
       this.commitWatermark = snapshot.commit_watermark
       this.snapshotVersion = snapshot.snapshot_version
       this.windowEnd = snapshot.window_end
     },
     setScaffold() {},
+    resetLiveScaffold() { this.lifecycle.push("resetLiveScaffold") },
     reload(instructions, watermark, options) {
       this.lifecycle.push(["reload", instructions, watermark, options])
       this.watermark = watermark
@@ -902,8 +923,6 @@ function fakeRenderer(effects = []) {
       this.windowEnd = null
     },
     returnLive() { this.lifecycle.push("returnLive") },
-    receiveEvent() {},
-    applyCatchUp() {},
     prependHistory(instructions, options) {
       this.lifecycle.push(["prependHistory", instructions, options])
     },
