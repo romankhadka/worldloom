@@ -57,8 +57,10 @@ defmodule Worldloom.Loom.LiveProjection do
   end
 
   defp within_window?(occurred_at, window_start, window_end) do
-    DateTime.compare(occurred_at, window_start) != :lt and
-      DateTime.compare(occurred_at, window_end) != :gt
+    occurred_at_second = DateTime.truncate(occurred_at, :second)
+
+    DateTime.compare(occurred_at_second, window_start) != :lt and
+      DateTime.compare(occurred_at_second, window_end) != :gt
   end
 
   defp source_queues(display_candidates) do

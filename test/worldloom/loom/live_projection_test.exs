@@ -63,6 +63,7 @@ defmodule Worldloom.Loom.LiveProjectionTest do
       )
 
     assert advanced.window_end == ~U[2026-08-08 12:01:00Z]
+    assert advanced.display_events == [fractional_latest]
     assert preserved.window_end == ~U[2026-08-08 12:02:00Z]
   end
 
