@@ -100,6 +100,64 @@ defmodule Worldloom.Signals.Normalizer do
 
   def bluesky_window(_window), do: {:error, :invalid_window}
 
+  @spec ripe_window(map()) :: {:ok, SourceEvent.t()} | {:error, atom()}
+  def ripe_window(%{
+        window_start: %DateTime{} = window_start,
+        announced: announced,
+        withdrawn: withdrawn,
+        ipv4: ipv4,
+        ipv6: ipv6,
+        collector_count: collector_count,
+        peer_count: peer_count,
+        truncated: truncated
+      }) do
+    counters = %{
+      announced: announced,
+      withdrawn: withdrawn,
+      ipv4: ipv4,
+      ipv6: ipv6,
+      collector_count: collector_count,
+      peer_count: peer_count
+    }
+
+    with true <- Enum.all?(counters, fn {_name, count} -> uint32?(count) end),
+         {prefix_total, family_total} <- ripe_totals(counters),
+         true <- collector_count in 1..4,
+         true <- peer_count in 1..2_048,
+         true <- prefix_total > 0,
+         true <- family_total > 0,
+         true <- is_boolean(truncated),
+         true <- truncated or prefix_total == family_total,
+         {:ok, utc_window_start} <- DateTime.shift_zone(window_start, "Etc/UTC"),
+         {:ok, event} <-
+           SourceEvent.new(%{
+             kind: :route_change,
+             source: :ripe_ris,
+             external_id: "ripe-window:#{DateTime.to_unix(utc_window_start, :second)}:4",
+             occurred_at: utc_window_start,
+             lane: stable_lane(counters),
+             intensity: clamp_unit(prefix_total / 80),
+             payload: %{
+               "summary" => "#{prefix_total} RIPE route changes moved through the weave",
+               "window_count" => 1,
+               "window_span_seconds" => 4,
+               "announced" => announced,
+               "withdrawn" => withdrawn,
+               "ipv4" => ipv4,
+               "ipv6" => ipv6,
+               "collector_count" => collector_count,
+               "peer_count" => peer_count,
+               "truncated" => truncated
+             }
+           }) do
+      {:ok, event}
+    else
+      _invalid -> {:error, :invalid_window}
+    end
+  end
+
+  def ripe_window(_window), do: {:error, :invalid_window}
+
   @spec earthquakes(map()) :: {:ok, [SourceEvent.t()]} | {:error, atom()}
   def earthquakes(%{"features" => features}) when is_list(features) do
     events = Enum.flat_map(features, &normalize_earthquake/1)
@@ -344,6 +402,10 @@ defmodule Worldloom.Signals.Normalizer do
       counters
       |> Map.delete(:total_actions)
       |> Enum.all?(fn {_name, count} -> count <= counters.total_actions end)
+  end
+
+  defp ripe_totals(counters) do
+    {counters.announced + counters.withdrawn, counters.ipv4 + counters.ipv6}
   end
 
   defp uint32?(number), do: is_integer(number) and number in 0..4_294_967_295

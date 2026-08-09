@@ -1,0 +1,65 @@
+[
+  {
+    "type": "ris_message",
+    "data": {
+      "type": "UPDATE",
+      "timestamp": 1786204802.25,
+      "host": "rrc00",
+      "peer": "192.0.2.10",
+      "peer_asn": "64496",
+      "id": "synthetic-message-alpha",
+      "announcements": [
+        {
+          "next_hop": "192.0.2.1",
+          "prefixes": ["203.0.113.0/24", "2001:db8:100::/48"]
+        },
+        {
+          "next_hop": "2001:db8::1",
+          "prefixes": ["198.51.100.0/24"]
+        }
+      ],
+      "withdrawals": ["203.0.114.0/24", "2001:db8:200::/48"],
+      "path": [64496, 64500],
+      "community": ["64496:100"],
+      "raw": "synthetic-raw-bytes-never-retained"
+    }
+  },
+  {
+    "type": "ris_message",
+    "data": {
+      "type": "UPDATE",
+      "timestamp": 1786204803.5,
+      "host": "rrc01",
+      "peer": "2001:db8:ffff::10",
+      "peer_asn": "64497",
+      "id": "synthetic-message-beta",
+      "announcements": [
+        {
+          "next_hop": "2001:db8:ffff::1",
+          "prefixes": ["2001:db8:300::/48"]
+        }
+      ],
+      "withdrawals": ["198.51.101.0/24"]
+    }
+  },
+  {
+    "type": "ris_message",
+    "data": {
+      "type": "KEEPALIVE",
+      "timestamp": 1786204804,
+      "host": "rrc00",
+      "peer": "192.0.2.10"
+    }
+  },
+  {
+    "type": "ris_message",
+    "data": {
+      "type": "UPDATE",
+      "timestamp": "not-a-unix-time",
+      "host": "rrc00",
+      "peer": "192.0.2.10",
+      "announcements": [],
+      "withdrawals": []
+    }
+  }
+]

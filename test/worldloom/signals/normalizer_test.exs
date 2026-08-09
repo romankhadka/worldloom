@@ -159,6 +159,96 @@ defmodule Worldloom.Signals.NormalizerTest do
              |> Normalizer.bluesky_window()
   end
 
+  test "normalizes a deterministic privacy-preserving RIPE route window" do
+    window =
+      normalizable_ripe_window()
+      |> Map.merge(%{
+        collector: "rrc00-never-retained",
+        peer: "192.0.2.10-never-retained",
+        prefixes: ["203.0.113.0/24-never-retained"]
+      })
+
+    assert {:ok, %SourceEvent{} = event} = Normalizer.ripe_window(window)
+    assert {:ok, repeated_event} = Normalizer.ripe_window(window)
+    assert event.kind == :route_change
+    assert event.source == :ripe_ris
+    assert event.external_id == "ripe-window:1786204802:4"
+    assert event.occurred_at == ~U[2026-08-08 16:00:02.000000Z]
+    assert event.lane == repeated_event.lane
+    assert event.intensity == repeated_event.intensity
+    assert event.lane >= 0.0 and event.lane <= 1.0
+    assert event.intensity >= 0.0 and event.intensity <= 1.0
+
+    assert event.payload == %{
+             "summary" => "7 RIPE route changes moved through the weave",
+             "window_count" => 1,
+             "window_span_seconds" => 4,
+             "announced" => 4,
+             "withdrawn" => 3,
+             "ipv4" => 4,
+             "ipv6" => 3,
+             "collector_count" => 2,
+             "peer_count" => 2,
+             "truncated" => false
+           }
+
+    inspected = inspect(event)
+    refute inspected =~ "rrc00-never-retained"
+    refute inspected =~ "192.0.2.10-never-retained"
+    refute inspected =~ "203.0.113.0/24-never-retained"
+  end
+
+  test "rejects empty and relationally impossible RIPE windows" do
+    assert {:error, :invalid_window} =
+             normalizable_ripe_window()
+             |> Map.merge(%{announced: 0, withdrawn: 0, ipv4: 0, ipv6: 0})
+             |> Normalizer.ripe_window()
+
+    assert {:error, :invalid_window} =
+             normalizable_ripe_window()
+             |> Map.put(:ipv6, 2)
+             |> Normalizer.ripe_window()
+
+    assert {:error, :invalid_window} =
+             normalizable_ripe_window()
+             |> Map.merge(%{ipv4: 0, ipv6: 0})
+             |> Normalizer.ripe_window()
+  end
+
+  test "rejects RIPE count and set bounds outside the contract" do
+    for invalid <- [
+          Map.put(normalizable_ripe_window(), :announced, -1),
+          Map.put(normalizable_ripe_window(), :announced, "4"),
+          Map.put(normalizable_ripe_window(), :withdrawn, 4_294_967_296),
+          Map.put(normalizable_ripe_window(), :ipv4, nil),
+          Map.put(normalizable_ripe_window(), :collector_count, 0),
+          Map.put(normalizable_ripe_window(), :collector_count, 5),
+          Map.put(normalizable_ripe_window(), :peer_count, 0),
+          Map.put(normalizable_ripe_window(), :peer_count, 2_049),
+          Map.put(normalizable_ripe_window(), :truncated, :yes)
+        ] do
+      assert {:error, :invalid_window} = Normalizer.ripe_window(invalid)
+    end
+  end
+
+  test "accepts saturated truncated RIPE windows without relational equality" do
+    uint32_max = 4_294_967_295
+
+    truncated =
+      normalizable_ripe_window()
+      |> Map.merge(%{
+        announced: uint32_max,
+        withdrawn: uint32_max,
+        ipv4: uint32_max,
+        ipv6: 1,
+        truncated: true
+      })
+
+    assert {:ok, %SourceEvent{} = event} = Normalizer.ripe_window(truncated)
+    assert event.payload["announced"] == uint32_max
+    assert event.payload["truncated"]
+  end
+
   test "normalizes public USGS features and clamps impossible magnitudes" do
     geojson = read_fixture("usgs.json")
 
@@ -224,6 +314,19 @@ defmodule Worldloom.Signals.NormalizerTest do
       creates: 3,
       updates: 1,
       deletes: 1,
+      truncated: false
+    }
+  end
+
+  defp normalizable_ripe_window do
+    %{
+      window_start: ~U[2026-08-08 16:00:02Z],
+      announced: 4,
+      withdrawn: 3,
+      ipv4: 4,
+      ipv6: 3,
+      collector_count: 2,
+      peer_count: 2,
       truncated: false
     }
   end
