@@ -3,11 +3,10 @@
 > **The world is weaving itself.**
 
 Worldloom is a persistent living tapestry woven in real time from Wikimedia edits,
-earthquakes, global weather, and three small anonymous visitor gestures. Qualified,
-false-by-default adapters can add drand rounds, Bluesky activity, and RIPE routing
-motion after a source-specific canary. Solana slot progression is fixture-qualified
-but has no approved production endpoint. The present lives at the luminous right
-edge; move left to revisit earlier UTC chapters.
+Bluesky activity, RIPE routing motion, Solana slot progression, drand rounds,
+earthquakes, global weather, and three small anonymous visitor gestures. All seven
+public sources start enabled and remain independently bounded. The present lives at
+the luminous right edge; move left to revisit earlier UTC chapters.
 
 ![Worldloom's Living Reliquary](priv/static/images/worldloom-social-preview.png)
 
@@ -24,8 +23,8 @@ committed artifact and a restart reconstructs it from PostgreSQL.
 
 ## What you can do
 
-- Watch Wikimedia activity, USGS earthquakes, and global weather become distinct
-  fibers, knots, ripples, and ambient shifts.
+- Watch seven public signals become distinct strands, fans, forks, beads, crystals,
+  rupture rings, and atmospheric shifts.
 - Add a **Tug**, **Knot**, or **Illuminate** gesture at the live edge.
 - Inspect a formation with pointer, touch, or keyboard and share its permanent link.
 - Browse earlier UTC chapters without changing their history.
@@ -38,10 +37,10 @@ flowchart LR
   W[Wikimedia SSE] --> N[Normalize and bound]
   U[USGS GeoJSON] --> N
   M[Open-Meteo] --> N
-  DQ[drand Quicknet opt-in] --> N
-  BJ[Bluesky Jetstream opt-in] --> N
-  RR[RIPE RIS Live opt-in] --> N
-  SS[Solana slots fixtures only] -.-> N
+  DQ[drand Quicknet] --> N
+  BJ[Bluesky Jetstream] --> N
+  RR[RIPE RIS Live] --> N
+  SS[Solana slots] --> N
   V[Visitor gesture] --> P[Gesture policy]
   N --> BUF[Bounded signal buffer]
   BUF --> C[Single loom coordinator]
@@ -58,24 +57,26 @@ and the deliberately single-instance v1 design.
 
 ## Source posture
 
-Wikimedia, USGS, and Open-Meteo run when the global feed switch is on. The three
-incremental production-capable sources remain independently off until their canaries
-are explicitly approved; Solana has no approved production endpoint.
+All seven public sources run by default. Their independent environment switches are
+operator circuit breakers: setting one to `false` removes only that source owner and
+its upstream connection while the rest of the world keeps weaving.
 
 | Source | Default | Public freshness | Recovery posture |
 |---|---|---|---|
 | Wikimedia | On | Quiet after 20 seconds | At most 60 seconds from a durable event ID |
 | USGS | On | Quiet after 3 minutes | Idempotent rolling-feed polling with a private ETag |
 | Open-Meteo | On | Stale after 30 minutes | Keep the last ambient state; retry locally |
-| drand Quicknet | Off | Stale after 12 seconds | At most 20 exact rounds; report a larger gap |
-| Bluesky legacy Jetstream | Off | Quiet after 20 seconds | Five-second overlap within a 60-second horizon |
-| RIPE RIS Live | Off | Quiet after 20 seconds | Rejoin the live edge; never claim replay |
-| Solana slot progression | Off | Not applicable | Fixture-qualified only; no approved production endpoint |
+| drand Quicknet | On | Stale after 12 seconds | At most 20 exact rounds; report a larger gap |
+| Bluesky legacy Jetstream | On | Quiet after 20 seconds | Five-second overlap within a 60-second horizon |
+| RIPE RIS Live | On | Quiet after 20 seconds | Rejoin the live edge; never claim replay |
+| Solana slot progression | On | Quiet after 20 seconds | Rejoin the live edge; preserve observed gaps |
 
-`WORLDLOOM_FEEDS_ENABLED=false` overrides every source. The independent opt-in
-switches are `WORLDLOOM_DRAND_ENABLED`, `WORLDLOOM_BLUESKY_ENABLED`, and
-`WORLDLOOM_RIPE_ENABLED`; `WORLDLOOM_SOLANA_ENABLED` must remain false in production.
-Exact canary and rollback gates are in [docs/operations.md](docs/operations.md).
+`WORLDLOOM_FEEDS_ENABLED=false` overrides every source for offline operation. The
+independent circuit breakers are `WORLDLOOM_DRAND_ENABLED`,
+`WORLDLOOM_BLUESKY_ENABLED`, `WORLDLOOM_RIPE_ENABLED`, and
+`WORLDLOOM_SOLANA_ENABLED`. `WORLDLOOM_SOLANA_URL` can replace the checked-in secure
+public endpoint. Exact isolation and recovery gates are in
+[docs/operations.md](docs/operations.md).
 
 ## Toolchain
 
@@ -103,8 +104,8 @@ npm ci
 mix phx.server
 ```
 
-Open [http://localhost:4000](http://localhost:4000). Development connects to the
-three public feeds by default.
+Open [http://localhost:4000](http://localhost:4000). Development connects to all
+seven public sources by default.
 
 For a repeatable offline canvas, disable the feed workers and seed one deterministic
 hour before starting Phoenix:
@@ -139,15 +140,16 @@ deterministic harness and exact `npm run test:browser-100` and k6 commands.
 
 Worldloom uses [Wikimedia EventStreams](https://www.mediawiki.org/wiki/EventStreams),
 the [USGS real-time GeoJSON feed](https://earthquake.usgs.gov/earthquakes/feed/v1.0/geojson.php),
-and [Open-Meteo](https://open-meteo.com/en/docs). Qualified opt-in adapters target
+[Open-Meteo](https://open-meteo.com/en/docs),
 [drand Quicknet](https://docs.drand.love/blog/2023/10/16/quicknet-is-live/),
 [Bluesky legacy Jetstream](https://github.com/bluesky-social/jetstream-legacy), and
 [RIPE RIS Live](https://ris-live.ripe.net/manual/). A
 [Solana slot subscription](https://solana.com/docs/rpc/websocket/slotsubscribe)
-boundary is fixture-qualified but production-disabled. The public Open-Meteo
-endpoint used here is a non-commercial tier; commercial deployment requires a fresh
-licensing and API-plan review. Full field-level handling and attribution are in
-[docs/data-sources.md](docs/data-sources.md).
+uses Solana's rate-limited public mainnet endpoint by default; Solana documents that
+public endpoints have no SLA and are unsuitable for production applications. The
+public Open-Meteo endpoint used here is a non-commercial tier; commercial deployment
+requires a fresh licensing and API-plan review. Full field-level handling and
+attribution are in [docs/data-sources.md](docs/data-sources.md).
 
 Anonymous browser and network values exist only long enough to enforce contribution
 limits; they are not written to loom events or public output. Read the exact behavior

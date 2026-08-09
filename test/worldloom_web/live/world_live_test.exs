@@ -848,7 +848,7 @@ defmodule WorldloomWeb.WorldLiveTest do
           {"wikimedia", "Wikimedia", "strand", "disconnected"},
           {"bluesky", "Bluesky", "fan", "disconnected"},
           {"ripe_ris", "RIPE RIS Live", "fork", "disconnected"},
-          {"solana", "Solana", "beads", "disabled"},
+          {"solana", "Solana", "beads", "disconnected"},
           {"drand", "drand Quicknet", "crystal", "stale"},
           {"usgs", "USGS earthquakes", "rupture", "quiet"},
           {"open_meteo", "Open-Meteo weather", "atmosphere", "stale"},
@@ -876,7 +876,7 @@ defmodule WorldloomWeb.WorldLiveTest do
            )
 
     assert has_element?(live_view, "#legend-wikimedia .legend-health", "Disconnected")
-    assert has_element?(live_view, "#legend-solana .legend-health", "Disabled")
+    assert has_element?(live_view, "#legend-solana .legend-health", "Disconnected")
 
     for {family, href} <- [
           {"wikimedia", "https://www.mediawiki.org/wiki/EventStreams"},
@@ -930,7 +930,7 @@ defmodule WorldloomWeb.WorldLiveTest do
     send(live_view.pid, {:feed_health, healthy_except_bluesky})
 
     first_summary =
-      "This minute: 1 Wikimedia window, 1 Bluesky activity window, 1 RIPE route window, 1 drand round, 1 earthquake memory, and 1 visitor memory. Bluesky is quiet; the other enabled sources are live."
+      "This minute: 1 Wikimedia window, 1 Bluesky activity window, 1 RIPE route window, 1 Solana slot window, 1 drand round, 1 earthquake memory, and 1 visitor memory. Bluesky is quiet; Solana is disconnected; the other enabled sources are live."
 
     assert eventually(fn -> has_element?(live_view, "#live-summary", first_summary) end)
 
@@ -964,7 +964,7 @@ defmodule WorldloomWeb.WorldLiveTest do
              has_element?(
                live_view,
                "#live-summary",
-               "This minute: 3 Wikimedia windows, 1 Bluesky activity window, 1 RIPE route window, 1 drand round, 1 earthquake memory, and 1 visitor memory. Bluesky is quiet; the other enabled sources are live."
+               "This minute: 3 Wikimedia windows, 1 Bluesky activity window, 1 RIPE route window, 1 Solana slot window, 1 drand round, 1 earthquake memory, and 1 visitor memory. Bluesky is quiet; Solana is disconnected; the other enabled sources are live."
              )
            end)
 
@@ -1242,7 +1242,7 @@ defmodule WorldloomWeb.WorldLiveTest do
     assert has_element?(
              about_view,
              "#source-attribution .source-attribution-posture",
-             "Solana is fixture-qualified and production-disabled"
+             "All seven public sources are enabled by default"
            )
 
     assert has_element?(
@@ -1549,7 +1549,7 @@ defmodule WorldloomWeb.WorldLiveTest do
       bluesky_enabled: true,
       ripe_enabled: true,
       drand_enabled: true,
-      solana_enabled: false
+      solana_enabled: true
     })
   end
 

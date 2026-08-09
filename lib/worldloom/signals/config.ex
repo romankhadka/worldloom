@@ -82,7 +82,7 @@ defmodule Worldloom.Signals.Config do
       |> validate_endpoints!(environment)
       |> validate_drand_origins!()
       |> apply_global_switch()
-      |> validate_production_decisions!(environment)
+      |> validate_source_requirements!()
 
     struct!(__MODULE__, configured)
   end
@@ -294,14 +294,10 @@ defmodule Worldloom.Signals.Config do
     })
   end
 
-  defp validate_production_decisions!(%{solana_enabled: true}, :prod) do
+  defp validate_source_requirements!(%{solana_enabled: true, solana_url: nil}) do
     raise ArgumentError,
-          "environment variable WORLDLOOM_SOLANA_ENABLED cannot be true until a production endpoint decision is approved"
+          "environment variable WORLDLOOM_SOLANA_URL is required when WORLDLOOM_SOLANA_ENABLED is true"
   end
 
-  defp validate_production_decisions!(%{solana_enabled: true, solana_url: nil}, _environment) do
-    raise ArgumentError, "Solana requires a configured WebSocket URL outside production"
-  end
-
-  defp validate_production_decisions!(configured, _environment), do: configured
+  defp validate_source_requirements!(configured), do: configured
 end

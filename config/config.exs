@@ -20,19 +20,19 @@ config :worldloom, Worldloom.Signals,
   open_meteo_url: "https://api.open-meteo.com/v1/forecast",
   earthquake_interval_ms: 60_000,
   weather_interval_ms: 600_000,
-  drand_enabled: false,
+  drand_enabled: true,
   drand_relays: [
     "https://api.drand.sh",
     "https://api2.drand.sh",
     "https://api3.drand.sh"
   ],
-  bluesky_enabled: false,
+  bluesky_enabled: true,
   bluesky_url: "wss://jetstream2.us-west.bsky.network/subscribe",
-  ripe_enabled: false,
+  ripe_enabled: true,
   ripe_url: "wss://ris-live.ripe.net/v1/ws/",
   ripe_collectors: ["rrc00", "rrc01", "rrc03", "rrc10"],
-  solana_enabled: false,
-  solana_url: nil
+  solana_enabled: true,
+  solana_url: "wss://api.mainnet-beta.solana.com/"
 
 # Configures the endpoint
 config :worldloom, WorldloomWeb.Endpoint,

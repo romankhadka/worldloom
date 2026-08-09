@@ -161,7 +161,7 @@ defmodule Worldloom.Signals.SupervisorTest do
     assert child_pid(supervisor, SolanaSocket) == solana
   end
 
-  test "default configuration keeps every incremental source disabled" do
+  test "test environment configuration starts no external incremental workers" do
     configured_ids = child_ids(signal_config())
 
     assert configured_ids == existing_child_ids()

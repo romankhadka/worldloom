@@ -13,14 +13,14 @@ defmodule Worldloom.Signals.ConfigTest do
     solana_enabled: "WORLDLOOM_SOLANA_ENABLED"
   ]
 
-  test "loads secure defaults with every incremental source disabled" do
+  test "loads secure defaults with every qualified source enabled" do
     config = Config.from_keyword!(default_config(), :dev)
 
     assert config.enabled
-    refute config.drand_enabled
-    refute config.bluesky_enabled
-    refute config.ripe_enabled
-    refute config.solana_enabled
+    assert config.drand_enabled
+    assert config.bluesky_enabled
+    assert config.ripe_enabled
+    assert config.solana_enabled
 
     assert config.drand_relays == [
              "https://api.drand.sh",
@@ -31,7 +31,7 @@ defmodule Worldloom.Signals.ConfigTest do
     assert config.bluesky_url == "wss://jetstream2.us-west.bsky.network/subscribe"
     assert config.ripe_url == "wss://ris-live.ripe.net/v1/ws/"
     assert config.ripe_collectors == ["rrc00", "rrc01", "rrc03", "rrc10"]
-    assert is_nil(config.solana_url)
+    assert config.solana_url == "wss://api.mainnet-beta.solana.com/"
     assert Config.from_keyword!(config, :prod) == config
   end
 
@@ -105,7 +105,8 @@ defmodule Worldloom.Signals.ConfigTest do
   test "every environment requires WSS for configured WebSocket sources" do
     for {setting, environment_key} <- [
           bluesky_url: "WORLDLOOM_BLUESKY_URL",
-          ripe_url: "WORLDLOOM_RIPE_URL"
+          ripe_url: "WORLDLOOM_RIPE_URL",
+          solana_url: "WORLDLOOM_SOLANA_URL"
         ],
         environment <- [:dev, :test, :prod] do
       assert_raise ArgumentError, ~r/#{environment_key}.*WSS URL/, fn ->
@@ -196,7 +197,8 @@ defmodule Worldloom.Signals.ConfigTest do
         usgs_url: "https://provider.example.test/usgs?token=usgs-secret",
         open_meteo_url: "https://provider.example.test/weather?token=weather-secret",
         bluesky_url: "wss://provider.example.test/bluesky?cursor=bluesky-secret",
-        ripe_url: "wss://provider.example.test/ripe?token=ripe-secret"
+        ripe_url: "wss://provider.example.test/ripe?token=ripe-secret",
+        solana_url: "wss://provider.example.test/solana?token=solana-secret"
       )
       |> Config.from_keyword!(:prod)
 
@@ -206,7 +208,8 @@ defmodule Worldloom.Signals.ConfigTest do
         config.usgs_url,
         config.open_meteo_url,
         config.bluesky_url,
-        config.ripe_url
+        config.ripe_url,
+        config.solana_url
       ] ++ config.drand_relays
 
     for url <- configured_urls do
@@ -237,11 +240,15 @@ defmodule Worldloom.Signals.ConfigTest do
     refute Exception.message(error) =~ "?"
   end
 
-  test "production refuses Solana until its public endpoint decision is explicit" do
-    assert_raise ArgumentError, ~r/WORLDLOOM_SOLANA_ENABLED.*production endpoint decision/, fn ->
-      default_config()
-      |> Keyword.put(:solana_enabled, "true")
-      |> Config.from_keyword!(:prod)
+  test "every environment requires an endpoint when Solana is enabled" do
+    for environment <- [:dev, :test, :prod] do
+      assert_raise ArgumentError,
+                   ~r/WORLDLOOM_SOLANA_URL.*required.*WORLDLOOM_SOLANA_ENABLED.*true/,
+                   fn ->
+                     default_config()
+                     |> Keyword.merge(solana_enabled: "true", solana_url: nil)
+                     |> Config.from_keyword!(environment)
+                   end
     end
   end
 

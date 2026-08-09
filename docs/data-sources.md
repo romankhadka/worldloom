@@ -9,8 +9,9 @@ conditions, network health, or personal behavior.
 
 ## Sources contacted by the current application
 
-The Worldloom server currently contacts only Wikimedia, the U.S. Geological Survey,
-and Open-Meteo. A visitor's browser does not contact those providers.
+The Worldloom server contacts Wikimedia, the U.S. Geological Survey, Open-Meteo,
+Bluesky Jetstream, RIPE RIS Live, Solana, and drand by default. A visitor's browser
+does not contact any of those providers.
 
 The deterministic launch gate opens 100 isolated browsers and requires every one to
 receive real Worldloom snapshots without any browser contacting an upstream origin.
@@ -89,13 +90,14 @@ or a materially different request volume requires a licensing review and likely 
 for Worldloom's source code does not grant rights to use an upstream API outside its
 terms.
 
-## Qualified incremental sources, disabled by default
+## Qualified sources with independent circuit breakers
 
 Worldloom contains deterministic, deny-by-default qualification boundaries and
-independent source switches for the four sources below. Every switch defaults to
-false, and a disabled source creates no process or upstream connection. A switch
-being present in a release does not authorize production enablement. Qualification
-proves the sanitized contract; it does not promise availability.
+independent operator switches for the four sources below. Every source starts enabled,
+while malformed or out-of-contract input fails closed. Setting one switch to `false`
+creates no process or upstream connection for that source and does not affect its
+siblings. These switches are operational circuit breakers, not visitor preferences.
+Qualification proves the sanitized contract; it does not promise availability.
 
 ### Bluesky legacy Jetstream
 
@@ -108,10 +110,9 @@ of total actions, original posts, replies, reposts, creates, updates, and delete
 plus a bounded truncation flag. Worldloom does not retain post text, handles, DIDs,
 record keys, URIs, CIDs, records, or raw frames. The resumable worker checkpoints
 only its fully committed numeric cursor. Bounded overlap fingerprints are
-transient worker state and are never checkpointed. The production-capable worker is
-independently supervised behind the false-by-default `WORLDLOOM_BLUESKY_ENABLED`
-switch, so it creates no process, upstream connection, event, or checkpoint while
-disabled.
+transient worker state and are never checkpointed. The worker is independently
+supervised behind `WORLDLOOM_BLUESKY_ENABLED`; it starts by default, and setting the
+switch to `false` creates no process, upstream connection, event, or checkpoint.
 
 Legacy Jetstream is appropriate for an informal artistic aggregate, but it is not a
 stable authenticated firehose and has no production SLA. Protocol drift or relay
@@ -148,9 +149,9 @@ event.
 
 RIS Live is best-effort and may disconnect a slow consumer. Reconnection starts at
 the live edge; Worldloom does not fabricate the missed interval. The
-production-capable worker is independently supervised behind the false-by-default
-`WORLDLOOM_RIPE_ENABLED` switch and creates no process or upstream connection while
-disabled. Its no-replay canary and one-flag rollback procedure are defined in
+worker is independently supervised behind `WORLDLOOM_RIPE_ENABLED`; it starts by
+default and creates no process or upstream connection when its circuit breaker is
+set to `false`. Its no-replay isolation and recovery procedure is defined in
 [operations.md](operations.md#ripe-ris-live).
 
 ### Solana slot progression
@@ -164,11 +165,14 @@ only accepted slot count, first and last slot, observed forward-gap count, and a
 bounded truncation flag. Subscription IDs, parent/root validation fields, accounts,
 transactions, wallets, programs, tokens, and unknown fields are discarded.
 
-Solana is qualified only against deterministic fixtures and development
-infrastructure. It remains production-disabled until a dedicated provider or
-self-hosted secure endpoint is separately approved. No production Solana URL is
-hidden in Worldloom configuration, and the public development endpoints are not an
-approved production dependency.
+One server-owned source process connects by default to the checked-in secure public
+mainnet endpoint, `wss://api.mainnet-beta.solana.com/`. The endpoint can be replaced
+with `WORLDLOOM_SOLANA_URL`, and `WORLDLOOM_SOLANA_ENABLED=false` isolates the source.
+Solana documents public endpoints as rate-limited, without an SLA, and unsuitable for
+production applications. Worldloom therefore treats this endpoint as best-effort,
+preserves genuine gaps, and keeps the circuit breaker available for throttling or
+provider instability; a dedicated or self-hosted endpoint remains preferable for a
+durable hosted deployment.
 
 ### WebSocket resource boundary
 
@@ -201,10 +205,10 @@ This is HTTPS failover plus structural validation. Worldloom does not verify the
 signature, recompute chain identity, compare relay consensus, or describe the result
 as verified randomness. Failed or malformed relays collapse to source unavailability.
 
-The worker is production-capable behind the false-by-default
-`WORLDLOOM_DRAND_ENABLED` switch. Enabling it remains a separately authorized canary
-operation. It maps UTC to the exact Quicknet round using the published genesis and
-three-second period, persists each accepted round through the shared Buffer, and
+The worker is independently supervised behind `WORLDLOOM_DRAND_ENABLED`; it starts
+by default and creates no process or upstream connection when its circuit breaker is
+set to `false`. It maps UTC to the exact Quicknet round using the published genesis
+and three-second period, persists each accepted round through the shared Buffer, and
 advances its checkpoint only after that durable submission succeeds. A restart
 recovers no more than twenty missing rounds in ascending order. If the durable cursor
 is farther behind, the worker requests the current exact round, records the skipped

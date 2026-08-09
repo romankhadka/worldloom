@@ -40,7 +40,8 @@ signal_environment = [
   ripe_enabled: System.get_env("WORLDLOOM_RIPE_ENABLED"),
   ripe_url: System.get_env("WORLDLOOM_RIPE_URL"),
   ripe_collectors: System.get_env("WORLDLOOM_RIPE_COLLECTORS"),
-  solana_enabled: System.get_env("WORLDLOOM_SOLANA_ENABLED")
+  solana_enabled: System.get_env("WORLDLOOM_SOLANA_ENABLED"),
+  solana_url: System.get_env("WORLDLOOM_SOLANA_URL")
 ]
 
 signal_environment =

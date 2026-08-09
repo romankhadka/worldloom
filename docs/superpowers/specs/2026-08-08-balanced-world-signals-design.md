@@ -114,7 +114,7 @@ window count discloses that additional four-second summaries were compacted. Bec
 slot, the public endpoints alone cannot reconstruct a stricter total-span equality.
 The continuity anchor is omitted from persistence and browser instructions.
 
-Official public Solana endpoints are suitable only for development: they are rate-limited, have no SLA, may block clients, and are explicitly not intended for production applications. The adapter and deterministic fixtures can be implemented without enabling the source publicly. Production Solana remains disabled until the owner explicitly approves a dedicated provider or self-hosted endpoint; changing endpoints does not change Worldloom's event contract.
+Official public Solana endpoints are rate-limited, have no SLA, may block clients, and are explicitly not intended for production applications. On 2026-08-09, the owner approved using `wss://api.mainnet-beta.solana.com/` as a best-effort default so the balanced public artwork includes genuine slot progression. The independent circuit breaker remains mandatory, and a dedicated provider or self-hosted endpoint is still preferable for a durable hosted deployment. Changing endpoints does not change Worldloom's event contract.
 
 Source documentation: [Solana `slotSubscribe`](https://solana.com/docs/rpc/websocket/slotsubscribe) and [Solana public RPC guidance](https://solana.com/docs/references/clusters).
 
@@ -427,7 +427,7 @@ This work is too broad for one coupled implementation gate. It is divided into i
 2. **Contract migration:** add render version 2 metrics, the separate memory layer, old-row compatibility, expanded source/checkpoint allow lists, and four-second Wikimedia windows.
 3. **Provider qualification:** prove the pinned legacy Jetstream contract, bounded RIPE collector subscription and load, drand v2 failover and seed derivation, and the Solana adapter against development infrastructure. No provider is production-enabled in this phase.
 4. **Transport and health:** add supervised source-owned Mint WebSocket workers, verified TLS and raw-data containment, bounded process behavior, ephemeral health registry, fair per-source buffering, and pressure reducers.
-5. **Incremental sources:** enable drand first, then Bluesky and RIPE one at a time through independently reversible canaries. Solana remains disabled until its production endpoint is separately approved.
+5. **Incremental sources:** qualify drand, Bluesky, RIPE, and Solana one at a time through independently reversible canaries. The 2026-08-09 default-on decision approved all four for the balanced release while retaining each source-local rollback switch.
 6. **Balanced visual release:** add the complete source materials, legend, semantic summaries, deterministic balance fixtures, provider-aware documentation, and instrumented 100-browser verification.
 
 Every phase receives its own red-green tests, diff review, and clean `mix precommit`. Public source enablement additionally requires its privacy, reconnect, drift-smoke, and canary evidence.

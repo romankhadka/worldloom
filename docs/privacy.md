@@ -50,12 +50,11 @@ shape remains.
 ## Incremental-source boundaries
 
 Bluesky, RIPE RIS Live, Solana, and drand have deterministic qualification boundaries
-and independently supervised source owners. Every switch is false by default. A
-disabled source creates no process, upstream connection, checkpoint, or durable
-event, and merging a production-capable worker does not authorize enabling it.
+and independently supervised source owners. Every source starts enabled, but setting
+its operator circuit breaker to `false` creates no process, upstream connection,
+checkpoint, or durable event for that source.
 
-If separately enabled in a later reviewed phase, their server-side boundaries permit
-only these privacy-preserving transformations:
+Their server-side boundaries permit only these privacy-preserving transformations:
 
 - Bluesky post/repost commits become aggregate action/category counts. Text, handles,
   DIDs, record keys, URIs, CIDs, records, and raw frames are discarded. Only the
@@ -102,11 +101,10 @@ stored per source for safe recovery. Browser tokens, peer-address HMACs, Presenc
 keys, raw provider frames, response bodies, drand signatures, and drand render
 identities are not part of that durable history.
 
-The checked-in configuration starts none of the four incremental source owners, so it
-adds no production checkpoint or event retention by default. Separately authorized
-enablement follows the source-specific canary and rollback gate in
-[operations.md](operations.md#incremental-source-canaries); capability alone does not
-activate a source.
+The checked-in configuration starts all four source owners. They can add only the
+bounded aggregate events and private recovery checkpoints described above. Operators
+can isolate any source with its independent circuit breaker by following the recovery
+gate in [operations.md](operations.md#incremental-source-canaries).
 
 Visitors can stop future cookie use by leaving the site and clearing the Worldloom
 site data in their browser. Because a gesture is intentionally anonymous and has no
@@ -115,18 +113,14 @@ gesture for access or deletion without compromising that design.
 
 ## External services
 
-The current application server—not each browser—contacts Wikimedia, USGS, and
-Open-Meteo. Visiting Worldloom does not cause the browser to call those providers.
-
+The application server—not each browser—contacts Wikimedia, USGS, Open-Meteo,
 [Bluesky legacy Jetstream](https://github.com/bluesky-social/jetstream-legacy),
 [RIPE RIS Live](https://ris-live.ripe.net/manual/),
 [Solana WebSocket RPC](https://solana.com/docs/rpc/websocket), and
-[drand Quicknet](https://docs.drand.love/blog/2023/10/16/quicknet-is-live/) are
-false-by-default server-side sources. If one is separately enabled after review,
-only the Worldloom server contacts it; browser-to-provider connections remain
-forbidden. Solana has no approved production endpoint and must remain disabled there.
-Following an attribution link leaves Worldloom and is then governed by that
-provider's policies.
+[drand Quicknet](https://docs.drand.love/blog/2023/10/16/quicknet-is-live/) by default.
+Browser-to-provider connections remain forbidden whether a source is active or
+isolated. Following an attribution link leaves Worldloom and is then governed by
+that provider's policies.
 
 Questions or security-sensitive concerns should use the channel in
 [SECURITY.md](../SECURITY.md).

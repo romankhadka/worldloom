@@ -24,19 +24,19 @@ healthy app with no external feed workers. `WORLDLOOM_WIKIMEDIA_URL`,
 `WORLDLOOM_USGS_URL`, and `WORLDLOOM_OPEN_METEO_URL` are HTTPS-only diagnostic
 overrides; remove them after controlled testing.
 
-Incremental public feeds have independent, false-by-default switches. The presence of
-a switch in a release does not authorize enabling it. Keep every new source disabled
-unless the source-specific canary below has explicit operational approval.
+All public feeds start enabled. The four high-cadence additions retain independent
+operator circuit breakers so an unhealthy, throttled, or drifting provider can be
+isolated without silencing the rest of the artwork. These are not visitor controls.
 
 | Source | Control | Default | Nominal cadence | Public expiry | Recovery bound |
 |---|---|---:|---:|---:|---|
 | Wikimedia | Global feed switch | On | 4-second windows | Quiet at 20 seconds | 60-second event-ID horizon |
 | USGS | Global feed switch | On | 1 minute | Quiet at 3 minutes | Private ETag and source-ID deduplication |
 | Open-Meteo | Global feed switch | On | 10 minutes | Stale at 30 minutes | Last ambient state plus local retry |
-| drand Quicknet | `WORLDLOOM_DRAND_ENABLED` | Off | 3 seconds | Stale at 12 seconds | 20 exact rounds, then one coarse gap |
-| Bluesky Jetstream | `WORLDLOOM_BLUESKY_ENABLED` | Off | 4-second windows | Quiet at 20 seconds | 5-second overlap, 60-second horizon |
-| RIPE RIS Live | `WORLDLOOM_RIPE_ENABLED` | Off | 4-second windows | Quiet at 20 seconds | Live edge only; no replay claim |
-| Solana | `WORLDLOOM_SOLANA_ENABLED` | Off | Not approved | Not applicable | No production endpoint |
+| drand Quicknet | `WORLDLOOM_DRAND_ENABLED` | On | 3 seconds | Stale at 12 seconds | 20 exact rounds, then one coarse gap |
+| Bluesky Jetstream | `WORLDLOOM_BLUESKY_ENABLED` | On | 4-second windows | Quiet at 20 seconds | 5-second overlap, 60-second horizon |
+| RIPE RIS Live | `WORLDLOOM_RIPE_ENABLED` | On | 4-second windows | Quiet at 20 seconds | Live edge only; no replay claim |
+| Solana | `WORLDLOOM_SOLANA_ENABLED` | On | 4-second windows | Quiet at 20 seconds | Live edge only; preserve observed gaps |
 
 `WORLDLOOM_FEEDS_ENABLED=false` overrides the entire table and starts no feed owner,
 including an independently enabled incremental source. Official contracts and exact
@@ -131,18 +131,19 @@ it is not a reason to weaken validation or expose the provider response.
 
 ## Incremental source canaries
 
-Enable only one new source in a canary deployment. Record the pre-deploy maximum
-sequence, per-source row count, public feed state, and sibling feed states. Do not
-change a second source flag until the first source has either met its evidence gate or
-been rolled back.
+All four sources start enabled. For a first hosted deployment, or when restoring a
+source after isolation, evaluate one source at a time. Record the pre-deploy maximum
+sequence, per-source row count, public feed state, and sibling feed states. If a gate
+fails, set only that source's switch to `false`; do not disable the global feed switch
+unless every provider must be stopped.
 
 ### drand Quicknet
 
-The checked-in release leaves `WORLDLOOM_DRAND_ENABLED=false`. Enabling drand is a
-separate deployment operation and requires explicit authorization; merging the
-production-capable worker does not perform that operation.
+The checked-in release starts drand. Use this procedure to verify a fresh deployment
+or to restore it after source-local isolation.
 
-- **Enable:** set `WORLDLOOM_DRAND_ENABLED=true` and redeploy one instance. The
+- **Restore/default:** remove a false override or set `WORLDLOOM_DRAND_ENABLED=true`
+  and redeploy one instance. The
   optional `WORLDLOOM_DRAND_RELAYS` value may select a comma-separated, unique subset
   of the three pinned official relay origins; arbitrary origins fail startup.
 - **Expected cadence:** one different real Quicknet round every three seconds.
@@ -162,12 +163,13 @@ rollback condition, not a reason to broaden timeouts or queue bounds.
 
 ### Bluesky legacy Jetstream
 
-The checked-in release leaves `WORLDLOOM_BLUESKY_ENABLED=false`. Enabling Bluesky is
-a separate deployment operation and requires explicit authorization. The adapter
-targets the deployed legacy Jetstream protocol: it is a best-effort, unauthenticated
-artistic signal, not a protocol-stable firehose or production-SLA dependency.
+The checked-in release starts Bluesky. Use this procedure to verify a fresh deployment
+or to restore it after source-local isolation. The adapter targets the deployed legacy
+Jetstream protocol: it is a best-effort, unauthenticated artistic signal, not a
+protocol-stable firehose or production-SLA dependency.
 
-- **Enable:** set `WORLDLOOM_BLUESKY_ENABLED=true` and redeploy one instance. Do not
+- **Restore/default:** remove a false override or set
+  `WORLDLOOM_BLUESKY_ENABLED=true` and redeploy one instance. Do not
   change `WORLDLOOM_BLUESKY_URL` during the canary; the configured secure endpoint is
   validated before the supervision tree starts.
 - **Subscription bound:** the server owns one socket and requests only
@@ -198,12 +200,13 @@ interference is a rollback condition.
 
 ### RIPE RIS Live
 
-The checked-in release leaves `WORLDLOOM_RIPE_ENABLED=false`. Enabling RIPE is a
-separate deployment operation and requires explicit authorization. RIS Live is an
+The checked-in release starts RIPE RIS Live. Use this procedure to verify a fresh
+deployment or to restore it after source-local isolation. RIS Live is an
 unauthenticated, best-effort routing stream and may send a final error before closing
 a slow consumer; Worldloom treats that as source-local degradation.
 
-- **Enable:** set `WORLDLOOM_RIPE_ENABLED=true` and redeploy one instance. Keep the
+- **Restore/default:** remove a false override or set `WORLDLOOM_RIPE_ENABLED=true`
+  and redeploy one instance. Keep the
   reviewed `WORLDLOOM_RIPE_URL` and configure one to four unique `rrcNN` names with
   `WORLDLOOM_RIPE_COLLECTORS`; invalid or empty configuration fails startup.
 - **Subscription bound:** on every connection, request the current `ris_rrc_list`,
@@ -238,6 +241,32 @@ a slow consumer; Worldloom treats that as source-local degradation.
 Close the canary only after a forced slow-consumer close demonstrates a privacy-safe
 gap, fresh collector negotiation, no replay, and one summary per new non-empty
 window. An unbounded subscription, raw payload, identity leakage, replay claim, or
+sibling-feed interference is a rollback condition.
+
+### Solana slot progression
+
+The checked-in release starts one server-owned `slotSubscribe` connection against
+`wss://api.mainnet-beta.solana.com/`. Solana's public endpoint is rate-limited, has no
+SLA, and is not intended for production applications, so a dedicated or self-hosted
+secure endpoint is preferable for a durable hosted deployment.
+
+- **Restore/default:** remove a false override or set `WORLDLOOM_SOLANA_ENABLED=true`
+  and redeploy one instance. `WORLDLOOM_SOLANA_URL` may select a different absolute
+  `wss://` endpoint; an enabled source without an endpoint fails startup.
+- **Subscription bound:** the server opens one socket and sends the exact
+  parameterless `slotSubscribe` request. Browsers never open provider connections.
+- **Healthy threshold:** a connected feed with no durably accepted activity for
+  twenty seconds becomes `quiet`; a closed transport becomes `disconnected`.
+- **Recovery bound:** reconnect at the live edge. Preserve and report observed slot
+  gaps; never expand a gap into fabricated observations or claim replay.
+- **Observe:** each non-empty four-second window creates at most one unique Solana
+  event row. Confirm sibling feed cadence remains unaffected and inspect durable
+  events, logs, telemetry, and browser instructions for transaction, account, wallet,
+  program, token, parent/root, subscription ID, or raw-frame leakage.
+- **Rollback:** set only `WORLDLOOM_SOLANA_ENABLED=false` and redeploy. This removes
+  only the Solana socket owner and leaves every other source active.
+
+Sustained throttling, contract drift, identity leakage, invented gap activity, or
 sibling-feed interference is a rollback condition.
 
 ## Telemetry and logs

@@ -24,6 +24,7 @@ defmodule Worldloom.RuntimeConfigTest do
     WORLDLOOM_RIPE_URL
     WORLDLOOM_RIPE_COLLECTORS
     WORLDLOOM_SOLANA_ENABLED
+    WORLDLOOM_SOLANA_URL
   )
 
   setup do
@@ -86,6 +87,8 @@ defmodule Worldloom.RuntimeConfigTest do
     System.put_env("WORLDLOOM_RIPE_ENABLED", "true")
     System.put_env("WORLDLOOM_RIPE_URL", "wss://ripe.example.test/ws?token=private")
     System.put_env("WORLDLOOM_RIPE_COLLECTORS", "rrc00,rrc03")
+    System.put_env("WORLDLOOM_SOLANA_ENABLED", "true")
+    System.put_env("WORLDLOOM_SOLANA_URL", "wss://solana.example.test/ws?token=private")
 
     runtime_config = Config.Reader.read!("config/runtime.exs", env: :prod)
     signal_config = runtime_config[:worldloom][Worldloom.Signals]
@@ -99,7 +102,8 @@ defmodule Worldloom.RuntimeConfigTest do
     assert signal_config.ripe_enabled
     assert signal_config.ripe_url == "wss://ripe.example.test/ws?token=private"
     assert signal_config.ripe_collectors == ["rrc00", "rrc03"]
-    refute signal_config.solana_enabled
+    assert signal_config.solana_enabled
+    assert signal_config.solana_url == "wss://solana.example.test/ws?token=private"
     refute inspect(signal_config) =~ "private"
     refute inspect(signal_config) =~ "?"
   end
@@ -129,13 +133,16 @@ defmodule Worldloom.RuntimeConfigTest do
     refute Exception.message(error) =~ "?"
   end
 
-  test "production keeps Solana disabled until its endpoint decision is approved" do
+  test "production uses the approved Solana endpoint when its source is enabled" do
     System.put_env("WORLDLOOM_FEEDS_ENABLED", "true")
     System.put_env("WORLDLOOM_SOLANA_ENABLED", "true")
+    System.delete_env("WORLDLOOM_SOLANA_URL")
 
-    assert_raise ArgumentError, ~r/WORLDLOOM_SOLANA_ENABLED.*production endpoint decision/, fn ->
-      Config.Reader.read!("config/runtime.exs", env: :prod)
-    end
+    runtime_config = Config.Reader.read!("config/runtime.exs", env: :prod)
+    signal_config = runtime_config[:worldloom][Worldloom.Signals]
+
+    assert signal_config.solana_enabled
+    assert signal_config.solana_url == "wss://api.mainnet-beta.solana.com/"
   end
 
   test "production redirects direct HTTP while accepting Fly-forwarded HTTPS health checks" do
