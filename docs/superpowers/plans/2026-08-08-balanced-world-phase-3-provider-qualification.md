@@ -16,6 +16,7 @@
 
 - `lib/worldloom/signals/bounded_counter.ex`
 - `lib/worldloom/signals/bluesky_window.ex`
+- `lib/worldloom/signals/bluesky_recovery.ex`
 - `lib/worldloom/signals/ripe_window.ex`
 - `lib/worldloom/signals/solana_slot_adapter.ex`
 - `lib/worldloom/signals/drand_client.ex`
@@ -89,10 +90,18 @@ Include original post create, reply create, repost create, post update, post del
 
 Create `test/worldloom/signals/bluesky_window_test.exs`. Use four-second windows at offset one. Assert exact counts for `total_actions`, `original_posts`, `replies`, `reposts`, `creates`, `updates`, and `deletes`; provider occurrence time from `time_us`; one-second lateness; uint32 saturation; `:empty`; and `inspect(window)` containing none of `did`, `handle`, `text`, `uri`, `cid`, or cursor values.
 
+Create `test/worldloom/signals/bluesky_recovery_test.exs` for the pure replay boundary. Assert that it:
+
+- rewinds a valid fully committed cursor by exactly `5_000_000` microseconds and clamps the result at zero;
+- rejects observations at or before the committed cursor before consulting overlap fingerprints;
+- retains at most 4,096 fixed-size fingerprints for the open overlap window, rejects duplicates, and explicitly drops unseen observations after the bound is full;
+- selects the live tail and reports a gap when the checkpoint is missing, ahead of server receipt time, or more than 60 seconds behind it; and
+- never exposes raw cursor or identity material through `inspect/1`.
+
 - [ ] **Step 3: Run and verify RED**
 
 ```bash
-rtk mix test test/worldloom/signals/bluesky_window_test.exs
+rtk mix test test/worldloom/signals/bluesky_window_test.exs test/worldloom/signals/bluesky_recovery_test.exs
 ```
 
 - [ ] **Step 4: Implement a deny-by-default window**
@@ -107,6 +116,8 @@ Create `lib/worldloom/signals/bluesky_window.ex`. Accept only top-level `kind: "
 
 The struct may contain only window times, approved counters, and `truncated`. Do not store a cursor, identity, record, or raw frame in the struct.
 
+Create `lib/worldloom/signals/bluesky_recovery.ex` as a pure boundary for the legacy service's Unix-microsecond cursor. Given the maximum fully committed cursor and current server receipt time, return either the exact five-second rewind or an explicit live-tail gap when the checkpoint is missing, future-dated, or older than the 60-second replay horizon. Track only fixed-size hashes for observations above the committed cursor in a 4,096-entry open-window set. Duplicate hashes are dropped; once full, previously unseen overlap observations are dropped with an explicit bounded-capacity reason instead of being accepted without deduplication. Phase 4 may call this boundary but must not reimplement its policy.
+
 - [ ] **Step 5: Normalize the aggregate**
 
 Add `Normalizer.bluesky_window/1`, producing `:public_activity/:bluesky`, identity `bluesky-window:<unix-start>:4`, provider `occurred_at = window_start`, deterministic lane from the approved counters, and the exact allow-listed payload.
@@ -114,8 +125,8 @@ Add `Normalizer.bluesky_window/1`, producing `:public_activity/:bluesky`, identi
 - [ ] **Step 6: Verify privacy and commit**
 
 ```bash
-rtk mix test test/worldloom/signals/bluesky_window_test.exs test/worldloom/signals/normalizer_test.exs test/worldloom/loom/source_event_test.exs
-rtk git add lib/worldloom/signals/bluesky_window.ex lib/worldloom/signals/normalizer.ex test/worldloom/signals/bluesky_window_test.exs test/worldloom/signals/normalizer_test.exs test/support/fixtures/feeds/bluesky_frames.json
+rtk mix test test/worldloom/signals/bluesky_window_test.exs test/worldloom/signals/bluesky_recovery_test.exs test/worldloom/signals/normalizer_test.exs test/worldloom/loom/source_event_test.exs
+rtk git add lib/worldloom/signals/bluesky_window.ex lib/worldloom/signals/bluesky_recovery.ex lib/worldloom/signals/normalizer.ex test/worldloom/signals/bluesky_window_test.exs test/worldloom/signals/bluesky_recovery_test.exs test/worldloom/signals/normalizer_test.exs test/support/fixtures/feeds/bluesky_frames.json
 rtk git commit -m "Qualify bounded Bluesky activity summaries"
 ```
 
@@ -187,7 +198,7 @@ Create `lib/worldloom/signals/solana_slot_adapter.ex` with:
         {:ok, t()} | {:flush, t(), t()} | {:drop, atom(), t()}
 ```
 
-Use four-second server-receipt windows at offset three. Persist only slot count, first/last slot, gap count, window count/span, summary, lane, and intensity. No production URL, child spec, runtime flag, or worker belongs in this phase.
+Use four-second server-receipt windows at offset three. Persist only slot count, first/last slot, gap count, window count/span, summary, lane, and intensity. Validate `root` and `parent` as notification-shape fields and then discard them; this phase does not publish root-lag metrics. No production URL, child spec, runtime flag, or worker belongs in this phase.
 
 - [ ] **Step 4: Normalize and commit**
 
@@ -209,7 +220,7 @@ Create `test/worldloom/signals/drand_client_test.exs`. Use the fixed Quicknet ch
 @quicknet_chain_hash "52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971"
 ```
 
-Assert concurrent requests to a bounded official relay list return the first structurally valid response; invalid JSON, wrong round, wrong chain path, non-64-character hex randomness, timeout, and HTTP failure are ignored; all failures return `{:error, :unavailable}`; response bodies and URLs never appear in telemetry/log captures. Add a chain-info fixture and require hash equality, `period == 3`, and a positive integer `genesis_time` before accepting round scheduling.
+Assert concurrent requests to the bounded v2-capable relay list return the first structurally valid response containing the requested positive round and exactly one 96-character lowercase hexadecimal `signature`. Reject a `randomness`-only response, malformed signature, wrong round, invalid JSON, timeout, and HTTP failure. Assert SHA-256 of the decoded 48 signature bytes becomes a 64-character lowercase render identity and that neither the signature, response body, nor URL appears in payloads, inspection, logs, or telemetry. Add a chain-info fixture and require the exact Quicknet hash, `beacon_id == "quicknet"`, `period == 3`, a positive integer `genesis_time`, a 64-character hexadecimal `genesis_seed`, a 192-character hexadecimal `public_key`, and `scheme == "bls-unchained-g1-rfc9380"` before accepting round scheduling.
 
 - [ ] **Step 2: Run and verify RED**
 
@@ -219,18 +230,18 @@ rtk mix test test/worldloom/signals/drand_client_test.exs
 
 - [ ] **Step 3: Implement bounded concurrent Req calls**
 
-Create `lib/worldloom/signals/drand_client.ex`. Accept `relays`, `request`, and timeout through the initializer/options. Limit relays to three, use `Task.async_stream/3` with `ordered: false`, `max_concurrency: 3`, and a finite timeout, halt after the first valid `%{"round" => positive_integer, "randomness" => 64_hex}`. Fetch `/v2/chains/<quicknet-hash>/info` at initialization and retain only validated `period` and `genesis_time`. Return only:
+Create `lib/worldloom/signals/drand_client.ex`. Accept `relays`, `request`, and timeout through the initializer/options, rejecting more than three relay bases. Production defaults are exactly the three current v2-capable bases `https://api.drand.sh`, `https://api2.drand.sh`, and `https://api3.drand.sh`; tests may inject bounded local relay URLs. Use `Task.async_stream/3` with `ordered: false`, `max_concurrency: 3`, and a finite timeout to race `/v2/chains/<quicknet-hash>/...` requests, halting after the first valid `%{"round" => positive_integer, "signature" => signature_96_hex}`. Decode the signature, derive `render_identity = SHA256(signature_bytes)` as lowercase hexadecimal, and discard the signature. Fetch `/v2/chains/<quicknet-hash>/info` at initialization and retain only validated `period` and `genesis_time`. Return only:
 
 ```elixir
-{:ok, %{round: round, randomness: String.downcase(randomness)}}
+{:ok, %{round: round, render_identity: render_identity}}
 {:error, :unavailable}
 ```
 
-This is structural validation and relay agreement-by-first-valid-response, not BLS signature verification.
+This is HTTPS structural validation and first-valid-response failover, not BLS signature verification or relay consensus.
 
 - [ ] **Step 4: Normalize without persisting beacon output**
 
-Add `Normalizer.drand_round/2`. Pass the validated randomness as the ephemeral `SourceEvent.render_identity`; durable payload is exactly `%{"summary" => "drand Quicknet round #{round}", "round" => round}`. Identity is `drand-round:<round>` and occurrence time is `genesis_time + (round - 1) * 3` seconds, not local receipt time.
+Add `Normalizer.drand_round/2`. Pass `render_identity` ephemerally to `SourceEvent`; durable payload remains exactly `%{"summary" => "drand Quicknet round #{round}", "round" => round}`. Identity is `drand-round:<round>` and occurrence time is `genesis_time + (round - 1) * period`, not local receipt time.
 
 - [ ] **Step 5: Verify and commit**
 
@@ -281,6 +292,6 @@ rtk git commit -m "Document qualified public signal boundaries"
 - [ ] All four pure boundaries are deterministic, bounded, and deny-by-default.
 - [ ] Decoded counters and sets have explicit caps.
 - [ ] Provider time versus server receipt time matches the specification.
-- [ ] drand randomness affects render seed but is not persisted.
+- [ ] The SHA-256 digest of the decoded drand signature affects render seed; the signature and digest are not persisted.
 - [ ] No provider worker or production enablement exists.
 - [ ] Solana has no production URL decision hidden in code or configuration.

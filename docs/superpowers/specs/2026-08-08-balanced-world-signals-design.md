@@ -74,7 +74,7 @@ Worldloom subscribes only to the collections needed to derive bounded activity c
 - reposts; and
 - creates, updates, and deletes.
 
-Limiting the subscription to post and repost collections keeps input volume and content exposure smaller than following likes and graph changes. The visual payload stores counts and bounded ratios, never text or identity. The last accepted Jetstream timestamp cursor is checkpointed for bounded overlap-and-deduplicate resume.
+Limiting the subscription to post and repost collections keeps input volume and content exposure smaller than following likes and graph changes. The visual payload stores counts and bounded ratios, never text or identity. The maximum fully committed Jetstream `time_us` is checkpointed for best-effort bounded overlap-and-deduplicate resume.
 
 Source documentation: [Bluesky Jetstream](https://docs.bsky.app/blog/jetstream), the [legacy implementation](https://github.com/bluesky-social/jetstream-legacy), and the [replacement project](https://github.com/bluesky-social/jetstream).
 
@@ -100,27 +100,23 @@ Source documentation: [RIPE RIS Live manual](https://ris-live.ripe.net/manual/).
 
 Solana adds a precise computational rhythm. A configurable secure WebSocket endpoint receives `slotSubscribe` notifications. Worldloom observes consensus progression only; it does not request transactions, accounts, balances, wallets, tokens, or prices.
 
-Each summary contains:
-
-- accepted slot count;
-- first and last slot;
-- observed slot gaps;
-- final root lag; and
-- maximum root lag during the window.
+Each summary contains accepted slot count, first and last slot, and observed slot gaps. The adapter validates the notification's integer `slot`, `parent`, and `root` fields, then discards `parent` and `root`; this release does not publish a root-lag metric.
 
 Official public Solana endpoints are suitable only for development: they are rate-limited, have no SLA, may block clients, and are explicitly not intended for production applications. The adapter and deterministic fixtures can be implemented without enabling the source publicly. Production Solana remains disabled until the owner explicitly approves a dedicated provider or self-hosted endpoint; changing endpoints does not change Worldloom's event contract.
 
-Source documentation: [Solana `slotSubscribe`](https://solana.com/docs/rpc/websocket/slotsubscribe) and [Solana public RPC guidance](https://www.solanakit.com/docs/guides/rpc-subscriptions).
+Source documentation: [Solana `slotSubscribe`](https://solana.com/docs/rpc/websocket/slotsubscribe) and [Solana public RPC guidance](https://solana.com/docs/references/clusters).
 
 ### drand Quicknet
 
-drand adds a pale crystalline pulse derived from public randomness. Quicknet publishes a new beacon round every three seconds. Worldloom pins the v2 HTTP contract and Quicknet chain hash `52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971`, validates monotonic rounds and expected field shapes, and derives the durable render seed from the documented beacon output. Worldloom races bounded concurrent Req calls to official relays and accepts the first valid response.
+drand adds a pale crystalline pulse derived from public randomness. Quicknet publishes a new beacon round every three seconds. Worldloom pins drand API v2 and Quicknet chain hash `52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971`. At initialization it validates the chain-info response: `beacon_id == "quicknet"`, the exact chain hash, `period == 3`, a positive `genesis_time`, a 64-character hexadecimal `genesis_seed`, a 192-character hexadecimal `public_key`, and `scheme == "bls-unchained-g1-rfc9380"`.
 
-The normalized payload contains the round number, chain identity, occurrence time, and a fixed summary. It does not retain the complete upstream response. The round number is the external ID and provides natural idempotency.
+A v2 round response contains a positive integer `round` and a 96-character hexadecimal `signature`. Worldloom decodes the 48 signature bytes, computes SHA-256, and uses the lowercase 64-character hexadecimal digest only as ephemeral render identity. The signature and complete response are then discarded. Worldloom races bounded concurrent Req calls to the three current v2-capable `drand.sh` relays and accepts the first structurally valid response.
 
-drand publishes cryptographically verifiable randomness, but Worldloom is an artwork rather than a beacon verifier. This release relies on HTTPS and structural validation and must not claim that it independently verifies the BLS signature.
+The durable payload contains only the round number and fixed summary. `occurred_at` is computed as `genesis_time + (round - 1) * period`; the round is the external ID and provides natural idempotency. The fixed client contract identifies the source as Quicknet, so chain identity is not duplicated in every payload.
 
-Source documentation: [drand Quicknet](https://docs.drand.love/blog/2023/10/16/quicknet-is-live/) and the [drand v2 HTTP API](https://docs.drand.love/developer/API-v2/drand-http-api/).
+drand publishes cryptographically verifiable randomness, but Worldloom is an artwork rather than a beacon verifier. This release relies on HTTPS and structural validation. It does not verify the BLS signature and must not describe the derived digest as independently verified randomness.
+
+Source documentation: [drand Quicknet](https://docs.drand.love/blog/2023/10/16/quicknet-is-live/), the [drand v2 HTTP API](https://docs.drand.love/developer/API-v2/drand-http-api/), and the [drand cryptography documentation](https://docs.drand.love/docs/cryptography/).
 
 ## Durable event contract
 
@@ -128,12 +124,12 @@ The `loom_events` check constraints and `Worldloom.Loom.Event` allow lists gain 
 
 | Source | Kind | External ID |
 |---|---|---|
-| `bluesky` | `public_activity` | four-second window end in UTC |
-| `ripe_ris` | `route_change` | four-second window end in UTC |
-| `solana` | `slot` | four-second window end in UTC |
+| `bluesky` | `public_activity` | four-second window start in UTC plus fixed span |
+| `ripe_ris` | `route_change` | four-second window start in UTC plus fixed span |
+| `solana` | `slot` | four-second window start in UTC plus fixed span |
 | `drand` | `randomness` | Quicknet round number |
 
-Wikimedia's external ID also becomes its four-second window end. Existing rows and permalinks remain unchanged. A migration adds the expanded kind/source constraint as a validated superset before removing the old constraint; it does not rewrite historical events. Application allow lists in `Event`, `SourceEvent`, `FeedCheckpoint`, `Instruction`, and source-specific payload validation change together.
+Wikimedia's external ID also becomes its four-second window start plus the fixed span. Existing rows and permalinks remain unchanged. A migration adds the expanded kind/source constraint as a validated superset before removing the old constraint; it does not rewrite historical events. Application allow lists in `Event`, `SourceEvent`, `FeedCheckpoint`, `Instruction`, and source-specific payload validation change together.
 
 Every payload uses string keys, contains a server-authored summary of at most 160 characters, remains below the existing 16 KiB encoded limit, and passes a source-specific allow-list before it can enter the coordinator. Unknown keys, malformed numbers, excessive collection sizes, and non-finite values are rejected. Occurrence time follows the source-specific event-time rules below: validated provider time where available, bounded server receipt time otherwise. Untrusted timestamps cannot bypass skew, replay, or lateness limits to stretch the visual timeline.
 
@@ -145,7 +141,7 @@ The new source families require metrics that the current public instruction deli
 
 `contextual_memory` is not durable event truth. It is a presentation role derived by the live snapshot and carried in a separate `memory_events` collection. The same stored event can therefore be a faded memory at the live edge and a normal historical formation in its chapter without changing the row or its render version.
 
-For drand, `VisualParameters` derives the version 2 seed from the validated beacon output rather than only the round-number external ID. The complete upstream response is still discarded.
+For drand, `VisualParameters` derives the version 2 seed from the SHA-256 digest of the decoded v2 signature rather than only the round-number external ID. The signature, digest, and complete upstream response are not persisted.
 
 ## Cadence and aggregation
 
@@ -158,7 +154,7 @@ Wikimedia, Bluesky, RIPE, and Solana are consumed continuously but summarized in
 | `2` | RIPE RIS Live |
 | `3` | Solana |
 
-Each worker uses a monotonic timer for scheduling and a UTC boundary for the durable window identity. Wikimedia, Bluesky, and RIPE assign observations from their validated provider timestamps; Solana uses server receipt time because `slotSubscribe` has no wall-clock field. The event's `occurred_at` and external ID are the window end. A one-second grace period admits ordinary reordering, after which observations for an already-closed window are dropped with a coarse lateness metric.
+Each worker uses a monotonic timer for scheduling and a UTC boundary for the durable window identity. Wikimedia, Bluesky, and RIPE assign observations from their validated provider timestamps; Solana uses server receipt time because `slotSubscribe` has no wall-clock field. The event's `occurred_at` is the window start, and the external ID includes that start plus the fixed span. A one-second grace period admits ordinary reordering, after which observations for an already-closed window are dropped with a coarse lateness metric.
 
 This cadence targets one different high-volume family each second while limiting each source to fifteen normal durable rows per minute. Network and commit delay can change when a visitor sees the row; the stored event time does not change to disguise that delay. drand contributes its genuine three-second rounds independently. Earthquake, weather, and visitor events retain their real occurrence cadence.
 
@@ -212,7 +208,7 @@ Under pressure, Wikimedia, Bluesky, RIPE, and Solana may combine adjacent pendin
 ## Checkpoints and recovery
 
 - **Wikimedia:** persist the last accepted EventStreams cursor with the completed summary. Reconnect with `Last-Event-ID`, but accept at most sixty seconds of replay before moving to the live edge and reporting a gap.
-- **Bluesky:** persist the maximum accepted Jetstream `time_us` cursor with the completed summary. Reconnect with a five-second cursor overlap, deduplicate observations in a bounded worker-local set, and accept at most sixty seconds of replay. A provider-imposed limit or protocol change becomes a reported gap.
+- **Bluesky:** persist the maximum fully committed Jetstream `time_us`. Reconnect with `cursor = max(0, committed_cursor - 5_000_000)`, discard observations at or before the committed cursor, and use bounded transient fingerprints to deduplicate overlap in the open window. A missing or future cursor starts at the live tail. Public replay is best-effort and only roughly transferable between legacy instances; Worldloom accepts at most sixty seconds before reporting a gap and returning to the live edge.
 - **RIPE RIS Live:** record successful contact and summary-window metadata. Reconnect at the live edge; do not replay or synthesize the disconnected interval.
 - **Solana:** record the last observed slot. After reconnect, subscribe to current progress and use the first returned slot to establish the new live edge. A forward gap is reported as a gap, not expanded into fabricated slots.
 - **drand:** persist the last committed round. Fetch at most twenty missed rounds in ascending order; if more than one minute was missed, resume from the latest valid round and report the skipped span.
