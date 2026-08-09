@@ -10,6 +10,15 @@ defmodule Worldloom.Signals.Buffer do
   @drain_interval 250
   @maximum_depth 16
   @retry_delays [250, 1_000, 5_000]
+  @checkpoint_sources %{
+    "wikimedia" => :wikimedia,
+    "usgs" => :usgs,
+    "open_meteo" => :open_meteo,
+    "bluesky" => :bluesky,
+    "ripe_ris" => :ripe_ris,
+    "solana" => :solana,
+    "drand" => :drand
+  }
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(options \\ []) do
@@ -39,16 +48,6 @@ defmodule Worldloom.Signals.Buffer do
   def init(state), do: {:ok, state}
 
   @impl true
-  def handle_call({:submit, [], checkpoint}, _from, state) when is_map(checkpoint) do
-    reply =
-      case Coordinator.commit_external(state.coordinator, [], checkpoint) do
-        {:ok, []} -> :ok
-        {:error, _reason} -> {:error, :persistence_unavailable}
-      end
-
-    {:reply, reply, state}
-  end
-
   def handle_call({:submit, events, checkpoint}, from, state) do
     case submission_entries(events, checkpoint, from) do
       {:ok, entries} ->
@@ -123,6 +122,25 @@ defmodule Worldloom.Signals.Buffer do
     end
   end
 
+  defp submission_entries([], checkpoint, from) when is_map(checkpoint) do
+    case Map.fetch(@checkpoint_sources, checkpoint_source(checkpoint)) do
+      {:ok, source} ->
+        {:ok,
+         [
+           %{
+             source: source,
+             events: [],
+             checkpoint: checkpoint,
+             waiters: [from],
+             attempts: 0
+           }
+         ]}
+
+      :error ->
+        {:error, :invalid_submission}
+    end
+  end
+
   defp submission_entries(_events, _checkpoint, _from), do: {:error, :invalid_submission}
 
   defp validate_events(events) do
@@ -146,19 +164,49 @@ defmodule Worldloom.Signals.Buffer do
     do: queue ++ [entry]
 
   defp enqueue(queue, entry, merger) do
-    matching_entries = Enum.filter(queue, &(&1.source == entry.source))
-    {:ok, merged_event} = merger.merge(Enum.flat_map(matching_entries ++ [entry], & &1.events))
-    combined_entries = matching_entries ++ [entry]
+    compacted_queue = compact_for_space(queue, entry.source, merger)
+    compacted_queue ++ [entry]
+  end
 
-    merged_entry = %{
-      source: entry.source,
-      events: [merged_event],
-      checkpoint: latest_checkpoint(combined_entries),
-      waiters: Enum.flat_map(combined_entries, & &1.waiters),
-      attempts: combined_entries |> Enum.map(& &1.attempts) |> Enum.max()
+  defp compact_for_space(queue, preferred_source, merger) do
+    source =
+      if Enum.count(queue, &(&1.source == preferred_source)) >= 2 do
+        preferred_source
+      else
+        queue
+        |> Enum.frequencies_by(& &1.source)
+        |> Enum.find_value(fn {source, count} -> if count >= 2, do: source end)
+      end
+
+    compact_source(queue, source, merger)
+  end
+
+  defp compact_source(queue, source, merger) do
+    matching_entries = Enum.filter(queue, &(&1.source == source))
+    source_events = Enum.flat_map(matching_entries, & &1.events)
+
+    compacted_events =
+      case source_events do
+        [] ->
+          []
+
+        [event] ->
+          [event]
+
+        events ->
+          {:ok, merged_event} = merger.merge(events)
+          [merged_event]
+      end
+
+    compacted_entry = %{
+      source: source,
+      events: compacted_events,
+      checkpoint: latest_checkpoint(matching_entries),
+      waiters: Enum.flat_map(matching_entries, & &1.waiters),
+      attempts: matching_entries |> Enum.map(& &1.attempts) |> Enum.max()
     }
 
-    replace_matching_entries(queue, entry.source, merged_entry)
+    replace_matching_entries(queue, source, compacted_entry)
   end
 
   defp replace_matching_entries(queue, source, merged_entry) do

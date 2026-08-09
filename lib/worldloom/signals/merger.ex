@@ -4,6 +4,8 @@ defmodule Worldloom.Signals.Merger do
   @identity_modulus Integer.pow(2, 256)
   @maximum_places 5
   @maximum_languages 5
+  @uint32_max 4_294_967_295
+  @maximum_window_count div(@uint32_max, 4)
 
   @spec merge([SourceEvent.t()]) :: {:ok, SourceEvent.t()} | {:error, atom()}
   def merge([%SourceEvent{} = event]), do: {:ok, event}
@@ -21,13 +23,16 @@ defmodule Worldloom.Signals.Merger do
   def merge(_events), do: {:error, :invalid_events}
 
   defp merge_wikimedia(events) do
-    count = Enum.sum(Enum.map(events, &payload_integer(&1, "count", 1)))
+    count = saturated_sum(events, "count", 1)
+    window_count = min(saturated_sum(events, "window_count", 1), @maximum_window_count)
 
     languages =
       events
       |> Enum.flat_map(fn event -> Map.to_list(Map.get(event.payload, "languages", %{})) end)
       |> Enum.reduce(%{}, fn {language, language_count}, totals ->
-        Map.update(totals, language, language_count, &(&1 + language_count))
+        Map.update(totals, language, min(language_count, @uint32_max), fn existing_count ->
+          saturated_add(existing_count, language_count)
+        end)
       end)
       |> Enum.sort_by(fn {language, language_count} -> {-language_count, language} end)
       |> Enum.take(@maximum_languages)
@@ -59,9 +64,10 @@ defmodule Worldloom.Signals.Merger do
       intensity: events |> Enum.map(& &1.intensity) |> Enum.sum() |> clamp_unit(),
       payload: %{
         "summary" => "#{count} edits moved through #{map_size(languages)} languages",
+        "window_count" => window_count,
+        "window_span_seconds" => window_count * 4,
         "count" => count,
-        "total_absolute_byte_delta" =>
-          Enum.sum(Enum.map(events, &payload_integer(&1, "total_absolute_byte_delta", 0))),
+        "total_absolute_byte_delta" => saturated_sum(events, "total_absolute_byte_delta", 0),
         "languages" => languages,
         "dominant_edit_type" => dominant_edit_type
       }
@@ -162,6 +168,14 @@ defmodule Worldloom.Signals.Merger do
       _invalid -> default
     end
   end
+
+  defp saturated_sum(events, key, default) do
+    Enum.reduce(events, 0, fn event, total ->
+      saturated_add(total, payload_integer(event, key, default))
+    end)
+  end
+
+  defp saturated_add(left, right), do: min(left + right, @uint32_max)
 
   defp truncate_summary(summary),
     do: summary |> String.graphemes() |> Enum.take(160) |> Enum.join()

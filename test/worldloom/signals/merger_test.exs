@@ -17,6 +17,8 @@ defmodule Worldloom.Signals.MergerTest do
     refute merged.external_id in Enum.map(events, & &1.external_id)
     assert merged.intensity == 0.9
     assert merged.payload["count"] == 8
+    assert merged.payload["window_count"] == 2
+    assert merged.payload["window_span_seconds"] == 8
     assert merged.payload["total_absolute_byte_delta"] == 200
     assert merged.payload["languages"] == %{"de" => 4, "en" => 3, "fr" => 1}
     assert merged.payload["dominant_edit_type"] == "new"
@@ -48,6 +50,25 @@ defmodule Worldloom.Signals.MergerTest do
     assert merged.payload["summary"] == "Magnitude 3.5 near Public place 7, plus 6 more"
   end
 
+  test "saturates Wikimedia pressure spans without breaking their four-second invariant" do
+    maximum_window_count = div(4_294_967_295, 4)
+
+    saturated =
+      wikimedia_event(1, 1, 1, %{"en" => 1}, "edit", 0.1)
+      |> Map.update!(:payload, fn payload ->
+        Map.merge(payload, %{
+          "window_count" => maximum_window_count,
+          "window_span_seconds" => maximum_window_count * 4
+        })
+      end)
+
+    ordinary = wikimedia_event(2, 1, 1, %{"en" => 1}, "edit", 0.1)
+
+    assert {:ok, merged} = Merger.merge([saturated, ordinary])
+    assert merged.payload["window_count"] == maximum_window_count
+    assert merged.payload["window_span_seconds"] == maximum_window_count * 4
+  end
+
   test "weather overload keeps only the newest complete ambient state" do
     older = weather_event(1, ~U[2026-08-03 12:00:00.000000Z])
     newest = weather_event(2, ~U[2026-08-03 12:10:00.000000Z])
@@ -74,6 +95,8 @@ defmodule Worldloom.Signals.MergerTest do
       intensity: intensity,
       payload: %{
         "summary" => "#{count} public edits",
+        "window_count" => 1,
+        "window_span_seconds" => 4,
         "count" => count,
         "total_absolute_byte_delta" => bytes,
         "languages" => languages,

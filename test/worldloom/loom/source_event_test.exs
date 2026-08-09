@@ -202,6 +202,24 @@ defmodule Worldloom.Loom.SourceEventTest do
     end)
   end
 
+  test "rejects malformed optional Wikimedia window counters" do
+    base_payload = %{"summary" => "A bounded public aggregate"}
+
+    invalid_payloads = [
+      Map.put(base_payload, "count", false),
+      Map.put(base_payload, "count", 0),
+      Map.put(base_payload, "total_absolute_byte_delta", -1),
+      Map.put(base_payload, "window_count", 1),
+      Map.put(base_payload, "window_span_seconds", 4),
+      Map.merge(base_payload, %{"window_count" => 2, "window_span_seconds" => 4})
+    ]
+
+    Enum.each(invalid_payloads, fn payload ->
+      assert {:error, {:payload, :invalid_shape}} =
+               SourceEvent.new(valid_attributes(:wikimedia, :wikimedia, %{payload: payload}))
+    end)
+  end
+
   test "requires complete new-source payloads" do
     payload = Map.delete(valid_payload(:ripe_ris), "peer_count")
 

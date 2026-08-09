@@ -61,7 +61,8 @@ defmodule Worldloom.Loom.SourceEvent do
     drand: [:randomness]
   }
   @payload_keys %{
-    wikimedia: ~w(summary count total_absolute_byte_delta languages dominant_edit_type),
+    wikimedia:
+      ~w(summary window_count window_span_seconds count total_absolute_byte_delta languages dominant_edit_type),
     usgs: ~w(summary magnitude place coordinates additional_count places),
     open_meteo:
       ~w(summary temperature_range precipitation_coverage mean_wind day_night_ratio cities),
@@ -252,6 +253,18 @@ defmodule Worldloom.Loom.SourceEvent do
     boolean_result(uint32?(payload["round"]) and payload["round"] > 0)
   end
 
+  defp validate_payload_shape(payload, :wikimedia) do
+    window_count = payload["window_count"]
+    window_span_seconds = payload["window_span_seconds"]
+
+    valid? =
+      optional_positive_uint32?(payload["count"]) and
+        optional_uint32?(payload["total_absolute_byte_delta"]) and
+        valid_optional_window?(window_count, window_span_seconds)
+
+    boolean_result(valid?)
+  end
+
   defp validate_payload_shape(_payload, _source), do: :ok
 
   defp validate_window_payload(payload, counter_keys) do
@@ -262,6 +275,18 @@ defmodule Worldloom.Loom.SourceEvent do
       window_span_seconds == window_count * 4 and
       Enum.all?(counter_keys, &uint32?(payload[&1]))
   end
+
+  defp valid_optional_window?(nil, nil), do: true
+
+  defp valid_optional_window?(window_count, window_span_seconds) do
+    uint32?(window_count) and window_count > 0 and uint32?(window_span_seconds) and
+      window_span_seconds == window_count * 4
+  end
+
+  defp optional_uint32?(nil), do: true
+  defp optional_uint32?(number), do: uint32?(number)
+  defp optional_positive_uint32?(nil), do: true
+  defp optional_positive_uint32?(number), do: uint32?(number) and number > 0
 
   defp uint32?(number), do: is_integer(number) and number in 0..@uint32_max
   defp boolean?(value), do: value in [true, false]

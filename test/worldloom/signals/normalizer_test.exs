@@ -11,7 +11,7 @@ defmodule Worldloom.Signals.NormalizerTest do
     frames = read_fixture("wikimedia_frames.json")
 
     bucket = %{
-      second: ~U[2026-08-03 12:00:00Z],
+      window_start: ~U[2026-08-03 12:00:00Z],
       cursor: "opaque-stream-cursor",
       count: length(frames),
       total_absolute_byte_delta: 45,
@@ -22,13 +22,15 @@ defmodule Worldloom.Signals.NormalizerTest do
     assert {:ok, %SourceEvent{} = event} = Normalizer.wikimedia_bucket(bucket)
     assert event.kind == :wikimedia
     assert event.source == :wikimedia
-    assert event.external_id == "wikimedia-second:1785758400"
+    assert event.external_id == "wikimedia-window:1785758400:4"
     assert event.occurred_at == ~U[2026-08-03 12:00:00.000000Z]
     assert event.lane >= 0.0 and event.lane <= 1.0
     assert event.intensity >= 0.0 and event.intensity <= 1.0
 
     assert event.payload == %{
              "summary" => "3 edits moved through 2 languages",
+             "window_count" => 1,
+             "window_span_seconds" => 4,
              "count" => 3,
              "total_absolute_byte_delta" => 45,
              "languages" => %{"de" => 1, "en" => 2},

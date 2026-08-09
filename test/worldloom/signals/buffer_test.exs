@@ -8,6 +8,10 @@ defmodule Worldloom.Signals.BufferTest do
   alias Worldloom.Loom.Store
   alias Worldloom.Signals.Buffer
 
+  defmodule RejectingMerger do
+    def merge(_events), do: raise("checkpoint-only entries must never enter Merger")
+  end
+
   defmodule FailingCoordinator do
     use GenServer
 
@@ -83,12 +87,87 @@ defmodule Worldloom.Signals.BufferTest do
     assert_receive {:buffer_depth, 0}, 500
   end
 
-  test "empty successful submissions commit their checkpoint immediately" do
+  test "empty successful submissions enqueue one silent checkpoint-only commit" do
+    {buffer, coordinator} = start_buffer(merger: RejectingMerger)
+    Phoenix.PubSub.subscribe(Worldloom.PubSub, Coordinator.topic())
+
+    submission = Task.async(fn -> Buffer.submit(buffer, [], checkpoint("empty-cursor")) end)
+
+    assert_receive {:timer_scheduled, ^buffer, :drain, 250}, 500
+    assert Buffer.depth(buffer) == 1
+    assert Task.yield(submission, 0) == nil
+
+    send(buffer, :drain)
+    assert Task.await(submission) == :ok
+    assert Repo.get!(FeedCheckpoint, "wikimedia").cursor == "empty-cursor"
+    assert Buffer.depth(buffer) == 0
+    assert Coordinator.current_snapshot(coordinator).commit_watermark == Store.highest_sequence()
+    refute_receive {:loom_snapshot, _snapshot}, 50
+    refute_receive {:loom_event, _instruction}, 50
+  end
+
+  test "empty submissions reject missing, visitor, and unknown checkpoint sources" do
+    {buffer, _coordinator} = start_buffer(merger: RejectingMerger)
+
+    assert Buffer.submit(buffer, [], %{}) == {:error, :invalid_submission}
+    assert Buffer.submit(buffer, [], %{source: "visitor"}) == {:error, :invalid_submission}
+    assert Buffer.submit(buffer, [], %{source: "untrusted"}) == {:error, :invalid_submission}
+    assert Buffer.depth(buffer) == 0
+    refute_receive {:timer_scheduled, ^buffer, :drain, _delay}, 50
+  end
+
+  test "duplicate checkpoint-only submissions preserve queue order and remain silent" do
+    {buffer, _coordinator} = start_buffer(merger: RejectingMerger)
+    Phoenix.PubSub.subscribe(Worldloom.PubSub, Coordinator.topic())
+
+    first = Task.async(fn -> Buffer.submit(buffer, [], checkpoint("same-cursor")) end)
+    second = Task.async(fn -> Buffer.submit(buffer, [], checkpoint("same-cursor")) end)
+
+    fire_timer(buffer, 250)
+    fire_timer(buffer, 250)
+
+    assert Task.await(first) == :ok
+    assert Task.await(second) == :ok
+    assert Repo.get!(FeedCheckpoint, "wikimedia").cursor == "same-cursor"
+    refute_receive {:loom_snapshot, _snapshot}, 50
+    refute_receive {:loom_event, _instruction}, 50
+  end
+
+  test "a checkpoint-only persistence failure follows the bounded retry schedule" do
+    {buffer, _coordinator} = start_buffer(merger: RejectingMerger)
+    invalid_checkpoint = checkpoint(String.duplicate("x", 8_193))
+    submission = Task.async(fn -> Buffer.submit(buffer, [], invalid_checkpoint) end)
+
+    fire_timer(buffer, 250)
+    fire_timer(buffer, 250)
+    fire_timer(buffer, 1_000)
+    fire_timer(buffer, 5_000)
+
+    assert Task.await(submission) == {:error, :persistence_unavailable}
+    assert Buffer.depth(buffer) == 0
+    assert Repo.get(FeedCheckpoint, "wikimedia") == nil
+  end
+
+  test "a checkpoint-only entry remains bounded behind a full event queue" do
     {buffer, _coordinator} = start_buffer()
 
-    assert Buffer.submit(buffer, [], checkpoint("empty-cursor")) == :ok
-    assert Repo.get!(FeedCheckpoint, "wikimedia").cursor == "empty-cursor"
-    refute_receive {:timer_scheduled, ^buffer, :drain, _delay}, 50
+    event_submission =
+      Task.async(fn ->
+        Buffer.submit(buffer, Enum.map(1..16, &wikimedia_bucket/1), checkpoint("cursor-16"))
+      end)
+
+    assert_receive {:timer_scheduled, ^buffer, :drain, 250}, 500
+
+    checkpoint_submission =
+      Task.async(fn -> Buffer.submit(buffer, [], checkpoint("cursor-17")) end)
+
+    assert Buffer.depth(buffer) <= 16
+    send(buffer, :drain)
+    :sys.get_state(buffer)
+    drain_until_complete(buffer, [event_submission, checkpoint_submission])
+
+    assert Enum.sum(Enum.map(Store.latest(), & &1.payload["count"])) == 16
+    assert Repo.get!(FeedCheckpoint, "wikimedia").cursor == "cursor-17"
   end
 
   test "visitor commits bypass a waiting external queue" do
@@ -245,6 +324,7 @@ defmodule Worldloom.Signals.BufferTest do
       Buffer.start_link(
         name: nil,
         coordinator: coordinator,
+        merger: Keyword.get(options, :merger, Worldloom.Signals.Merger),
         clock: fn -> 0 end,
         timer: timer
       )
@@ -263,12 +343,21 @@ defmodule Worldloom.Signals.BufferTest do
     :sys.get_state(buffer)
   end
 
-  defp drain_until_complete(buffer, submission) do
+  defp drain_until_complete(buffer, submission) when not is_list(submission) do
     if Buffer.depth(buffer) == 0 do
       assert Task.await(submission) == :ok
     else
       fire_timer(buffer, 250)
       drain_until_complete(buffer, submission)
+    end
+  end
+
+  defp drain_until_complete(buffer, submissions) when is_list(submissions) do
+    if Buffer.depth(buffer) == 0 do
+      Enum.each(submissions, fn submission -> assert Task.await(submission) == :ok end)
+    else
+      fire_timer(buffer, 250)
+      drain_until_complete(buffer, submissions)
     end
   end
 
@@ -294,6 +383,8 @@ defmodule Worldloom.Signals.BufferTest do
       intensity: 0.02,
       payload: %{
         "summary" => "One edit entered the weave",
+        "window_count" => 1,
+        "window_span_seconds" => 4,
         "count" => 1,
         "total_absolute_byte_delta" => index,
         "languages" => %{"en" => 1},

@@ -5,7 +5,7 @@ defmodule Worldloom.Signals.Normalizer do
 
   @spec wikimedia_bucket(map()) :: {:ok, SourceEvent.t()} | {:error, atom()}
   def wikimedia_bucket(%{
-        second: %DateTime{} = second,
+        window_start: %DateTime{} = window_start,
         count: count,
         total_absolute_byte_delta: total_absolute_byte_delta,
         languages: languages,
@@ -13,7 +13,7 @@ defmodule Worldloom.Signals.Normalizer do
       })
       when is_integer(count) and count > 0 and is_integer(total_absolute_byte_delta) and
              total_absolute_byte_delta >= 0 and is_map(languages) and is_map(edit_types) do
-    with {:ok, utc_second} <- DateTime.shift_zone(second, "Etc/UTC"),
+    with {:ok, utc_window_start} <- DateTime.shift_zone(window_start, "Etc/UTC"),
          {:ok, public_languages} <- normalize_count_map(languages, @maximum_languages),
          {:ok, public_edit_types} <- normalize_count_map(edit_types, map_size(edit_types)) do
       dominant_edit_type = dominant_key(public_edit_types, "edit")
@@ -22,12 +22,14 @@ defmodule Worldloom.Signals.Normalizer do
       SourceEvent.new(%{
         kind: :wikimedia,
         source: :wikimedia,
-        external_id: "wikimedia-second:#{DateTime.to_unix(utc_second, :second)}",
-        occurred_at: utc_second,
+        external_id: "wikimedia-window:#{DateTime.to_unix(utc_window_start, :second)}:4",
+        occurred_at: utc_window_start,
         lane: stable_lane(public_languages),
         intensity: clamp_unit(count / 20 + min(total_absolute_byte_delta / 50_000, 0.5)),
         payload: %{
           "summary" => "#{count} edits moved through #{language_count} languages",
+          "window_count" => 1,
+          "window_span_seconds" => 4,
           "count" => count,
           "total_absolute_byte_delta" => total_absolute_byte_delta,
           "languages" => public_languages,
