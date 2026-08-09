@@ -690,6 +690,44 @@ test("keeps malformed scene commands finite", () => {
   assert.ok(Number.isFinite(fallback.y))
 })
 
+test("bounds extreme finite version one values at every geometry projection boundary", () => {
+  const extremeVisual = {
+    spread: Number.MAX_VALUE,
+    bend: -Number.MAX_VALUE,
+    pulse: Number.MAX_VALUE,
+  }
+  const extremeInstructions = [
+    {...contract[0], sequence: 1, intensity: Number.MAX_VALUE, visual: extremeVisual},
+    {
+      ...contract[0],
+      sequence: 2,
+      lane: 0.8,
+      intensity: Number.MAX_VALUE,
+      visual: extremeVisual,
+    },
+    ...contract.slice(1).map((contractInstruction, index) => ({
+      ...contractInstruction,
+      sequence: index + 3,
+      intensity: Number.MAX_VALUE,
+      visual: extremeVisual,
+    })),
+  ]
+
+  const directCommands = extremeInstructions.flatMap(contractInstruction =>
+    commandsForEvent(contractInstruction, {...viewport, maxSequence: 7})
+  )
+  const sceneCommands = commandsForScene(
+    extremeInstructions,
+    {...viewport, maxSequence: 7},
+  )
+
+  assertCanvasSafeNumbers(directCommands)
+  assertCanvasSafeNumbers(sceneCommands)
+  assert.ok(sceneCommands.some(command => command.type === "ripple"))
+  assert.ok(sceneCommands.some(command => command.type === "knot-connector"))
+  assert.ok(sceneCommands.some(command => command.type === "illuminate-bloom"))
+})
+
 function publicSurgeInstructions() {
   const publicTemplate = contract.find(instruction => instruction.kind === "wikimedia")
   const visitorTemplate = contract.find(instruction => instruction.source === "visitor")
@@ -774,4 +812,18 @@ function balancedSceneCommands({
     projectionInstructions: topologyInstructions,
     hitInstructions: [...historyInstructions, ...displayInstructions],
   })
+}
+
+function assertCanvasSafeNumbers(commands) {
+  const inspect = current => {
+    if (typeof current === "number") {
+      assert.ok(Number.isFinite(current), `expected ${current} to be finite`)
+      assert.ok(Math.abs(current) <= 1_000_000, `expected ${current} to be canvas-safe`)
+      return
+    }
+    if (Array.isArray(current)) current.forEach(inspect)
+    if (current && typeof current === "object") Object.values(current).forEach(inspect)
+  }
+
+  inspect(commands)
 }

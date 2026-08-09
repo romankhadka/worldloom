@@ -316,6 +316,10 @@ function edgeFor(from, to, branchId, role) {
 }
 
 function instructionSupport(instruction) {
+  if (typeof instruction?.source !== "string" || typeof instruction?.kind !== "string") {
+    return "invalid"
+  }
+
   const pair = `${instruction?.source}\0${instruction?.kind}`
   const knownPair = versionOnePairs.has(pair) || versionTwoPairs.has(pair)
   if (Number.isSafeInteger(instruction?.render_version) &&

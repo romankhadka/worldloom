@@ -260,6 +260,29 @@ test("neutralizes mismatched or malformed version two contracts", () => {
   assertFiniteTopology(topology)
 })
 
+test("rejects JSON object and array source-kind values without coercion or throws", () => {
+  const nonStringPairs = [
+    JSON.parse('{"source":{"toString":null},"kind":"wikimedia"}'),
+    JSON.parse('{"source":["wikimedia"],"kind":"wikimedia"}'),
+    JSON.parse('{"source":"wikimedia","kind":["wikimedia"]}'),
+  ].map((pair, index) => ({
+    ...instruction(400 + index),
+    ...pair,
+  }))
+  let topology
+
+  assert.doesNotThrow(() => {
+    topology = buildTopology(nonStringPairs)
+  })
+  assert.equal(topology.fallbacks.length, nonStringPairs.length)
+  for (const fallback of topology.fallbacks) {
+    assert.equal(fallback.kind, "fallback")
+    assert.equal(fallback.source, "visitor")
+    assertBoundedFallback(fallback)
+  }
+  assertFiniteTopology(topology)
+})
+
 test("keeps unsupported positive render versions as finite semantic fallbacks", () => {
   const futureInstruction = {
     ...structuredClone(versionTwoContract[0]),

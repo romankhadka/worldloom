@@ -292,6 +292,7 @@ function spineCommands(topology, viewport) {
     const to = points[index + 1]
     const next = points[Math.min(points.length - 1, index + 2)]
     const curve = clampCurve(catmullRomToBezier(previous, from, to, next), viewport)
+    const intensity = boundedNumber(point.intensity, 0.5)
 
     return {
       id: `spine-edge:${point.sequence}`,
@@ -299,8 +300,8 @@ function spineCommands(topology, viewport) {
       transitionSequence: point.sequence,
       curve,
       length: approximateCurveLength(curve),
-      intensity: point.intensity,
-      visual: point.visual,
+      intensity,
+      visual: boundedVisualParameters(point.visual),
     }
   })
   const intensity = average(segments.map(segment => segment.intensity))
@@ -331,14 +332,15 @@ function capillaryCommands(topology, viewport) {
       anchor.visual,
       viewport,
     )
+    const intensity = boundedNumber(anchor.intensity, 0.5)
     const segment = {
       id: `capillary:${anchor.sequence}`,
       sequence: anchor.sequence,
       transitionSequence: anchor.sequence,
       curve,
       length: approximateCurveLength(curve),
-      intensity: anchor.intensity,
-      visual: anchor.visual,
+      intensity,
+      visual: boundedVisualParameters(anchor.visual),
     }
 
     return [{
@@ -349,8 +351,8 @@ function capillaryCommands(topology, viewport) {
       segments: [segment],
       stroke: signalPalette.wikimedia.stroke,
       glow: signalPalette.wikimedia.glow,
-      intensity: anchor.intensity,
-      material: materialFor("capillary", anchor.intensity),
+      intensity,
+      material: materialFor("capillary", intensity),
     }]
   })
 }
@@ -374,6 +376,7 @@ function fiberCommands(topology, viewport) {
       )
       const curve = clampCurve(catmullRomToBezier(previous, from, to, next), viewport)
       const target = anchorsById.get(edge.to)
+      const intensity = boundedNumber(target.intensity, 0.5)
 
       return {
         id: edge.id,
@@ -381,8 +384,8 @@ function fiberCommands(topology, viewport) {
         transitionSequence: edge.sequence,
         curve,
         length: approximateCurveLength(curve),
-        intensity: target.intensity,
-        visual: target.visual,
+        intensity,
+        visual: boundedVisualParameters(target.visual),
       }
     })
 
@@ -426,6 +429,7 @@ function connectorCommands(topology, anchorsById, viewport) {
       const to = projectAnchor(target, viewport)
       const curve = connectorCurve(from, to, target?.visual, viewport)
       const palette = signalPalette[target?.source] ?? signalPalette.wikimedia
+      const intensity = boundedNumber(target?.intensity, 0.5)
       const segment = {
         id: edge.id,
         role: edge.role,
@@ -433,8 +437,8 @@ function connectorCommands(topology, anchorsById, viewport) {
         transitionSequence: edge.sequence,
         curve,
         length: approximateCurveLength(curve),
-        intensity: target?.intensity ?? 0.5,
-        visual: target?.visual ?? {spread: 0.5, bend: 0, pulse: 0.5},
+        intensity,
+        visual: boundedVisualParameters(target?.visual),
       }
 
       return {
@@ -459,13 +463,15 @@ function formationCommands(topology, viewport) {
 
   return topology.formations.flatMap(formation => {
     const palette = signalPalette[formation.source] ?? signalPalette.visitor
+    const intensity = boundedNumber(formation.intensity, 0.5)
+    const visual = boundedVisualParameters(formation.visual)
     const common = {
       id: formation.id,
       sequence: formation.sequence,
       transitionSequence: formation.sequence,
       occurredAt: formation.occurredAt,
-      intensity: formation.intensity,
-      visual: formation.visual,
+      intensity,
+      visual,
       stroke: palette.stroke,
       glow: palette.glow,
     }
@@ -473,7 +479,7 @@ function formationCommands(topology, viewport) {
     switch (formation.kind) {
       case "earthquake": {
         const point = formationPoint(formation, formation.anchorId, anchorsById, viewport)
-        return [{...common, type: "ripple", ...point, radius: 10 + formation.intensity * 42}]
+        return [{...common, type: "ripple", ...point, radius: 10 + intensity * 42}]
       }
       case "tug":
         return [tugCommand(common, formation, anchorsById, viewport)]
@@ -485,8 +491,13 @@ function formationCommands(topology, viewport) {
           ...common,
           type: "illuminate-bloom",
           ...point,
-          radius: 14 + formation.visual.pulse * 34,
-          glowCurves: illuminationCurves(formation, topology.edges, anchorsById, viewport),
+          radius: 14 + visual.pulse * 34,
+          glowCurves: illuminationCurves(
+            {...formation, visual},
+            topology.edges,
+            anchorsById,
+            viewport,
+          ),
         }]
       }
       default:
@@ -519,8 +530,8 @@ function knotCommand(common, formation, anchorsById, edgesById, viewport) {
     : formationPoint(formation, loopAnchor?.id, anchorsById, viewport)
   const to = edge ? projectAnchor(anchorsById.get(edge.to), viewport) : from
   const curve = edge
-    ? connectorCurve(from, to, formation.visual, viewport)
-    : loopCurve(from, formation.intensity, viewport)
+    ? connectorCurve(from, to, common.visual, viewport)
+    : loopCurve(from, common.intensity, viewport)
   const crossover = cubicPrefix(curve, 0.5).to
 
   return {
@@ -529,7 +540,7 @@ function knotCommand(common, formation, anchorsById, edgesById, viewport) {
     curve,
     x: crossover.x,
     y: crossover.y,
-    radius: 7 + formation.intensity * 15,
+    radius: 7 + common.intensity * 15,
     loop: !edge,
   }
 }
@@ -581,8 +592,8 @@ function fallbackCommand(fallback, viewport) {
     sequence: fallback.sequence,
     x,
     y,
-    intensity: fallback.intensity,
-    visual: fallback.visual,
+    intensity: boundedNumber(fallback.intensity, 0.5),
+    visual: boundedVisualParameters(fallback.visual),
     stroke: palette.stroke,
     glow: palette.glow,
   }
@@ -614,7 +625,7 @@ function connectorCurve(from, to, visual = {}, viewport) {
 }
 
 function loopCurve(point, intensity, viewport) {
-  const radius = 12 + intensity * 18
+  const radius = 12 + boundedNumber(intensity, 0.5) * 18
   return clampCurve({
     from: point,
     control1: {x: point.x - radius, y: point.y - radius},
@@ -755,7 +766,7 @@ function materialFor(role, intensity) {
 }
 
 function visualParameters(instruction) {
-  if (validVisual(instruction.visual)) return instruction.visual
+  if (validVisual(instruction.visual)) return boundedVisualParameters(instruction.visual)
 
   const random = xorshift32(instruction.seed)
   return {
@@ -767,6 +778,14 @@ function visualParameters(instruction) {
 
 function validVisual(visual) {
   return visual && [visual.spread, visual.bend, visual.pulse].every(Number.isFinite)
+}
+
+function boundedVisualParameters(visual) {
+  return {
+    spread: boundedNumber(visual?.spread, 0.5),
+    bend: boundedSignedNumber(visual?.bend, 0),
+    pulse: boundedNumber(visual?.pulse, 0.5),
+  }
 }
 
 function uniqueInstructions(instructions) {
@@ -842,6 +861,10 @@ function utcDate(encodedTime) {
 
 function boundedNumber(number, fallback) {
   return Number.isFinite(number) ? Math.min(1, Math.max(0, number)) : fallback
+}
+
+function boundedSignedNumber(number, fallback) {
+  return Number.isFinite(number) ? Math.min(1, Math.max(-1, number)) : fallback
 }
 
 function roundSix(number) {
