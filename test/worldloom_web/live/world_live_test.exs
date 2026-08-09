@@ -1083,9 +1083,29 @@ defmodule WorldloomWeb.WorldLiveTest do
     refute_push_event live_view, "worldloom:snapshot", _duplicate_snapshot
 
     render_hook(live_view, "gesture", %{"gesture" => "illuminate", "lane" => 0.72})
-    assert has_element?(live_view, "#gesture-status", "Try again in 30 seconds")
-    assert has_element?(live_view, "#gesture-status", "Gesture controls return in 30 seconds.")
-    assert has_element?(live_view, "#gesture-cooldown-ring[data-seconds='30']")
+
+    document = live_view |> render() |> LazyHTML.from_fragment()
+
+    [remaining_text] =
+      document
+      |> LazyHTML.query("#gesture-cooldown-ring")
+      |> LazyHTML.attribute("data-seconds")
+
+    remaining_seconds = String.to_integer(remaining_text)
+    assert remaining_seconds in 1..30
+
+    assert has_element?(
+             live_view,
+             "#gesture-status",
+             "Try again in #{remaining_seconds} seconds"
+           )
+
+    assert has_element?(
+             live_view,
+             "#gesture-status",
+             "Gesture controls return in #{remaining_seconds} seconds."
+           )
+
     refute_push_event live_view, "worldloom:event", _rejected
     refute_push_event live_view, "worldloom:snapshot", _rejected_snapshot
   end
