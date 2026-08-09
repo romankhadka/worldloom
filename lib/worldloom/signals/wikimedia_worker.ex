@@ -30,6 +30,7 @@ defmodule Worldloom.Signals.WikimediaWorker do
       bucket: WikimediaBucket.new(DateTime.add(now, -1, :second)),
       next_bucket: nil,
       latest_cursor: checkpoint && checkpoint.cursor,
+      cursor_before_lookahead: nil,
       last_event_at: checkpoint && checkpoint.metadata["last_event_at"],
       attempt: 0,
       stream_pid: nil,
@@ -89,18 +90,36 @@ defmodule Worldloom.Signals.WikimediaWorker do
 
   def handle_info(:flush_bucket, state) do
     now = state.clock.()
-    updated_state = maybe_flush_elapsed_bucket(state, now)
+
+    updated_state =
+      case close_elapsed_buckets(state, now) do
+        {:ok, closed_state, progress?} -> maybe_reset_attempt(closed_state, progress?)
+        {:error, _reason, failed_state, progress?} -> maybe_reset_attempt(failed_state, progress?)
+      end
+
     updated_state.timer.(self(), :flush_bucket, @flush_interval)
     {:noreply, updated_state}
   end
 
   @impl true
   def handle_call({:frame, frame}, _from, state) do
-    case accept_frame(state, frame) do
-      {:ok, accepted_state} -> {:reply, :ok, %{accepted_state | attempt: 0}}
-      {:error, reason} -> {:reply, {:error, reason}, state}
+    case close_elapsed_buckets(state, state.clock.()) do
+      {:ok, closed_state, progress?} ->
+        reply_to_frame(accept_frame(closed_state, frame), progress?)
+
+      {:error, reason, failed_state, progress?} ->
+        {:reply, {:error, reason}, maybe_reset_attempt(failed_state, progress?)}
     end
   end
+
+  defp reply_to_frame({:accepted, state}, _progress?),
+    do: {:reply, :ok, %{state | attempt: 0}}
+
+  defp reply_to_frame({:ignored, state}, progress?),
+    do: {:reply, :ok, maybe_reset_attempt(state, progress?)}
+
+  defp reply_to_frame({:error, reason, state}, progress?),
+    do: {:reply, {:error, reason}, maybe_reset_attempt(state, progress?)}
 
   defp accept_frame(state, frame) do
     if frame[:data] == "" and state.next_bucket do
@@ -113,10 +132,10 @@ defmodule Worldloom.Signals.WikimediaWorker do
   defp accept_for_target(state, target, frame) do
     case WikimediaBucket.add(target, frame) do
       {:ok, bucket} ->
-        {:ok, put_target_bucket(state, target, bucket) |> observe_cursor(bucket.cursor)}
+        {:accepted, put_target_bucket(state, target, bucket) |> observe_cursor(frame[:id])}
 
       {:heartbeat, bucket} ->
-        {:ok, put_target_bucket(state, target, bucket) |> observe_cursor(bucket.cursor)}
+        {:accepted, put_target_bucket(state, target, bucket) |> observe_cursor(frame[:id])}
 
       {:future, current_bucket, future_bucket} ->
         if target == state.bucket and state.next_bucket do
@@ -126,7 +145,7 @@ defmodule Worldloom.Signals.WikimediaWorker do
         end
 
       {:drop, _reason, _bucket} ->
-        {:ok, state}
+        {:ignored, observe_cursor(state, frame[:id])}
     end
   end
 
@@ -135,39 +154,42 @@ defmodule Worldloom.Signals.WikimediaWorker do
       target == state.bucket and
           WikimediaBucket.elapsed?(current_bucket, future_bucket.window_start) ->
         case persist_bucket(state, current_bucket) do
-          {:ok, persisted_state} ->
-            {:ok,
+          {:ok, persisted_state, _progress?} ->
+            {:accepted,
              persisted_state
              |> Map.put(:bucket, future_bucket)
              |> Map.put(:next_bucket, nil)
+             |> Map.put(:cursor_before_lookahead, nil)
              |> observe_cursor(future_bucket.cursor)}
 
           {:error, reason} ->
-            {:error, reason}
+            {:error, reason, state}
         end
 
       target == state.bucket ->
-        {:ok,
+        {:accepted,
          state
          |> Map.put(:bucket, current_bucket)
          |> Map.put(:next_bucket, future_bucket)
+         |> Map.put(:cursor_before_lookahead, state.latest_cursor)
          |> observe_cursor(future_bucket.cursor)}
 
       WikimediaBucket.elapsed?(state.bucket, future_bucket.window_start) ->
         case persist_bucket(state, state.bucket) do
-          {:ok, persisted_state} ->
-            {:ok,
+          {:ok, persisted_state, _progress?} ->
+            {:accepted,
              persisted_state
              |> Map.put(:bucket, current_bucket)
              |> Map.put(:next_bucket, future_bucket)
+             |> Map.put(:cursor_before_lookahead, state.latest_cursor)
              |> observe_cursor(future_bucket.cursor)}
 
           {:error, reason} ->
-            {:error, reason}
+            {:error, reason, state}
         end
 
       true ->
-        {:ok, state}
+        {:ignored, observe_cursor(state, future_bucket.cursor)}
     end
   end
 
@@ -181,31 +203,39 @@ defmodule Worldloom.Signals.WikimediaWorker do
 
   defp observe_cursor(state, _cursor), do: state
 
-  defp maybe_flush_elapsed_bucket(state, now) do
+  defp close_elapsed_buckets(state, now) do
     if WikimediaBucket.elapsed?(state.bucket, now) do
       case persist_bucket(state, state.bucket) do
-        {:ok, persisted_state} -> advance_elapsed_buckets(persisted_state, now)
-        {:error, _reason} -> state
+        {:ok, persisted_state, progress?} ->
+          advance_elapsed_buckets(persisted_state, now, progress?)
+
+        {:error, reason} ->
+          {:error, reason, state, false}
       end
     else
-      state
+      {:ok, state, false}
     end
   end
 
-  defp advance_elapsed_buckets(%{next_bucket: nil} = state, now) do
-    %{state | bucket: WikimediaBucket.new(now)}
+  defp advance_elapsed_buckets(%{next_bucket: nil} = state, now, progress?) do
+    {:ok, %{state | bucket: WikimediaBucket.new(now), cursor_before_lookahead: nil}, progress?}
   end
 
-  defp advance_elapsed_buckets(%{next_bucket: next_bucket} = state, now) do
-    promoted_state = %{state | bucket: next_bucket, next_bucket: nil}
+  defp advance_elapsed_buckets(%{next_bucket: next_bucket} = state, now, progress?) do
+    promoted_state =
+      %{state | bucket: next_bucket, next_bucket: nil, cursor_before_lookahead: nil}
 
     if WikimediaBucket.elapsed?(next_bucket, now) do
       case persist_bucket(promoted_state, next_bucket) do
-        {:ok, persisted_state} -> %{persisted_state | bucket: WikimediaBucket.new(now)}
-        {:error, _reason} -> promoted_state
+        {:ok, persisted_state, second_progress?} ->
+          {:ok, %{persisted_state | bucket: WikimediaBucket.new(now)},
+           progress? or second_progress?}
+
+        {:error, reason} ->
+          {:error, reason, promoted_state, progress?}
       end
     else
-      promoted_state
+      {:ok, promoted_state, progress?}
     end
   end
 
@@ -217,7 +247,7 @@ defmodule Worldloom.Signals.WikimediaWorker do
 
     case persistence do
       {:ok, persisted_state, :noop} ->
-        {:ok, persisted_state}
+        {:ok, persisted_state, false}
 
       {:ok, persisted_state, count} ->
         record_feed(
@@ -227,7 +257,7 @@ defmodule Worldloom.Signals.WikimediaWorker do
           persisted_state.attempt
         )
 
-        {:ok, persisted_state}
+        {:ok, persisted_state, true}
 
       {:error, _reason} = failure ->
         record_feed(:failure, System.monotonic_time() - started_at, 0, state.attempt)
@@ -236,6 +266,8 @@ defmodule Worldloom.Signals.WikimediaWorker do
   end
 
   defp persist_bucket_contents(state, bucket, successful_at) do
+    checkpoint_cursor = durable_cursor(state)
+
     case WikimediaBucket.flush(bucket) do
       bucket_payload when is_map(bucket_payload) ->
         with {:ok, event} <- Normalizer.wikimedia_bucket(bucket_payload),
@@ -243,43 +275,51 @@ defmodule Worldloom.Signals.WikimediaWorker do
              :ok <-
                state.buffer.(
                  [event],
-                 checkpoint(state, state.latest_cursor, successful_at, last_event_at)
+                 checkpoint(state, checkpoint_cursor, successful_at, last_event_at)
                ) do
           {:ok,
            %{
              state
-             | cursor: state.latest_cursor,
+             | cursor: checkpoint_cursor,
                last_event_at: last_event_at
            }, 1}
         end
 
       :empty ->
-        persist_empty_bucket(state, bucket, successful_at)
+        persist_empty_bucket(state, checkpoint_cursor, successful_at)
     end
   end
 
-  defp persist_empty_bucket(%{cursor: cursor} = state, %{cursor: cursor}, _successful_at),
+  defp persist_empty_bucket(%{cursor: cursor} = state, cursor, _successful_at),
     do: {:ok, state, :noop}
 
-  defp persist_empty_bucket(state, %{cursor: nil}, _successful_at),
+  defp persist_empty_bucket(state, nil, _successful_at),
     do: {:ok, state, :noop}
 
-  defp persist_empty_bucket(state, bucket, successful_at) do
+  defp persist_empty_bucket(state, checkpoint_cursor, successful_at) do
     case state.buffer.(
            [],
-           checkpoint(state, bucket.cursor, successful_at, state.last_event_at)
+           checkpoint(state, checkpoint_cursor, successful_at, state.last_event_at)
          ) do
       :ok ->
         {:ok,
          %{
            state
-           | cursor: bucket.cursor
+           | cursor: checkpoint_cursor
          }, 0}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
+
+  defp durable_cursor(%{next_bucket: nil} = state),
+    do: state.latest_cursor || state.cursor
+
+  defp durable_cursor(state), do: state.cursor_before_lookahead || state.cursor
+
+  defp maybe_reset_attempt(state, true), do: %{state | attempt: 0}
+  defp maybe_reset_attempt(state, false), do: state
 
   defp checkpoint(_state, cursor, successful_at, last_event_at) do
     %{

@@ -90,7 +90,7 @@ defmodule Worldloom.Signals.MergerTest do
       kind: :wikimedia,
       source: :wikimedia,
       external_id: "wiki-bucket-#{index}",
-      occurred_at: DateTime.add(~U[2026-08-03 12:00:00.000000Z], index, :second),
+      occurred_at: DateTime.add(~U[2026-08-03 12:00:00.000000Z], index * 4, :second),
       lane: 0.4,
       intensity: intensity,
       payload: %{
