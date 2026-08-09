@@ -55,7 +55,7 @@ export function laneToY(lane, viewport) {
 export function commandsForEvent(instruction, viewport) {
   const x = sequenceToX(instruction.sequence, viewport)
   const y = laneToY(instruction.lane, viewport)
-  const palette = signalPalette[instruction.source] ?? signalPalette.visitor
+  const palette = paletteFor(instruction.source)
   const intensity = boundedNumber(instruction.intensity, 0.5)
   const visual = visualParameters(instruction)
   const hitSize = Math.max(20, 22 + intensity * 30)
@@ -189,7 +189,7 @@ function contextualMemoryCommands(instructions, viewport) {
     const x = padding + usableWidth * ((index + 1) / (ordered.length + 1))
     const y = bandTop + bandHeight / 2
     const intensity = boundedNumber(instruction.intensity, 0.5)
-    const palette = signalPalette[instruction.source] ?? signalPalette.visitor
+    const palette = paletteFor(instruction.source)
     const hitSize = Math.max(20, 22 + intensity * 18)
 
     return {
@@ -391,7 +391,7 @@ function fiberCommands(topology, viewport) {
 
     for (const chunk of chunkSegments(segments, viewport.width)) {
       const target = anchorsById.get(orderedEdges.find(edge => edge.id === chunk.at(-1).id).to)
-      const palette = signalPalette[target.source] ?? signalPalette.wikimedia
+      const palette = paletteFor(target.source, signalPalette.wikimedia)
       const intensity = average(chunk.map(segment => segment.intensity))
       paths.push({
         type: "fiber-path",
@@ -428,7 +428,7 @@ function connectorCommands(topology, anchorsById, viewport) {
       const target = anchorsById.get(edge.to)
       const to = projectAnchor(target, viewport)
       const curve = connectorCurve(from, to, target?.visual, viewport)
-      const palette = signalPalette[target?.source] ?? signalPalette.wikimedia
+      const palette = paletteFor(target?.source, signalPalette.wikimedia)
       const intensity = boundedNumber(target?.intensity, 0.5)
       const segment = {
         id: edge.id,
@@ -462,7 +462,7 @@ function formationCommands(topology, viewport) {
   const edgesById = new Map(topology.edges.map(edge => [edge.id, edge]))
 
   return topology.formations.flatMap(formation => {
-    const palette = signalPalette[formation.source] ?? signalPalette.visitor
+    const palette = paletteFor(formation.source)
     const intensity = boundedNumber(formation.intensity, 0.5)
     const visual = boundedVisualParameters(formation.visual)
     const common = {
@@ -583,7 +583,7 @@ function hitCommand(instruction, viewport) {
 }
 
 function fallbackCommand(fallback, viewport) {
-  const palette = signalPalette[fallback.source] ?? signalPalette.visitor
+  const palette = paletteFor(fallback.source)
   const x = sequenceToX(fallback.sequence, viewport)
   const y = laneToY(fallback.lane, viewport)
   return {
@@ -865,6 +865,11 @@ function boundedNumber(number, fallback) {
 
 function boundedSignedNumber(number, fallback) {
   return Number.isFinite(number) ? Math.min(1, Math.max(-1, number)) : fallback
+}
+
+function paletteFor(source, fallback = signalPalette.visitor) {
+  if (typeof source !== "string" || !Object.hasOwn(signalPalette, source)) return fallback
+  return signalPalette[source]
 }
 
 function roundSix(number) {

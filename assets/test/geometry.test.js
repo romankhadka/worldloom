@@ -10,6 +10,7 @@ import {
   eventTimeToX,
   laneToY,
   sequenceToX,
+  signalPalette,
 } from "../js/worldloom/geometry.js"
 
 const contract = JSON.parse(
@@ -137,6 +138,47 @@ test("keeps contextual memory in a labeled quiet band with its real identity", (
     ),
     false,
   )
+})
+
+test("uses a neutral palette for non-string, inherited, and future ambient or memory sources", () => {
+  const weather = contract.find(instruction => instruction.kind === "weather")
+  const memory = balancedSnapshot.memory_events[0]
+  const untrustedSources = JSON.parse(
+    '[{"toString":null},["wikimedia"],"__proto__","constructor","bluesky"]',
+  )
+
+  for (const [index, source] of untrustedSources.entries()) {
+    let ambientCommands
+    let memoryCommands
+
+    assert.doesNotThrow(() => {
+      ambientCommands = commandsForScene([], viewport, {
+        ambient: {...weather, sequence: 200 + index, source},
+      })
+      memoryCommands = commandsForScene([], viewport, {
+        ambient: null,
+        memoryInstructions: [{...memory, sequence: 300 + index, source}],
+      })
+    })
+
+    const ambientCommand = ambientCommands.find(command => command.type === "ambient")
+    const memoryCommand = memoryCommands.find(command => command.type === "memory-trace")
+    for (const command of [ambientCommand, memoryCommand]) {
+      assert.equal(command.stroke, signalPalette.visitor.stroke)
+      assert.equal(command.glow, signalPalette.visitor.glow)
+    }
+    assertCanvasSafeNumbers(ambientCommands)
+    assertCanvasSafeNumbers(memoryCommands)
+  }
+})
+
+test("preserves every known version one source palette", () => {
+  for (const contractInstruction of contract) {
+    const [command] = commandsForEvent(contractInstruction, viewport)
+
+    assert.equal(command.stroke, signalPalette[contractInstruction.source].stroke)
+    assert.equal(command.glow, signalPalette[contractInstruction.source].glow)
+  }
 })
 
 test("renders a loaded memory event once in its real historical position", () => {
