@@ -149,6 +149,28 @@ test("separates equal-time source families without leaving the shared event-time
   assertCanvasSafeNumbers(structural)
 })
 
+test("separates every public material above the mobile interaction dock", () => {
+  const mobileViewport = {width: 390, height: 844, padding: 40}
+  const commands = balancedSceneCommands({
+    displayInstructions: balanced.display_events,
+    memoryInstructions: balanced.memory_events,
+    ambient: balanced.ambient,
+  }, mobileViewport)
+  const roles = ["conversation-fan", "route-fork", "public-pulse", "slot-braid"]
+  const roleY = roles.map(role =>
+    commands.find(command => command.role === role)?.y
+  )
+
+  assert.ok(roleY.every(Number.isFinite))
+  assert.ok(roleY.every((y, index) => index === 0 || y - roleY[index - 1] >= 80))
+  assert.ok(
+    commands
+      .filter(command => roles.includes(command.role))
+      .flatMap(projectedPoints)
+      .every(point => point.y <= 620),
+  )
+})
+
 test("keeps source structures bounded before command creation", () => {
   const commands = balancedSceneCommands({
     displayInstructions: balanced.display_events,

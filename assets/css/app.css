@@ -398,7 +398,7 @@ summary:focus-visible,
   inset: -16px -18px;
   border: 1px solid rgb(245 236 216 / 13%);
   border-radius: 12px;
-  background: rgb(3 10 8 / 88%);
+  background: rgb(3 8 6);
   box-shadow: 0 18px 54px rgb(0 0 0 / 28%);
   filter: none;
 }
@@ -1210,7 +1210,9 @@ a.legend-name:focus-visible {
     max-height: calc(100vh - 188px);
   }
 
-  .legend-compact[open] > .legend-body { max-height: calc(100vh - 250px); }
+  .legend-compact[open] > .legend-body { max-height: calc(100svh - 282px); }
+
+  .worldloom-shell[data-mode="chapter"] .signal-legend { top: 124px; }
   .timeline { display: none; }
 
   .live-edge {

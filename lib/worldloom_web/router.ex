@@ -35,6 +35,7 @@ defmodule WorldloomWeb.Router do
       pipe_through :api
 
       post "/events/late", E2EController, :late
+      post "/scenes/:name", E2EController, :scene
     end
   end
 

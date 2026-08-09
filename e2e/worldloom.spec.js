@@ -1,5 +1,13 @@
 import {expect, test} from "@playwright/test"
 
+import {
+  balanced,
+  delayedRecovery,
+  memoryExpiry,
+  totalOutage,
+  wikimediaSurge,
+} from "../assets/test/fixtures/balanced_snapshots.js"
+
 const externalBaseURL = process.env.WORLDLOOM_BASE_URL
 const deterministicHarnessAvailable =
   !externalBaseURL || process.env.WORLDLOOM_E2E_HARNESS === "true"
@@ -756,7 +764,364 @@ test("mobile gesture copy remains readable", async ({browser}) => {
   }
 })
 
-async function openWorldloom(page) {
+test.describe.serial("balanced-world visual release", () => {
+  test.skip(
+    !deterministicHarnessAvailable,
+    "balanced-world visual release requires the deterministic E2E harness",
+  )
+
+  test("balanced desktop exposes every material and remains keyboard navigable", async ({
+    page,
+  }) => {
+    const browserFailures = monitorPage(page, "balanced desktop")
+    await installScene(page, "balanced", balanced)
+    const canvas = await openWorldloom(page, {width: 1440, height: 1000})
+
+    await expect(page.locator("#live-summary")).toContainText(
+      "16 Wikimedia windows, 15 Bluesky activity windows, 15 RIPE route windows, " +
+        "15 Solana slot windows, 21 drand rounds, 1 earthquake memory, and 3 visitor memories",
+    )
+    await expect(page.locator("#live-summary")).toContainText(
+      "All enabled sources are live",
+    )
+    await expect(
+      page.locator("#signal-legend [data-legend-layout='desktop']"),
+    ).toBeVisible()
+    await expect(
+      page.locator("#signal-legend details[data-legend-layout='compact']"),
+    ).toBeHidden()
+    await expect(
+      page.locator("#signal-legend [data-legend-layout='desktop'] .legend-item"),
+    ).toHaveCount(8)
+    expect(await backingAlpha(page, "#signal-legend")).toBe(1)
+
+    const officialSources = [
+      ["Wikimedia", "https://www.mediawiki.org/wiki/EventStreams"],
+      ["Bluesky", "https://docs.bsky.app/blog/jetstream"],
+      ["RIPE RIS Live", "https://ris-live.ripe.net/manual/"],
+      ["Solana", "https://solana.com/docs/rpc/websocket/slotsubscribe"],
+      ["drand Quicknet", "https://docs.drand.love/developer/API-v2/drand-http-api/"],
+      ["USGS earthquakes", "https://earthquake.usgs.gov/earthquakes/feed/v1.0/geojson.php"],
+      ["Open-Meteo weather", "https://open-meteo.com/en/docs"],
+    ]
+    for (const [name, href] of officialSources) {
+      await expect(
+        page.locator("#signal-legend [data-legend-layout='desktop']").getByRole("link", {
+          name,
+          exact: true,
+        }),
+      ).toHaveAttribute("href", href)
+    }
+
+    const scene = await liveSceneDiagnostics(canvas)
+    assertSameTimeSourcesRemainDistinct(scene.scene.paintCommands)
+
+    await expectStableScreenshot(page, "balanced-desktop.png")
+
+    await canvas.focus()
+    await page.keyboard.press("ArrowRight")
+    await page.keyboard.press("Enter")
+    await expect(page.locator("#signal-detail")).toBeVisible()
+    await expect(page).toHaveURL(/\/chapters\/\d{4}-\d{2}-\d{2}\/\d+$/)
+
+    expect(browserFailures).toEqual([])
+  })
+
+  test("balanced tablet offers the compact material disclosure", async ({page}) => {
+    const browserFailures = monitorPage(page, "balanced tablet")
+    await installScene(page, "balanced", balanced)
+    await openWorldloom(page, {width: 900, height: 1100})
+
+    const desktopLegend = page.locator(
+      "#signal-legend [data-legend-layout='desktop']",
+    )
+    const compactLegend = page.locator(
+      "#signal-legend details[data-legend-layout='compact']",
+    )
+    await expect(desktopLegend).toBeHidden()
+    await expect(compactLegend).toBeVisible()
+    await expect(compactLegend).not.toHaveAttribute("open", "")
+    await compactLegend.locator("summary").click()
+    await expect(compactLegend).toHaveAttribute("open", "")
+    await expect(compactLegend.locator(".legend-item")).toHaveCount(8)
+
+    await expectStableScreenshot(page, "balanced-tablet.png")
+    expect(browserFailures).toEqual([])
+  })
+
+  test("balanced mobile keeps the canvas and touch path operable", async ({browser}) => {
+    const context = await browser.newContext({
+      baseURL: process.env.WORLDLOOM_BASE_URL ?? "http://localhost:4002",
+      viewport: {width: 390, height: 844},
+      hasTouch: true,
+      isMobile: true,
+    })
+    const page = await context.newPage()
+    const browserFailures = monitorPage(page, "balanced mobile")
+
+    try {
+      await installScene(page, "balanced", balanced)
+      const canvas = await openWorldloom(page)
+
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+      ).toBe(true)
+      await expectStableScreenshot(page, "balanced-mobile.png")
+
+      const startingSequence = await renderedSequence(canvas)
+      await page.getByRole("button", {name: "Tug", exact: true}).tap()
+      await expect
+        .poll(async () => renderedSequence(canvas))
+        .toBeGreaterThan(startingSequence)
+      await expect(page.locator("#gesture-status")).toContainText(
+        "Gesture joined the living edge",
+      )
+      expect(browserFailures).toEqual([])
+    } finally {
+      await context.close()
+    }
+  })
+
+  test("a Wikimedia surge preserves the other public materials", async ({page}) => {
+    const browserFailures = monitorPage(page, "Wikimedia surge")
+    await installScene(page, "wikimedia-surge", wikimediaSurge)
+    const canvas = await openWorldloom(page, {width: 1440, height: 1000})
+    const diagnostics = await liveSceneDiagnostics(canvas)
+    const paintedSources = new Set(
+      diagnostics.scene.paintCommands.map(command => command.source),
+    )
+
+    for (const source of ["wikimedia", "bluesky", "ripe_ris", "solana", "drand"]) {
+      expect(paintedSources).toContain(source)
+    }
+
+    await expectStableScreenshot(page, "wikimedia-surge-desktop.png")
+    expect(browserFailures).toEqual([])
+  })
+
+  test("a delayed source recovery changes health without hiding the weave", async ({page}) => {
+    const browserFailures = monitorPage(page, "delayed recovery")
+    await installScene(page, "balanced", balanced)
+    await openWorldloom(page, {width: 1440, height: 1000})
+
+    await expect(page.locator("#legend-ripe_ris")).toHaveAttribute(
+      "data-health-state",
+      "live",
+    )
+    await expect(page.locator("#live-summary")).toHaveAttribute("aria-live", "polite")
+
+    await installScene(page, "delayed-recovery", delayedRecovery)
+
+    await expect(page.locator("#legend-ripe_ris")).toHaveAttribute(
+      "data-health-state",
+      "quiet",
+    )
+    await expect(page.locator("#live-summary")).toContainText(
+      "RIPE RIS Live is quiet",
+    )
+    await expectStableScreenshot(page, "delayed-recovery-desktop.png")
+    expect(browserFailures).toEqual([])
+  })
+
+  test("a total provider outage remains legible on mobile", async ({page}) => {
+    const browserFailures = monitorPage(page, "total outage")
+    await installScene(page, "total-outage", totalOutage)
+    await openWorldloom(page, {width: 390, height: 844})
+
+    await page.locator("#signal-legend-toggle").click()
+    const providerStates = await page
+      .locator("#signal-legend [data-legend-layout='compact'] .legend-item:not([data-family='visitor'])")
+      .evaluateAll(elements => elements.map(element => element.dataset.healthState))
+    expect(new Set(providerStates)).toEqual(new Set(["disconnected"]))
+    await expect(page.locator("#live-summary")).toContainText("is disconnected")
+    expect(
+      await elementsOverlap(
+        page,
+        "#signal-legend details[data-legend-layout='compact']",
+        "#gesture-dock",
+      ),
+    ).toBe(false)
+
+    await expectStableScreenshot(page, "total-outage-mobile.png")
+    expect(browserFailures).toEqual([])
+  })
+
+  test("mobile memory selection reveals source-owned detail", async ({page}) => {
+    const browserFailures = monitorPage(page, "memory selection")
+    await installScene(page, "balanced", balanced)
+    await openWorldloom(page, {width: 390, height: 844})
+    const selectedMemory = balanced.memory_events.find(
+      event => event.source === "visitor" && event.kind === "illuminate",
+    )
+    expect(selectedMemory).toBeDefined()
+
+    const formation = page.locator(`#formation-${selectedMemory.sequence}`)
+    await formation.focus()
+    await page.keyboard.press("Enter")
+    await expect(page.locator("#mobile-detail-sheet .detail-summary")).toHaveText(
+      selectedMemory.summary,
+    )
+    const selectedMetadata = await page
+      .locator("#mobile-detail-sheet .detail-meta")
+      .textContent()
+    const [selectedSource, selectedOccurredAt] = selectedMetadata
+      .trim()
+      .split(" · ")
+    expect(selectedSource).toBe(selectedMemory.source)
+    expect(Date.parse(selectedOccurredAt)).toBe(Date.parse(selectedMemory.occurred_at))
+    expect(
+      await elementsOverlap(page, "#signal-legend", "#return-live"),
+    ).toBe(false)
+
+    await expectStableScreenshot(page, "memory-selection-mobile.png")
+    expect(browserFailures).toEqual([])
+  })
+
+  test("reduced motion paints the same settled balanced roles", async ({browser}) => {
+    const context = await browser.newContext({
+      baseURL: process.env.WORLDLOOM_BASE_URL ?? "http://localhost:4002",
+      viewport: {width: 1440, height: 1000},
+      reducedMotion: "reduce",
+    })
+    const page = await context.newPage()
+    const browserFailures = monitorPage(page, "balanced reduced motion")
+
+    try {
+      await installScene(page, "balanced", balanced)
+      const canvas = await openWorldloom(page)
+      await expect(canvas).toHaveAttribute("data-motion", "reduced")
+      const diagnostics = await liveSceneDiagnostics(canvas)
+      const paintedSources = new Set(
+        diagnostics.scene.paintCommands.map(command => command.source),
+      )
+      for (const source of [
+        "wikimedia",
+        "bluesky",
+        "ripe_ris",
+        "solana",
+        "drand",
+      ]) {
+        expect(
+          paintedSources.has(source),
+        ).toBe(true)
+      }
+
+      await expectStableScreenshot(page, "balanced-reduced-motion.png")
+      expect(browserFailures).toEqual([])
+    } finally {
+      await context.close()
+    }
+  })
+
+  test("expired memories are absent from the deterministic acceptance scene", async ({
+    page,
+  }) => {
+    const browserFailures = monitorPage(page, "memory expiry")
+    await installScene(page, "memory-expiry", memoryExpiry)
+    const canvas = await openWorldloom(page, {width: 1440, height: 1000})
+
+    expect(JSON.parse(await canvas.getAttribute("data-memory-events"))).toEqual([])
+    await expect(page.locator("#live-summary")).not.toContainText("memory")
+    expect(browserFailures).toEqual([])
+  })
+})
+
+const screenshotOptions = {
+  animations: "disabled",
+  caret: "hide",
+  scale: "css",
+}
+
+async function expectStableScreenshot(page, name) {
+  await page.evaluate(() => {
+    const element = document.querySelector("#loom-canvas")
+    const viewerCount = document.querySelector("#viewer-count")
+    const view =
+      globalThis.liveSocket?.getViewByEl?.(element) ?? globalThis.liveSocket?.main
+    const hook = view?.getHook?.(element)
+    const renderer = hook?.renderer
+
+    if (!renderer || !viewerCount) throw new Error("Worldloom acceptance surface is unavailable")
+    const countText = [...viewerCount.childNodes].find(
+      node => node.nodeType === Node.TEXT_NODE && node.textContent.trim() !== "",
+    )
+    if (!countText) throw new Error("Worldloom viewer count is unavailable")
+
+    countText.textContent = " 1 viewing"
+    renderer.setViewerCount(1)
+    if (renderer.frameHandle !== null) renderer.cancelFrame(renderer.frameHandle)
+    renderer.frameHandle = null
+    renderer.activeTransitions.clear()
+    renderer.rebuild()
+    renderer.step(6_000)
+  })
+
+  await expect(page).toHaveScreenshot(name, screenshotOptions)
+}
+
+async function installScene(page, sceneName, snapshot) {
+  const response = await page.request.post(`/__e2e__/scenes/${sceneName}`, {
+    data: {snapshot},
+  })
+  const responseBody = await response.text()
+
+  expect(response.ok(), `${sceneName} scene response: ${responseBody}`).toBe(true)
+}
+
+async function backingAlpha(page, selector) {
+  return page.locator(selector).evaluate(element => {
+    const channels = getComputedStyle(element, "::before").backgroundColor.match(/[\d.]+/g)
+    return Number(channels?.[3] ?? 1)
+  })
+}
+
+async function elementsOverlap(page, firstSelector, secondSelector) {
+  return page.evaluate(
+    ({firstSelector, secondSelector}) => {
+      const first = document.querySelector(firstSelector)?.getBoundingClientRect()
+      const second = document.querySelector(secondSelector)?.getBoundingClientRect()
+
+      if (!first || !second) throw new Error("overlap target is unavailable")
+
+      return !(
+        first.right <= second.left ||
+        first.left >= second.right ||
+        first.bottom <= second.top ||
+        first.top >= second.bottom
+      )
+    },
+    {firstSelector, secondSelector},
+  )
+}
+
+function assertSameTimeSourcesRemainDistinct(paintCommands) {
+  const structuralRoles = new Set([
+    "backbone",
+    "conversation-fan",
+    "route-fork",
+    "slot-braid",
+    "public-pulse",
+  ])
+  const structuralCommands = paintCommands.filter(command =>
+    structuralRoles.has(command.role),
+  )
+  const sameColumn = structuralCommands.reduce((columns, command) => {
+    const commands = columns.get(command.x) ?? []
+    commands.push(command)
+    columns.set(command.x, commands)
+    return columns
+  }, new Map())
+  const distinctColumn = [...sameColumn.values()].find(commands => {
+    const roles = new Set(commands.map(command => command.role))
+    const rows = new Set(commands.map(command => command.y))
+    return roles.size > 1 && roles.size === rows.size
+  })
+
+  expect(distinctColumn).toBeDefined()
+}
+
+async function openWorldloom(page, viewport) {
+  if (viewport) await page.setViewportSize(viewport)
   await page.goto("/")
   return waitForCanvas(page)
 }
@@ -801,6 +1166,8 @@ async function localContrastContract(page, containerSelector, textSelectors) {
       )
       const protectedElements = textSelectors.flatMap(selector =>
         [...document.querySelectorAll(selector)],
+      ).filter(element =>
+        element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden",
       )
       const containerBounds = container.getBoundingClientRect()
       const worstWeather = [139, 132, 82]

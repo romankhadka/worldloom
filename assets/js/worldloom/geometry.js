@@ -695,6 +695,16 @@ function publicPulseCommand(common, formation, viewport) {
 }
 
 function sourceRoleY(role, lane, viewport) {
+  const mobileLane = viewport.width <= 480
+    ? {
+        "conversation-fan": 0.2,
+        "route-fork": 0.4,
+        "public-pulse": 0.56,
+        "slot-braid": 0.7,
+      }[role]
+    : null
+  if (Number.isFinite(mobileLane)) return laneToY(mobileLane, viewport)
+
   const laneOffset = {
     "conversation-fan": -0.12,
     "route-fork": -0.04,

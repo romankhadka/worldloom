@@ -3,6 +3,41 @@ defmodule WorldloomWeb.E2EController do
 
   alias Worldloom.Loom.Coordinator
   alias Worldloom.Loom.SourceEvent
+  alias Worldloom.E2ESceneLoader
+
+  def scene(conn, %{"name" => name, "snapshot" => snapshot} = params)
+      when map_size(params) == 2 do
+    case E2ESceneLoader.load(name, snapshot) do
+      {:ok, loaded_snapshot} ->
+        json(conn, %{
+          commit_watermark: loaded_snapshot.commit_watermark,
+          scene: name,
+          window_end: DateTime.to_iso8601(loaded_snapshot.window_end)
+        })
+
+      {:error, :unknown_scene} ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "unknown scene"})
+
+      {:error, :invalid_snapshot} ->
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{error: "invalid snapshot"})
+    end
+  end
+
+  def scene(conn, %{"name" => name}) do
+    if E2ESceneLoader.known_scene?(name) do
+      conn
+      |> put_status(:unprocessable_entity)
+      |> json(%{error: "invalid snapshot"})
+    else
+      conn
+      |> put_status(:not_found)
+      |> json(%{error: "unknown scene"})
+    end
+  end
 
   def late(conn, _params) do
     snapshot = Coordinator.current_snapshot()

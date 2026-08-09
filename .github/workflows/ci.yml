@@ -100,9 +100,20 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: mix deps.get
+      - name: Verify deterministic scene harness
+        run: env MIX_BUILD_PATH=_build/e2e MIX_ENV=test WORLDLOOM_E2E=true WORLDLOOM_FEEDS_ENABLED=false mix test test/worldloom_web/e2e_controller_test.exs
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+      - name: Upload browser failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: browser-failures-${{ github.run_attempt }}
+          path: |
+            test-results
+            playwright-report
+          if-no-files-found: warn
 
   container:
     name: Container

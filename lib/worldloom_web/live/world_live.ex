@@ -662,7 +662,7 @@ defmodule WorldloomWeb.WorldLive do
     config = Application.fetch_env!(:worldloom, Worldloom.Signals)
     globally_enabled? = signal_setting(config, :enabled, true)
 
-    %{
+    configured_eligibility = %{
       wikimedia: globally_enabled?,
       usgs: globally_enabled?,
       open_meteo: globally_enabled?,
@@ -671,6 +671,15 @@ defmodule WorldloomWeb.WorldLive do
       solana: globally_enabled? and signal_setting(config, :solana_enabled, false),
       drand: globally_enabled? and signal_setting(config, :drand_enabled, false)
     }
+
+    acceptance_source_eligibility(configured_eligibility)
+  end
+
+  if Mix.env() == :test and Application.compile_env(:worldloom, :e2e_routes, false) do
+    defp acceptance_source_eligibility(configured_eligibility),
+      do: Worldloom.E2ESourceEligibility.current(configured_eligibility)
+  else
+    defp acceptance_source_eligibility(configured_eligibility), do: configured_eligibility
   end
 
   defp signal_setting(%Worldloom.Signals.Config{} = config, setting, default),
