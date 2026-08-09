@@ -1,7 +1,30 @@
 defmodule Worldloom.Loom.EventTest do
-  use Worldloom.DataCase, async: true
+  use Worldloom.DataCase, async: false
 
   alias Worldloom.Loom.Event
+
+  @migration_version 20_260_808_180_000
+  @migration_module Worldloom.Repo.Migrations.ExpandLoomSignalContracts
+  @migration_path Path.expand(
+                    "../../../priv/repo/migrations/20260808180000_expand_loom_signal_contracts.exs",
+                    __DIR__
+                  )
+
+  @original_pairs [
+    {"wikimedia", "wikimedia"},
+    {"earthquake", "usgs"},
+    {"weather", "open_meteo"},
+    {"tug", "visitor"},
+    {"knot", "visitor"},
+    {"illuminate", "visitor"}
+  ]
+
+  @new_pairs [
+    {"public_activity", "bluesky"},
+    {"route_change", "ripe_ris"},
+    {"slot", "solana"},
+    {"randomness", "drand"}
+  ]
 
   test "required fields are rejected before persistence" do
     changeset = Event.changeset(%Event{}, %{})
@@ -80,6 +103,71 @@ defmodule Worldloom.Loom.EventTest do
     assert {:ok, _event} = %Event{} |> Event.changeset(second) |> Repo.insert()
   end
 
+  test "database accepts exactly the ten approved kind and source pairs" do
+    rows =
+      (@original_pairs ++ @new_pairs)
+      |> Enum.with_index()
+      |> Enum.map(fn {{kind, source}, index} -> raw_attributes(kind, source, index) end)
+
+    assert {10, inserted_pairs} =
+             Repo.insert_all(Event, rows, returning: [:kind, :source])
+
+    assert MapSet.new(inserted_pairs, &{&1.kind, &1.source}) ==
+             MapSet.new(@original_pairs ++ @new_pairs)
+  end
+
+  test "database rejects a kind paired with the wrong approved source" do
+    assert_raise Postgrex.Error, fn ->
+      Repo.transaction(fn ->
+        Repo.insert_all(Event, [raw_attributes("slot", "bluesky", 100)])
+      end)
+    end
+  end
+
+  test "expanding the constraint leaves an existing version one row byte-for-byte unchanged" do
+    load_migration!()
+    run_migration(:down)
+
+    assert {:ok, wikimedia} =
+             %Event{}
+             |> Event.changeset(valid_attributes(%{external_id: "v1-migration-sentinel"}))
+             |> Repo.insert()
+
+    row_before = serialized_row(wikimedia.id)
+
+    run_migration(:up)
+
+    assert serialized_row(wikimedia.id) == row_before
+    refute File.read!(@migration_path) =~ ~r/\bUPDATE\b/i
+  end
+
+  test "rollback restores the original constraint when no new source rows exist" do
+    load_migration!()
+    run_migration(:down)
+
+    assert_raise Postgrex.Error, fn ->
+      Repo.transaction(fn ->
+        Repo.insert_all(Event, [raw_attributes("public_activity", "bluesky", 101)])
+      end)
+    end
+
+    run_migration(:up)
+
+    assert {1, _rows} =
+             Repo.insert_all(Event, [raw_attributes("public_activity", "bluesky", 102)])
+  end
+
+  test "rollback refuses clearly when a new source row exists" do
+    load_migration!()
+
+    assert {1, _rows} =
+             Repo.insert_all(Event, [raw_attributes("randomness", "drand", 103)])
+
+    assert_raise RuntimeError, ~r/cannot roll back.*new signal source rows exist/i, fn ->
+      run_migration(:down)
+    end
+  end
+
   defp valid_attributes(overrides) do
     Map.merge(
       %{
@@ -95,5 +183,51 @@ defmodule Worldloom.Loom.EventTest do
       },
       overrides
     )
+  end
+
+  defp raw_attributes(kind, source, index) do
+    occurred_at = DateTime.add(~U[2026-08-03 12:00:00.000000Z], index, :second)
+
+    %{
+      kind: kind,
+      source: source,
+      external_id: if(source == "visitor", do: nil, else: "#{source}-#{index}"),
+      occurred_at: occurred_at,
+      render_version: if(source in ~w(bluesky ripe_ris solana drand), do: 2, else: 1),
+      render_seed: index + 1,
+      lane: 0.5,
+      intensity: 0.7,
+      payload: %{"summary" => "Database constraint test"},
+      inserted_at: occurred_at
+    }
+  end
+
+  defp load_migration! do
+    unless Code.ensure_loaded?(@migration_module) do
+      Code.require_file(@migration_path)
+    end
+  end
+
+  defp run_migration(direction) do
+    Ecto.Migration.Runner.run(
+      Repo,
+      Repo.config(),
+      @migration_version,
+      @migration_module,
+      :forward,
+      direction,
+      direction,
+      log: false
+    )
+  end
+
+  defp serialized_row(id) do
+    assert %{rows: [[serialized]]} =
+             Repo.query!(
+               "SELECT row_to_json(loom_events)::text FROM loom_events WHERE id = $1",
+               [id]
+             )
+
+    serialized
   end
 end
