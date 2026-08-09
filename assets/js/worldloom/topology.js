@@ -401,6 +401,7 @@ function validVersionTwoMetrics(source, metrics) {
         nonNegativeSafeInteger(metrics.first_slot) &&
         nonNegativeSafeInteger(metrics.last_slot) &&
         metrics.first_slot <= metrics.last_slot &&
+        ((metrics.slot_count === 1) === (metrics.first_slot === metrics.last_slot)) &&
         metrics.slot_count <= metrics.last_slot - metrics.first_slot + 1 &&
         typeof metrics.truncated === "boolean" &&
         (!metrics.truncated ||

@@ -252,6 +252,37 @@ defmodule Worldloom.Loom.SourceEventTest do
     end)
   end
 
+  test "requires one Solana slot exactly when both endpoints are equal" do
+    one_slot_payload =
+      valid_payload(:solana)
+      |> Map.merge(%{
+        "slot_count" => 1,
+        "first_slot" => 104,
+        "last_slot" => 104,
+        "gap_count" => 0
+      })
+
+    malformed_one_slot_payload =
+      valid_payload(:solana)
+      |> Map.merge(%{
+        "slot_count" => 1,
+        "first_slot" => 101,
+        "last_slot" => 105,
+        "gap_count" => 4,
+        "truncated" => false
+      })
+
+    assert {:ok, _event} =
+             SourceEvent.new(valid_attributes(:slot, :solana, %{payload: one_slot_payload}))
+
+    assert {:ok, _event} = SourceEvent.new(valid_attributes(:slot, :solana))
+
+    assert {:error, {:payload, :invalid_shape}} =
+             SourceEvent.new(
+               valid_attributes(:slot, :solana, %{payload: malformed_one_slot_payload})
+             )
+  end
+
   test "bounds each Solana slot endpoint to an exact JSON-safe integer" do
     first_slot_at_maximum =
       valid_payload(:solana)

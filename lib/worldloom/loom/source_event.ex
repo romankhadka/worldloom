@@ -247,6 +247,8 @@ defmodule Worldloom.Loom.SourceEvent do
         json_safe_integer?(payload["last_slot"]) and
         payload["first_slot"] <= payload["last_slot"] and
         payload["slot_count"] > 0 and
+        payload["slot_count"] == 1 ==
+          (payload["first_slot"] == payload["last_slot"]) and
         payload["slot_count"] <= payload["last_slot"] - payload["first_slot"] + 1 and
         boolean?(payload["truncated"]) and
         (not payload["truncated"] or payload["slot_count"] == @uint32_max or

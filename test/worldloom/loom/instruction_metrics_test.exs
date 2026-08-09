@@ -212,6 +212,31 @@ defmodule Worldloom.Loom.InstructionMetricsTest do
     end)
   end
 
+  test "requires one Solana slot exactly when both endpoints are equal" do
+    one_slot_payload =
+      @payloads["solana"]
+      |> Map.merge(%{
+        "slot_count" => 1,
+        "first_slot" => 104,
+        "last_slot" => 104,
+        "gap_count" => 0
+      })
+
+    malformed_one_slot_payload =
+      @payloads["solana"]
+      |> Map.merge(%{
+        "slot_count" => 1,
+        "first_slot" => 101,
+        "last_slot" => 105,
+        "gap_count" => 4,
+        "truncated" => false
+      })
+
+    assert is_map(InstructionMetrics.from_payload("solana", one_slot_payload))
+    assert is_map(InstructionMetrics.from_payload("solana", @payloads["solana"]))
+    assert InstructionMetrics.from_payload("solana", malformed_one_slot_payload) == :error
+  end
+
   test "denies unsupported sources and non-map payloads without atomizing keys" do
     assert InstructionMetrics.from_payload("wikimedia", @payloads["bluesky"]) == :error
     assert InstructionMetrics.from_payload("future", @payloads["bluesky"]) == :error

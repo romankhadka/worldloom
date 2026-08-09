@@ -388,6 +388,33 @@ defmodule Worldloom.Signals.NormalizerTest do
     end
   end
 
+  test "requires one Solana slot exactly when both endpoints are equal" do
+    one_slot =
+      normalizable_solana_window()
+      |> Map.merge(%{
+        slot_count: 1,
+        first_slot: 104,
+        last_slot: 104,
+        gap_count: 0,
+        continuity_anchor: nil
+      })
+
+    malformed_one_slot =
+      normalizable_solana_window()
+      |> Map.merge(%{
+        slot_count: 1,
+        first_slot: 101,
+        last_slot: 105,
+        gap_count: 4,
+        continuity_anchor: nil,
+        truncated: false
+      })
+
+    assert {:ok, %SourceEvent{}} = Normalizer.solana_window(one_slot)
+    assert {:ok, %SourceEvent{}} = Normalizer.solana_window(normalizable_solana_window())
+    assert {:error, :invalid_window} = Normalizer.solana_window(malformed_one_slot)
+  end
+
   test "accepts only compatible saturated Solana logical ranges" do
     compatible =
       normalizable_solana_window()

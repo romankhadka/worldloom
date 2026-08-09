@@ -234,6 +234,40 @@ test("preserves JSON-safe Solana positions beyond the uint32 counter range", () 
   assert.equal(topology.fallbacks[0].source, "solana")
 })
 
+test("requires one Solana slot exactly when both endpoints are equal", () => {
+  const solana = structuredClone(versionTwoContract[2])
+  const oneSlot = {
+    ...solana,
+    metrics: {
+      ...solana.metrics,
+      slot_count: 1,
+      first_slot: 104,
+      last_slot: 104,
+      gap_count: 0,
+    },
+  }
+  const malformedOneSlot = {
+    ...solana,
+    metrics: {
+      ...solana.metrics,
+      slot_count: 1,
+      first_slot: 101,
+      last_slot: 105,
+      gap_count: 4,
+      truncated: false,
+    },
+  }
+
+  const oneSlotTopology = buildTopology([oneSlot])
+  const multiSlotTopology = buildTopology([solana])
+  const malformedTopology = buildTopology([malformedOneSlot])
+
+  assert.equal(oneSlotTopology.fallbacks[0].kind, "slot")
+  assert.equal(multiSlotTopology.fallbacks[0].kind, "slot")
+  assert.equal(malformedTopology.fallbacks[0].kind, "fallback")
+  assert.equal(malformedTopology.fallbacks[0].source, "visitor")
+})
+
 test("neutralizes mismatched or malformed version two contracts", () => {
   const [bluesky, ripeRis, solana, drand] = versionTwoContract
   const malformed = [

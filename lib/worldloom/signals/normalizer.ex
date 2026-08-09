@@ -187,6 +187,7 @@ defmodule Worldloom.Signals.Normalizer do
          true <- json_safe_integer?(first_slot),
          true <- json_safe_integer?(last_slot),
          true <- first_slot <= last_slot,
+         true <- slot_count == 1 == (first_slot == last_slot),
          public_width <- last_slot - first_slot + 1,
          true <- slot_count <= public_width,
          true <- is_boolean(truncated),
