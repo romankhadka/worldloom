@@ -17,6 +17,7 @@ defmodule Worldloom.Loom.SourceEventTest do
   ]
 
   @render_identity String.duplicate("a", 64)
+  @uint32_max 4_294_967_295
 
   test "accepts every approved kind and source pairing" do
     Enum.each(@pairs, fn {kind, source} ->
@@ -225,6 +226,39 @@ defmodule Worldloom.Loom.SourceEventTest do
     end)
   end
 
+  test "bounds each Solana slot endpoint to an unsigned thirty-two-bit integer" do
+    first_slot_at_maximum =
+      valid_payload(:solana)
+      |> Map.merge(%{"first_slot" => @uint32_max, "last_slot" => @uint32_max})
+
+    last_slot_at_maximum =
+      valid_payload(:solana)
+      |> Map.merge(%{"first_slot" => 0, "last_slot" => @uint32_max})
+
+    assert {:ok, _event} =
+             SourceEvent.new(valid_attributes(:slot, :solana, %{payload: first_slot_at_maximum}))
+
+    assert {:ok, _event} =
+             SourceEvent.new(valid_attributes(:slot, :solana, %{payload: last_slot_at_maximum}))
+
+    first_slot_overflow =
+      valid_payload(:solana)
+      |> Map.merge(%{
+        "first_slot" => @uint32_max + 1,
+        "last_slot" => @uint32_max + 1
+      })
+
+    last_slot_overflow =
+      valid_payload(:solana)
+      |> Map.merge(%{"first_slot" => 0, "last_slot" => @uint32_max + 1})
+
+    assert {:error, {:payload, :invalid_shape}} =
+             SourceEvent.new(valid_attributes(:slot, :solana, %{payload: first_slot_overflow}))
+
+    assert {:error, {:payload, :invalid_shape}} =
+             SourceEvent.new(valid_attributes(:slot, :solana, %{payload: last_slot_overflow}))
+  end
+
   test "accepts a positive drand round with an ephemeral lowercase beacon identity" do
     assert {:ok, event} = SourceEvent.new(valid_attributes(:randomness, :drand))
 
@@ -245,6 +279,29 @@ defmodule Worldloom.Loom.SourceEventTest do
       assert {:error, _reason} =
                SourceEvent.new(valid_attributes(:randomness, :drand, overrides))
     end)
+  end
+
+  test "redacts drand render identity from direct and nested inspection" do
+    event = SourceEvent.new!(valid_attributes(:randomness, :drand))
+    identity_fragment = String.slice(@render_identity, 0, 16)
+
+    direct_inspection = inspect(event)
+    nested_inspection = inspect(%{event: event})
+
+    for inspected <- [direct_inspection, nested_inspection] do
+      refute inspected =~ @render_identity
+      refute inspected =~ identity_fragment
+      assert inspected =~ "kind: :randomness"
+      assert inspected =~ "source: :drand"
+      assert inspected =~ "payload:"
+    end
+
+    wikimedia = SourceEvent.new!(valid_attributes(:wikimedia, :wikimedia))
+    wikimedia_inspection = inspect(wikimedia)
+
+    assert wikimedia_inspection =~ "kind: :wikimedia"
+    assert wikimedia_inspection =~ "source: :wikimedia"
+    refute wikimedia_inspection =~ "render_identity"
   end
 
   test "forbids render identities for every source except drand" do
@@ -274,6 +331,14 @@ defmodule Worldloom.Loom.SourceEventTest do
              SourceEvent.new(
                valid_attributes(:wikimedia, :wikimedia, %{payload: oversized_payload})
              )
+  end
+
+  test "rejects malformed v2 counters before encoding a massive allowed-key value" do
+    massive_counter = List.duplicate(0, 50_000)
+    payload = Map.put(valid_payload(:bluesky), "total_actions", massive_counter)
+
+    assert {:error, {:payload, :invalid_shape}} =
+             SourceEvent.new(valid_attributes(:public_activity, :bluesky, %{payload: payload}))
   end
 
   test "requires concise textual summaries" do

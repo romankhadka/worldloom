@@ -1,5 +1,6 @@
 defmodule Worldloom.Loom.SourceEvent do
   @enforce_keys [:kind, :source, :external_id, :occurred_at, :lane, :intensity, :payload]
+  @derive {Inspect, except: [:render_identity]}
   defstruct [
     :kind,
     :source,
@@ -197,14 +198,14 @@ defmodule Worldloom.Loom.SourceEvent do
       String.length(payload["summary"]) > 160 ->
         {:error, {:payload, :summary_too_long}}
 
+      validate_payload_shape(payload, source) == :error ->
+        {:error, {:payload, :invalid_shape}}
+
       not json_payload_within_limit?(payload) ->
         {:error, {:payload, :invalid}}
 
       true ->
-        case validate_payload_shape(payload, source) do
-          :ok -> {:ok, payload}
-          :error -> {:error, {:payload, :invalid_shape}}
-        end
+        {:ok, payload}
     end
   end
 
@@ -240,8 +241,8 @@ defmodule Worldloom.Loom.SourceEvent do
   defp validate_payload_shape(payload, :solana) do
     valid? =
       validate_window_payload(payload, ~w(slot_count gap_count)) and
-        non_negative_integer?(payload["first_slot"]) and
-        non_negative_integer?(payload["last_slot"]) and
+        uint32?(payload["first_slot"]) and
+        uint32?(payload["last_slot"]) and
         payload["first_slot"] <= payload["last_slot"]
 
     boolean_result(valid?)
@@ -263,7 +264,6 @@ defmodule Worldloom.Loom.SourceEvent do
   end
 
   defp uint32?(number), do: is_integer(number) and number in 0..@uint32_max
-  defp non_negative_integer?(number), do: is_integer(number) and number >= 0
   defp boolean?(value), do: value in [true, false]
   defp boolean_result(true), do: :ok
   defp boolean_result(false), do: :error
