@@ -5,7 +5,8 @@ defmodule Worldloom.Signals.RipeWindow do
            except: [
              :approved_collector_fingerprints,
              :observed_collector_fingerprints,
-             :peer_fingerprints
+             :peer_fingerprints,
+             :pending
            ]}
   @enforce_keys [:window_start, :approved_collector_fingerprints]
   defstruct window_start: nil,
@@ -16,7 +17,8 @@ defmodule Worldloom.Signals.RipeWindow do
             approved_collector_fingerprints: MapSet.new(),
             observed_collector_fingerprints: MapSet.new(),
             peer_fingerprints: MapSet.new(),
-            truncated: false
+            truncated: false,
+            pending: nil
 
   @type t :: %__MODULE__{
           window_start: DateTime.t(),
@@ -27,7 +29,8 @@ defmodule Worldloom.Signals.RipeWindow do
           approved_collector_fingerprints: MapSet.t(binary()),
           observed_collector_fingerprints: MapSet.t(binary()),
           peer_fingerprints: MapSet.t(binary()),
-          truncated: boolean()
+          truncated: boolean(),
+          pending: t() | nil
         }
 
   @window_seconds 4
@@ -53,7 +56,7 @@ defmodule Worldloom.Signals.RipeWindow do
     with :ok <- validate_configured_collectors(configured_collectors),
          {:ok, available_collectors} <- validate_rrc_list(response),
          approved_collectors =
-           Enum.filter(configured_collectors, &(&1 in available_collectors)),
+           Enum.filter(configured_collectors, &MapSet.member?(available_collectors, &1)),
          false <- approved_collectors == [] do
       {:ok, Enum.map(approved_collectors, &subscription_message/1)}
     else
@@ -83,29 +86,11 @@ defmodule Worldloom.Signals.RipeWindow do
   end
 
   @spec add(t(), map(), DateTime.t()) ::
-          {:ok, t()} | {:flush, t(), t()} | {:drop, atom(), t()}
+          {:ok, t()} | {:close_required, t()} | {:drop, atom(), t()}
   def add(%__MODULE__{} = window, frame, %DateTime{} = receipt_at) when is_map(frame) do
-    with {:ok, observation} <- sanitize(frame, window, receipt_at) do
-      event_window_start =
-        BoundedCounter.window_start(
-          observation.occurred_at,
-          @window_seconds,
-          @offset_seconds
-        )
-
-      case DateTime.compare(event_window_start, window.window_start) do
-        :lt ->
-          {:drop, :late_event, window}
-
-        :eq ->
-          aggregate_observation(window, observation, :current)
-
-        :gt ->
-          next_window =
-            empty_window(observation.occurred_at, window.approved_collector_fingerprints)
-
-          aggregate_observation(next_window, observation, {:next, window})
-      end
+    with {:ok, observation} <- sanitize(frame, window, receipt_at),
+         {:ok, delta} <- traverse_update(observation.announcements, observation.withdrawals) do
+      route_observation(window, observation, delta, receipt_at)
     else
       {:error, reason} -> {:drop, reason, window}
     end
@@ -135,6 +120,17 @@ defmodule Worldloom.Signals.RipeWindow do
 
   def elapsed?(%__MODULE__{}, _observed_at), do: false
 
+  @spec close(t(), DateTime.t()) :: {:open, t()} | {:flush, map() | :empty, t()}
+  def close(%__MODULE__{} = window, %DateTime{} = observed_at) do
+    if elapsed?(window, observed_at) do
+      {:flush, flush(window), next_window(window, observed_at)}
+    else
+      {:open, window}
+    end
+  end
+
+  def close(%__MODULE__{} = window, _observed_at), do: {:open, window}
+
   @spec flush(t()) :: map() | :empty
   def flush(%__MODULE__{announced: 0, withdrawn: 0}), do: :empty
 
@@ -163,10 +159,12 @@ defmodule Worldloom.Signals.RipeWindow do
   end
 
   defp validate_configured_collectors(collectors) when is_list(collectors) do
-    if length(collectors) in 1..4 and valid_collector_list?(collectors) do
-      :ok
-    else
-      {:error, :invalid_collectors}
+    case reduce_collector_list(collectors, 4) do
+      {:ok, collector_set} ->
+        if MapSet.size(collector_set) > 0, do: :ok, else: {:error, :invalid_collectors}
+
+      :invalid ->
+        {:error, :invalid_collectors}
     end
   end
 
@@ -174,18 +172,45 @@ defmodule Worldloom.Signals.RipeWindow do
 
   defp validate_rrc_list(%{"type" => "ris_rrc_list", "data" => collectors})
        when is_list(collectors) do
-    if valid_collector_list?(collectors) do
-      {:ok, collectors}
-    else
-      {:error, :invalid_rrc_list}
+    case reduce_collector_list(collectors, 100) do
+      {:ok, available_collectors} -> {:ok, available_collectors}
+      :invalid -> {:error, :invalid_rrc_list}
     end
   end
 
   defp validate_rrc_list(_response), do: {:error, :invalid_rrc_list}
 
-  defp valid_collector_list?(collectors) do
-    Enum.all?(collectors, &valid_collector?/1) and
-      MapSet.size(MapSet.new(collectors)) == length(collectors)
+  defp reduce_collector_list(collectors, capacity) do
+    case Enum.reduce_while(collector_entries(collectors), {MapSet.new(), 0}, fn
+           :improper_tail, _state ->
+             {:halt, :invalid}
+
+           {:collector, collector}, {seen, count} ->
+             cond do
+               count == capacity ->
+                 {:halt, :invalid}
+
+               not valid_collector?(collector) ->
+                 {:halt, :invalid}
+
+               MapSet.member?(seen, collector) ->
+                 {:halt, :invalid}
+
+               true ->
+                 {:cont, {MapSet.put(seen, collector), count + 1}}
+             end
+         end) do
+      {collector_set, _count} -> {:ok, collector_set}
+      :invalid -> :invalid
+    end
+  end
+
+  defp collector_entries(collectors) do
+    Stream.unfold(collectors, fn
+      [] -> nil
+      [collector | remaining] -> {{:collector, collector}, remaining}
+      _improper_tail -> {:improper_tail, []}
+    end)
   end
 
   defp valid_collector?(collector) when is_binary(collector),
@@ -194,10 +219,26 @@ defmodule Worldloom.Signals.RipeWindow do
   defp valid_collector?(_collector), do: false
 
   defp empty_window(observed_at, approved_collector_fingerprints) do
+    window_start = BoundedCounter.window_start(observed_at, @window_seconds, @offset_seconds)
+    empty_window_at(window_start, approved_collector_fingerprints)
+  end
+
+  defp empty_window_at(window_start, approved_collector_fingerprints) do
     %__MODULE__{
-      window_start: BoundedCounter.window_start(observed_at, @window_seconds, @offset_seconds),
+      window_start: window_start,
       approved_collector_fingerprints: approved_collector_fingerprints
     }
+  end
+
+  defp next_window(%__MODULE__{pending: %__MODULE__{} = pending}, _observed_at),
+    do: %{pending | pending: nil}
+
+  defp next_window(%__MODULE__{} = window, observed_at) do
+    immediate_successor = DateTime.add(window.window_start, @window_seconds, :second)
+    live_window = BoundedCounter.window_start(observed_at, @window_seconds, @offset_seconds)
+    next_start = Enum.max([immediate_successor, live_window], DateTime)
+
+    empty_window_at(next_start, window.approved_collector_fingerprints)
   end
 
   defp sanitize(%{"type" => "ris_message", "data" => %{"type" => type}}, _window, _receipt_at)
@@ -309,10 +350,12 @@ defmodule Worldloom.Signals.RipeWindow do
   end
 
   defp peer_fingerprint(peer) do
-    if valid_ip?(peer) do
-      {:ok, fingerprint(peer)}
+    with true <- is_binary(peer),
+         true <- byte_size(peer) in 1..39,
+         {:ok, parsed_address} <- parse_ip(peer) do
+      {:ok, fingerprint(pack_address(parsed_address))}
     else
-      {:error, :invalid_peer}
+      _invalid -> {:error, :invalid_peer}
     end
   end
 
@@ -333,26 +376,73 @@ defmodule Worldloom.Signals.RipeWindow do
 
   defp valid_peer_asn?(_peer_asn), do: false
 
-  defp aggregate_observation(window, observation, reply_mode) do
-    with {:ok, delta} <- traverse_update(observation.announcements, observation.withdrawals),
-         {:ok, prepared_window} <- prepare_fingerprints(window, observation, delta),
-         updated_window <- apply_delta(prepared_window, delta) do
-      case reply_mode do
-        :current -> {:ok, updated_window}
-        {:next, completed_window} -> {:flush, completed_window, updated_window}
-      end
-    else
-      {:error, :peer_capacity} ->
-        {:drop, :peer_capacity, %{window | truncated: true}}
+  defp route_observation(window, observation, delta, receipt_at) do
+    cond do
+      delta.announced + delta.withdrawn == 0 ->
+        {:ok, window}
 
-      {:error, :collector_capacity} ->
-        {:drop, :collector_capacity, %{window | truncated: true}}
+      elapsed?(window, receipt_at) ->
+        {:close_required, window}
 
-      {:error, reason} ->
-        case reply_mode do
-          :current -> {:drop, reason, window}
-          {:next, completed_window} -> {:drop, reason, completed_window}
+      true ->
+        event_window_start =
+          BoundedCounter.window_start(
+            observation.occurred_at,
+            @window_seconds,
+            @offset_seconds
+          )
+
+        route_open_observation(window, observation, delta, event_window_start)
+    end
+  end
+
+  defp route_open_observation(window, observation, delta, event_window_start) do
+    successor_start = DateTime.add(window.window_start, @window_seconds, :second)
+
+    case DateTime.compare(event_window_start, window.window_start) do
+      :lt ->
+        {:drop, :late_event, window}
+
+      :eq ->
+        aggregate_current(window, observation, delta)
+
+      :gt ->
+        if DateTime.compare(event_window_start, successor_start) == :eq do
+          aggregate_pending(window, observation, delta, successor_start)
+        else
+          {:drop, :window_ahead, window}
         end
+    end
+  end
+
+  defp aggregate_current(window, observation, delta) do
+    case aggregate_window(window, observation, delta) do
+      {:ok, updated_window} -> {:ok, updated_window}
+      {:drop, reason, updated_window} -> {:drop, reason, updated_window}
+    end
+  end
+
+  defp aggregate_pending(window, observation, delta, successor_start) do
+    pending =
+      window.pending ||
+        empty_window_at(successor_start, window.approved_collector_fingerprints)
+
+    case aggregate_window(pending, observation, delta) do
+      {:ok, updated_pending} ->
+        {:ok, %{window | pending: updated_pending}}
+
+      {:drop, reason, updated_pending} ->
+        {:drop, reason, %{window | pending: updated_pending}}
+    end
+  end
+
+  defp aggregate_window(window, observation, delta) do
+    case prepare_fingerprints(window, observation, delta) do
+      {:ok, prepared_window} ->
+        {:ok, apply_delta(prepared_window, delta)}
+
+      {:error, reason} when reason in [:peer_capacity, :collector_capacity] ->
+        {:drop, reason, %{window | truncated: true}}
     end
   end
 
@@ -539,8 +629,13 @@ defmodule Worldloom.Signals.RipeWindow do
   defp parse_ip(address) do
     address
     |> String.to_charlist()
-    |> :inet.parse_address()
+    |> :inet.parse_strict_address()
   end
+
+  defp pack_address({a, b, c, d}), do: <<a, b, c, d>>
+
+  defp pack_address({a, b, c, d, e, f, g, h}),
+    do: <<a::16, b::16, c::16, d::16, e::16, f::16, g::16, h::16>>
 
   defp valid_prefix_length?(address, prefix_length) when tuple_size(address) == 4,
     do: prefix_length in 0..32

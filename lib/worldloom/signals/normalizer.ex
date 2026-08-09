@@ -2,6 +2,7 @@ defmodule Worldloom.Signals.Normalizer do
   alias Worldloom.Loom.SourceEvent
 
   @maximum_languages 5
+  @uint32_max 4_294_967_295
 
   @spec wikimedia_bucket(map()) :: {:ok, SourceEvent.t()} | {:error, atom()}
   def wikimedia_bucket(%{
@@ -127,7 +128,8 @@ defmodule Worldloom.Signals.Normalizer do
          true <- prefix_total > 0,
          true <- family_total > 0,
          true <- is_boolean(truncated),
-         true <- truncated or prefix_total == family_total,
+         true <- distinct_counts_fit?(collector_count, peer_count, prefix_total, family_total),
+         true <- valid_ripe_totals?(counters, truncated),
          {:ok, utc_window_start} <- DateTime.shift_zone(window_start, "Etc/UTC"),
          {:ok, event} <-
            SourceEvent.new(%{
@@ -408,7 +410,33 @@ defmodule Worldloom.Signals.Normalizer do
     {counters.announced + counters.withdrawn, counters.ipv4 + counters.ipv6}
   end
 
-  defp uint32?(number), do: is_integer(number) and number in 0..4_294_967_295
+  defp distinct_counts_fit?(collector_count, peer_count, prefix_total, family_total) do
+    collector_count <= prefix_total and collector_count <= family_total and
+      peer_count <= prefix_total and peer_count <= family_total
+  end
+
+  defp valid_ripe_totals?(counters, false) do
+    {prefix_total, family_total} = ripe_totals(counters)
+    prefix_total == family_total
+  end
+
+  defp valid_ripe_totals?(counters, true) do
+    direction_range = possible_total_range(counters.announced, counters.withdrawn)
+    family_range = possible_total_range(counters.ipv4, counters.ipv6)
+    ranges_intersect?(direction_range, family_range)
+  end
+
+  defp possible_total_range(first, second) when first == @uint32_max or second == @uint32_max,
+    do: {:at_least, first + second}
+
+  defp possible_total_range(first, second), do: {:exact, first + second}
+
+  defp ranges_intersect?({:exact, first}, {:exact, second}), do: first == second
+  defp ranges_intersect?({:exact, exact}, {:at_least, minimum}), do: exact >= minimum
+  defp ranges_intersect?({:at_least, minimum}, {:exact, exact}), do: exact >= minimum
+  defp ranges_intersect?({:at_least, _first}, {:at_least, _second}), do: true
+
+  defp uint32?(number), do: is_integer(number) and number in 0..@uint32_max
   defp format_decimal(number), do: :erlang.float_to_binary(number, decimals: 1)
   defp to_float(number) when is_float(number), do: number
   defp to_float(number) when is_integer(number), do: number * 1.0

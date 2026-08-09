@@ -4,7 +4,7 @@ defmodule Worldloom.Signals.RipeWindowTest do
   alias Worldloom.Signals.RipeWindow
 
   @fixture "test/support/fixtures/feeds/ripe_frames.json"
-  @receipt_at ~U[2026-08-08 16:00:22Z]
+  @receipt_at ~U[2026-08-08 16:00:06Z]
   @uint32_max 4_294_967_295
 
   test "builds the exact collector discovery and filtered subscription messages" do
@@ -50,6 +50,7 @@ defmodule Worldloom.Signals.RipeWindowTest do
           %{"type" => "ris_rrc_list", "data" => ["rrc00", "rrc00"]},
           %{"type" => "ris_rrc_list", "data" => ["RRC00"]},
           %{"type" => "ris_rrc_list", "data" => [nil]},
+          %{"type" => "ris_rrc_list", "data" => ["rrc00" | :improper]},
           %{}
         ] do
       assert {:error, :invalid_rrc_list} =
@@ -61,6 +62,47 @@ defmodule Worldloom.Signals.RipeWindowTest do
                ["rrc00"],
                %{"type" => "ris_rrc_list", "data" => ["rrc01"]}
              )
+  end
+
+  test "halts collector discovery at the first entry beyond the bounded namespace" do
+    complete_namespace =
+      for suffix <- 0..99 do
+        "rrc#{String.pad_leading(Integer.to_string(suffix), 2, "0")}"
+      end
+
+    assert {:ok, messages} =
+             RipeWindow.subscription_messages(
+               ["rrc99", "rrc00"],
+               %{"type" => "ris_rrc_list", "data" => complete_namespace}
+             )
+
+    assert messages == [subscription("rrc99"), subscription("rrc00")]
+
+    oversized = complete_namespace ++ List.duplicate("rrc00", 100_000)
+    {:reductions, before_reductions} = Process.info(self(), :reductions)
+
+    assert {:error, :invalid_rrc_list} =
+             RipeWindow.subscription_messages(
+               ["rrc00"],
+               %{"type" => "ris_rrc_list", "data" => oversized}
+             )
+
+    {:reductions, after_reductions} = Process.info(self(), :reductions)
+    assert after_reductions - before_reductions < 50_000
+
+    oversized_config =
+      ["rrc00", "rrc01", "rrc02", "rrc03"] ++ List.duplicate("rrc04", 100_000)
+
+    {:reductions, before_reductions} = Process.info(self(), :reductions)
+
+    assert {:error, :invalid_collectors} =
+             RipeWindow.subscription_messages(
+               oversized_config,
+               %{"type" => "ris_rrc_list", "data" => complete_namespace}
+             )
+
+    {:reductions, after_reductions} = Process.info(self(), :reductions)
+    assert after_reductions - before_reductions < 50_000
   end
 
   test "new hashes the approved collector allow-list and rejects invalid lists" do
@@ -114,30 +156,273 @@ defmodule Worldloom.Signals.RipeWindowTest do
            }
   end
 
-  test "uses provider time for staggered windows and one-second close grace" do
+  test "keeps current and immediate-successor frames separate through close grace" do
     [frame | _rest] = read_frames()
     window = RipeWindow.new(~U[2026-08-08 16:00:02Z], ["rrc00"])
 
-    assert {:ok, window} = RipeWindow.add(window, frame, @receipt_at)
+    current_frame = put_timestamp(frame, ~U[2026-08-08 16:00:02Z])
+    successor_frame = put_timestamp(frame, ~U[2026-08-08 16:00:06Z])
+    late_current_frame = put_timestamp(frame, ~U[2026-08-08 16:00:05.999999Z])
 
-    next_frame = put_timestamp(frame, ~U[2026-08-08 16:00:06Z])
+    assert {:ok, window} =
+             RipeWindow.add(window, current_frame, ~U[2026-08-08 16:00:05Z])
 
-    assert {:flush, completed_window, next_window} =
-             RipeWindow.add(window, next_frame, @receipt_at)
+    assert {:ok, window_with_pending} =
+             RipeWindow.add(window, successor_frame, ~U[2026-08-08 16:00:06.500000Z])
+
+    assert {:ok, window_with_pending} =
+             RipeWindow.add(
+               window_with_pending,
+               successor_frame,
+               ~U[2026-08-08 16:00:06.600000Z]
+             )
+
+    assert RipeWindow.flush(window_with_pending) == public_counts(~U[2026-08-08 16:00:02Z])
+
+    assert {:ok, window_with_pending} =
+             RipeWindow.add(
+               window_with_pending,
+               late_current_frame,
+               ~U[2026-08-08 16:00:06.750000Z]
+             )
+
+    expected_current =
+      public_counts(~U[2026-08-08 16:00:02Z])
+      |> Map.merge(%{announced: 6, withdrawn: 4, ipv4: 6, ipv6: 4})
+
+    assert RipeWindow.flush(window_with_pending) == expected_current
+
+    assert {:open, ^window_with_pending} =
+             RipeWindow.close(window_with_pending, ~U[2026-08-08 16:00:06.999999Z])
+
+    assert {:flush, ^expected_current, next_window} =
+             RipeWindow.close(window_with_pending, ~U[2026-08-08 16:00:07Z])
 
     assert next_window.window_start == ~U[2026-08-08 16:00:06Z]
 
-    late_frame = put_timestamp(frame, ~U[2026-08-08 16:00:05.999999Z])
-    assert {:ok, completed_window} = RipeWindow.add(completed_window, late_frame, @receipt_at)
+    assert RipeWindow.flush(next_window) ==
+             public_counts(~U[2026-08-08 16:00:06Z])
+             |> Map.merge(%{announced: 6, withdrawn: 4, ipv4: 6, ipv6: 4})
 
-    refute RipeWindow.elapsed?(completed_window, ~U[2026-08-08 16:00:06.999999Z])
-    assert RipeWindow.elapsed?(completed_window, ~U[2026-08-08 16:00:07Z])
+    refute inspect(window_with_pending) =~ "pending"
+  end
 
-    too_late = put_timestamp(frame, ~U[2026-08-08 16:00:01.999999Z])
-    late_receipt_at = ~U[2026-08-08 16:00:10Z]
+  test "requires an explicit close before consuming a non-empty elapsed frame" do
+    frame = single_prefix_frame()
+    window = RipeWindow.new(~U[2026-08-08 16:00:02Z], ["rrc00"])
 
-    assert {:drop, :late_event, ^completed_window} =
-             RipeWindow.add(completed_window, too_late, late_receipt_at)
+    assert {:ok, window} =
+             RipeWindow.add(window, frame, ~U[2026-08-08 16:00:06.999999Z])
+
+    elapsed_frame = put_timestamp(frame, ~U[2026-08-08 16:00:07Z])
+
+    assert {:close_required, ^window} =
+             RipeWindow.add(window, elapsed_frame, ~U[2026-08-08 16:00:07Z])
+
+    assert {:flush, completed, next_window} =
+             RipeWindow.close(window, ~U[2026-08-08 16:00:07Z])
+
+    assert completed.announced == 1
+    assert next_window.window_start == ~U[2026-08-08 16:00:06Z]
+
+    assert {:ok, retried_window} =
+             RipeWindow.add(next_window, elapsed_frame, ~U[2026-08-08 16:00:07Z])
+
+    assert RipeWindow.flush(retried_window).announced == 1
+  end
+
+  test "repeated close is deterministic until the caller installs promoted state" do
+    frame = single_prefix_frame()
+    window = RipeWindow.new(~U[2026-08-08 16:00:02Z], ["rrc00"])
+    successor = put_timestamp(frame, ~U[2026-08-08 16:00:06Z])
+
+    assert {:ok, window} =
+             RipeWindow.add(window, successor, ~U[2026-08-08 16:00:06.500000Z])
+
+    first_close = RipeWindow.close(window, ~U[2026-08-08 16:00:07Z])
+    second_close = RipeWindow.close(window, ~U[2026-08-08 16:00:07Z])
+
+    assert first_close == second_close
+    assert {:flush, :empty, promoted} = first_close
+    assert promoted.window_start == ~U[2026-08-08 16:00:06Z]
+    assert RipeWindow.flush(promoted).announced == 1
+    assert {:open, ^promoted} = RipeWindow.close(promoted, ~U[2026-08-08 16:00:07Z])
+  end
+
+  test "bounds ahead windows and long-outage recovery without skipping pending" do
+    frame = single_prefix_frame()
+    window = RipeWindow.new(~U[2026-08-08 16:00:02Z], ["rrc00"])
+    immediate_successor = put_timestamp(frame, ~U[2026-08-08 16:00:06Z])
+    window_ahead = put_timestamp(frame, ~U[2026-08-08 16:00:10Z])
+
+    assert {:flush, :empty, recovered_empty} =
+             RipeWindow.close(window, ~U[2026-08-08 16:00:22Z])
+
+    assert recovered_empty.window_start == ~U[2026-08-08 16:00:22Z]
+    assert RipeWindow.flush(recovered_empty) == :empty
+
+    assert {:drop, :window_ahead, ^window} =
+             RipeWindow.add(window, window_ahead, ~U[2026-08-08 16:00:06.500000Z])
+
+    assert {:ok, with_pending} =
+             RipeWindow.add(
+               window,
+               immediate_successor,
+               ~U[2026-08-08 16:00:06.500000Z]
+             )
+
+    live_frame = put_timestamp(frame, ~U[2026-08-08 16:00:22Z])
+
+    assert {:close_required, ^with_pending} =
+             RipeWindow.add(with_pending, live_frame, ~U[2026-08-08 16:00:22Z])
+
+    assert {:flush, :empty, promoted} =
+             RipeWindow.close(with_pending, ~U[2026-08-08 16:00:22Z])
+
+    assert promoted.window_start == ~U[2026-08-08 16:00:06Z]
+    assert RipeWindow.flush(promoted).announced == 1
+
+    assert {:close_required, ^promoted} =
+             RipeWindow.add(promoted, live_frame, ~U[2026-08-08 16:00:22Z])
+
+    assert {:flush, completed_pending, live_window} =
+             RipeWindow.close(promoted, ~U[2026-08-08 16:00:22Z])
+
+    assert completed_pending.announced == 1
+    assert live_window.window_start == ~U[2026-08-08 16:00:22Z]
+    assert RipeWindow.flush(live_window) == :empty
+
+    assert {:ok, live_window} =
+             RipeWindow.add(live_window, live_frame, ~U[2026-08-08 16:00:22Z])
+
+    assert RipeWindow.flush(live_window).announced == 1
+  end
+
+  test "isolates validation, capacity, and truncation inside pending state" do
+    frame = single_prefix_frame()
+    current_frame = put_timestamp(frame, ~U[2026-08-08 16:00:02Z])
+    successor_frame = put_timestamp(frame, ~U[2026-08-08 16:00:06Z])
+    window = RipeWindow.new(~U[2026-08-08 16:00:02Z], ["rrc00"])
+
+    assert {:ok, current} = RipeWindow.add(window, current_frame, @receipt_at)
+
+    assert {:ok, with_pending} =
+             RipeWindow.add(current, successor_frame, ~U[2026-08-08 16:00:06.500000Z])
+
+    invalid_pending =
+      put_in(
+        successor_frame,
+        ["data", "announcements", Access.at(0), "next_hop"],
+        "127.1"
+      )
+
+    assert {:drop, :invalid_update, ^with_pending} =
+             RipeWindow.add(
+               with_pending,
+               invalid_pending,
+               ~U[2026-08-08 16:00:06.500000Z]
+             )
+
+    full_peer_set =
+      0..2_047
+      |> Enum.map(fn index -> :crypto.hash(:sha256, "synthetic-peer-#{index}") end)
+      |> MapSet.new()
+
+    full_pending = %{with_pending.pending | peer_fingerprints: full_peer_set}
+    pending_at_capacity = %{with_pending | pending: full_pending}
+    unseen_peer = put_in(successor_frame, ["data", "peer"], "198.19.0.1")
+
+    assert {:drop, :peer_capacity, isolated_capacity} =
+             RipeWindow.add(
+               pending_at_capacity,
+               unseen_peer,
+               ~U[2026-08-08 16:00:06.500000Z]
+             )
+
+    refute isolated_capacity.truncated
+    assert isolated_capacity.pending.truncated
+    assert isolated_capacity.pending.peer_fingerprints == full_peer_set
+    assert RipeWindow.flush(isolated_capacity) == RipeWindow.flush(current)
+
+    saturated_pending = %{
+      with_pending.pending
+      | announced: @uint32_max,
+        ipv4: @uint32_max
+    }
+
+    pending_at_counter_limit = %{with_pending | pending: saturated_pending}
+
+    assert {:ok, isolated_counters} =
+             RipeWindow.add(
+               pending_at_counter_limit,
+               successor_frame,
+               ~U[2026-08-08 16:00:06.500000Z]
+             )
+
+    refute isolated_counters.truncated
+    assert isolated_counters.pending.announced == @uint32_max
+    assert isolated_counters.pending.ipv4 == @uint32_max
+    assert isolated_counters.pending.truncated
+
+    groups =
+      [announcement("192.0.2.1", ["203.0.113.0/24"])] ++
+        List.duplicate(announcement("192.0.2.1", []), 2_047) ++
+        [%{"next_hop" => "not-visited", "prefixes" => ["also-not-visited"]}]
+
+    group_capped = put_in(successor_frame, ["data", "announcements"], groups)
+
+    assert {:ok, isolated_groups} =
+             RipeWindow.add(
+               with_pending,
+               group_capped,
+               ~U[2026-08-08 16:00:06.500000Z]
+             )
+
+    refute isolated_groups.truncated
+    assert isolated_groups.pending.truncated
+    assert RipeWindow.flush(isolated_groups) == RipeWindow.flush(current)
+
+    assert {:flush, completed_current, promoted_pending} =
+             RipeWindow.close(isolated_groups, ~U[2026-08-08 16:00:07Z])
+
+    refute completed_current.truncated
+    assert promoted_pending.truncated
+
+    top_inspection = inspect(isolated_groups)
+    nested_inspection = inspect(isolated_groups.pending)
+    private_fingerprint = isolated_groups.pending.peer_fingerprints |> Enum.at(0) |> inspect()
+
+    refute top_inspection =~ "pending"
+
+    for private_detail <- [
+          "approved_collector_fingerprints",
+          "observed_collector_fingerprints",
+          "peer_fingerprints",
+          private_fingerprint
+        ] do
+      refute nested_inspection =~ private_detail
+    end
+  end
+
+  test "zero-prefix updates never advance, pend, or require a close" do
+    frame =
+      single_prefix_frame()
+      |> put_in(["data", "announcements"], [])
+      |> put_in(["data", "withdrawals"], [])
+
+    window = RipeWindow.new(~U[2026-08-08 16:00:02Z], ["rrc00"])
+
+    for occurred_at <- [
+          ~U[2026-08-08 16:00:02Z],
+          ~U[2026-08-08 16:00:06Z],
+          ~U[2026-08-08 16:00:10Z],
+          ~U[2026-08-08 16:00:22Z]
+        ] do
+      receipt_at = Enum.max([occurred_at, ~U[2026-08-08 16:00:06Z]], DateTime)
+
+      assert {:ok, ^window} =
+               RipeWindow.add(window, put_timestamp(frame, occurred_at), receipt_at)
+    end
   end
 
   test "accepts exact receipt bounds and rejects one microsecond beyond without poisoning state" do
@@ -145,7 +430,7 @@ defmodule Worldloom.Signals.RipeWindowTest do
     stale_boundary = DateTime.add(@receipt_at, -20_000_000, :microsecond)
     stale_window = RipeWindow.new(stale_boundary, ["rrc00"])
 
-    assert {:ok, stale_window} =
+    assert {:close_required, ^stale_window} =
              RipeWindow.add(stale_window, put_timestamp(frame, stale_boundary), @receipt_at)
 
     one_microsecond_stale = DateTime.add(stale_boundary, -1, :microsecond)
@@ -159,14 +444,12 @@ defmodule Worldloom.Signals.RipeWindowTest do
 
     valid_after_stale = DateTime.add(stale_boundary, 1, :microsecond)
 
-    assert {:ok, recovered_window} =
+    assert {:close_required, ^stale_window} =
              RipeWindow.add(
                stale_window,
                put_timestamp(frame, valid_after_stale),
                @receipt_at
              )
-
-    assert recovered_window.announced == stale_window.announced + 3
 
     future_boundary = DateTime.add(@receipt_at, 5_000_000, :microsecond)
     future_window = RipeWindow.new(future_boundary, ["rrc00"])
@@ -227,12 +510,38 @@ defmodule Worldloom.Signals.RipeWindowTest do
     assert {:drop, :unapproved_collector, ^window} =
              RipeWindow.add(window, unapproved, @receipt_at)
 
-    for peer <- [nil, "not-an-ip", 123, String.duplicate("1", 40)] do
+    for peer <- [nil, "not-an-ip", "127.1", 123, String.duplicate("1", 40)] do
       malformed = put_in(frame, ["data", "peer"], peer)
 
       assert {:drop, :invalid_peer, ^window} =
                RipeWindow.add(window, malformed, @receipt_at)
     end
+  end
+
+  test "hashes peers from canonical packed address bytes" do
+    frame = single_prefix_frame()
+    window = RipeWindow.new(~U[2026-08-08 16:00:02Z], ["rrc00"])
+
+    expanded =
+      put_in(
+        frame,
+        ["data", "peer"],
+        "2001:0db8:0000:0000:0000:0000:0000:0010"
+      )
+
+    compressed = put_in(frame, ["data", "peer"], "2001:db8::10")
+
+    assert {:ok, window} = RipeWindow.add(window, expanded, @receipt_at)
+    assert {:ok, window} = RipeWindow.add(window, compressed, @receipt_at)
+
+    expected_fingerprint =
+      :crypto.hash(
+        :sha256,
+        <<0x2001::16, 0x0DB8::16, 0::16, 0::16, 0::16, 0::16, 0::16, 0x0010::16>>
+      )
+
+    assert window.peer_fingerprints == MapSet.new([expected_fingerprint])
+    assert RipeWindow.flush(window).peer_count == 1
   end
 
   test "validates required base message identity fields then discards them" do
@@ -284,7 +593,9 @@ defmodule Worldloom.Signals.RipeWindowTest do
 
     malformed_frames = [
       put_in(frame, ["data", "announcements", Access.at(1), "next_hop"], "not-an-ip"),
+      put_in(frame, ["data", "announcements", Access.at(1), "next_hop"], "127.1"),
       put_in(frame, ["data", "announcements", Access.at(1), "prefixes", Access.at(0)], "bad"),
+      put_in(frame, ["data", "announcements", Access.at(1), "prefixes", Access.at(0)], "127.1/8"),
       put_in(frame, ["data", "withdrawals", Access.at(1)], "203.0.113.0/99"),
       put_in(
         frame,
@@ -476,6 +787,19 @@ defmodule Worldloom.Signals.RipeWindowTest do
         "host" => collector,
         "socketOptions" => %{"includeRaw" => false, "acknowledge" => true}
       }
+    }
+  end
+
+  defp public_counts(window_start) do
+    %{
+      window_start: window_start,
+      announced: 3,
+      withdrawn: 2,
+      ipv4: 3,
+      ipv6: 2,
+      collector_count: 1,
+      peer_count: 1,
+      truncated: false
     }
   end
 

@@ -215,6 +215,39 @@ defmodule Worldloom.Signals.NormalizerTest do
              |> Normalizer.ripe_window()
   end
 
+  test "requires exact truncated partitions to agree" do
+    assert {:error, :invalid_window} =
+             normalizable_ripe_window()
+             |> Map.merge(%{ipv4: 4, ipv6: 2, truncated: true})
+             |> Normalizer.ripe_window()
+
+    assert {:ok, %SourceEvent{}} =
+             normalizable_ripe_window()
+             |> Map.put(:truncated, true)
+             |> Normalizer.ripe_window()
+  end
+
+  test "rejects distinct RIPE counts larger than either public partition total" do
+    small_window =
+      normalizable_ripe_window()
+      |> Map.merge(%{
+        announced: 1,
+        withdrawn: 1,
+        ipv4: 1,
+        ipv6: 1,
+        collector_count: 2,
+        peer_count: 2,
+        truncated: true
+      })
+
+    for count_field <- [:collector_count, :peer_count] do
+      assert {:error, :invalid_window} =
+               small_window
+               |> Map.put(count_field, 3)
+               |> Normalizer.ripe_window()
+    end
+  end
+
   test "rejects RIPE count and set bounds outside the contract" do
     for invalid <- [
           Map.put(normalizable_ripe_window(), :announced, -1),
@@ -247,6 +280,31 @@ defmodule Worldloom.Signals.NormalizerTest do
     assert {:ok, %SourceEvent{} = event} = Normalizer.ripe_window(truncated)
     assert event.payload["announced"] == uint32_max
     assert event.payload["truncated"]
+  end
+
+  test "accepts only intersecting exact and saturated RIPE total ranges" do
+    uint32_max = 4_294_967_295
+
+    compatible =
+      normalizable_ripe_window()
+      |> Map.merge(%{
+        announced: uint32_max - 1,
+        withdrawn: 100,
+        ipv4: uint32_max,
+        ipv6: 50,
+        truncated: true
+      })
+
+    assert {:ok, %SourceEvent{}} = Normalizer.ripe_window(compatible)
+
+    incompatible =
+      compatible
+      |> Map.merge(%{
+        withdrawn: 40,
+        ipv6: 50
+      })
+
+    assert {:error, :invalid_window} = Normalizer.ripe_window(incompatible)
   end
 
   test "normalizes public USGS features and clamps impossible magnitudes" do
