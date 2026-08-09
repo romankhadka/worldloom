@@ -174,7 +174,7 @@ rtk git commit -m "Report ephemeral feed connection and activity health"
 
 ## Task 3: Redesign Buffer as fair source partitions
 
-- [ ] **Step 1: Replace FIFO expectations with fairness tests**
+- [x] **Step 1: Replace FIFO expectations with fairness tests**
 
 In `test/worldloom/signals/buffer_test.exs`, create a blocked Wikimedia partition followed by Bluesky, RIPE, drand, and USGS submissions. Assert successful drains rotate sources and no source drains twice while another ready partition waits. Assert retry delay blocks only the failing source.
 
@@ -187,13 +187,17 @@ Add pressure cases proving:
 - exhausting one source's persistence retries fails only that partition.
 - checkpoint-only empty windows retain their source partition, advance durability, and never enter a reducer.
 
-- [ ] **Step 2: Run and verify RED**
+Use explicit queue limits: 64 entries globally, 16 entries per ordinary source, and 20 entries for drand. Depth counts every queued entry, including checkpoint-only entries. Admission is all-or-nothing: compact eligible entries first; if the complete submission still cannot fit, preserve existing state and checkpoints, store no waiter, record one `{:drop, :capacity}`, and return `{:error, :capacity}` immediately. An empty Buffer accepts exactly 20 ordered drand rounds; a twenty-first round fails atomically.
+
+Compact only adjacent, unattempted entries within one source. Never merge a blocked or retrying entry. Drand never reaches `Merger`. Checkpoint-only entries never reach a reducer and may coalesce only with adjacent checkpoint-only entries, retaining the newest checkpoint and every waiter. Task 3 uses the existing Wikimedia, USGS, and Open-Meteo reducers; Task 4 adds Bluesky, RIPE, and Solana eligibility. A reducer error means the run is not compactable, never a Buffer crash.
+
+- [x] **Step 2: Run and verify RED**
 
 ```bash
 rtk mix test test/worldloom/signals/buffer_test.exs
 ```
 
-- [ ] **Step 3: Implement partition and rotation state**
+- [x] **Step 3: Implement partition and rotation state**
 
 Replace `queue: []` with:
 
@@ -209,15 +213,17 @@ Replace `queue: []` with:
 
 Insert a source into `rotation` only when its partition transitions empty-to-non-empty. On each drain, take the next ready source, pop one entry, and rotate a still-non-empty source to the tail. Preserve synchronous `Buffer.submit/2` acknowledgment semantics.
 
-- [ ] **Step 4: Emit privacy-safe per-source pressure metrics**
+On persistence failure, put the entry back at the front of its source partition and set that source's monotonic `blocked_until`; continue draining other ready sources every 250 milliseconds. If only blocked sources remain, schedule the earliest unblock. Timer messages carry a generation token so an earlier replacement timer cannot later cause an extra drain. Exhausting retries removes and fails only the affected partition.
 
-Emit total depth plus source atom and bounded counts. Never attach event, checkpoint, cursor, or URL. Record `{:merge, count}` and `{:retry, attempt}` through `HealthRegistry`.
+- [x] **Step 4: Emit privacy-safe per-source pressure metrics**
+
+Emit `[:worldloom, :signals, :buffer, :depth]` after every affected partition mutation, including source depth zero, with measurements `%{depth: total_depth, source_depth: source_depth, observed_at: monotonic_milliseconds}` and metadata `%{source: fixed_source_atom}`. Never attach event, checkpoint, cursor, URL, or provider failure. Record `{:merge, count}` using queue slots eliminated (`inputs - 1`) and `{:retry, 1}` for each scheduled retry through `HealthRegistry`; retry telemetry separately retains the attempt ordinal from one through three.
 
 - [ ] **Step 5: Verify and commit**
 
 ```bash
-rtk mix test test/worldloom/signals/buffer_test.exs test/worldloom/loom/coordinator_test.exs
-rtk git add lib/worldloom/signals/buffer.ex test/worldloom/signals/buffer_test.exs
+rtk mix test test/worldloom/signals/buffer_test.exs test/worldloom/loom/coordinator_test.exs test/worldloom_web/telemetry_test.exs
+rtk git add lib/worldloom/signals/buffer.ex lib/worldloom_web/telemetry.ex test/worldloom/signals/buffer_test.exs test/worldloom_web/telemetry_test.exs
 rtk git commit -m "Drain signal persistence fairly by source"
 ```
 

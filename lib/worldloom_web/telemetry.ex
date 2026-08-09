@@ -10,7 +10,7 @@ defmodule WorldloomWeb.Telemetry do
   alias Worldloom.Repo
   alias WorldloomWeb.Presence
 
-  @feed_sources [:wikimedia, :usgs, :open_meteo]
+  @feed_sources [:wikimedia, :usgs, :open_meteo, :bluesky, :ripe_ris, :solana, :drand]
   @feed_statuses [:success, :failure]
   @retry_operations [:connection, :persistence]
 
@@ -105,7 +105,16 @@ defmodule WorldloomWeb.Telemetry do
         unit: {:native, :millisecond}
       ),
       sum("worldloom.signals.retry.count", tags: [:source, :operation]),
-      last_value("worldloom.signals.buffer.depth"),
+      last_value("worldloom.signals.buffer.depth",
+        event_name: [:worldloom, :signals, :buffer, :depth],
+        measurement: :depth,
+        tags: [:source]
+      ),
+      last_value("worldloom.signals.buffer.source_depth",
+        event_name: [:worldloom, :signals, :buffer, :depth],
+        measurement: :source_depth,
+        tags: [:source]
+      ),
       last_value("worldloom.runtime.viewer_count"),
       last_value("worldloom.runtime.live_view_count"),
       last_value("worldloom.runtime.beam_process_count"),
@@ -169,12 +178,14 @@ defmodule WorldloomWeb.Telemetry do
     )
   end
 
-  @spec record_buffer_depth(non_neg_integer()) :: :ok
-  def record_buffer_depth(depth) when is_integer(depth) and depth >= 0 do
+  @spec record_buffer_depth(atom(), non_neg_integer(), non_neg_integer(), integer()) :: :ok
+  def record_buffer_depth(source, depth, source_depth, observed_at)
+      when source in @feed_sources and is_integer(depth) and depth >= 0 and
+             is_integer(source_depth) and source_depth >= 0 and is_integer(observed_at) do
     :telemetry.execute(
       [:worldloom, :signals, :buffer, :depth],
-      %{depth: depth, observed_at: System.monotonic_time(:millisecond)},
-      %{}
+      %{depth: depth, source_depth: source_depth, observed_at: observed_at},
+      %{source: source}
     )
   end
 

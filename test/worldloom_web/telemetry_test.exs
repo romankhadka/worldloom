@@ -54,7 +54,7 @@ defmodule WorldloomWeb.TelemetryTest do
     Telemetry.record_feed(:usgs, :success, duration: 17, count: 3, attempt: 0)
     Telemetry.record_feed(:open_meteo, :failure, duration: 23, count: 0, attempt: 1)
     Telemetry.record_retry(:wikimedia, :connection, attempt: 2, delay: 1_000)
-    Telemetry.record_buffer_depth(4)
+    Telemetry.record_buffer_depth(:drand, 4, 2, System.monotonic_time(:millisecond))
     Telemetry.measure_runtime()
 
     assert_receive {:telemetry, [:worldloom, :loom, :commit], commit_measurements,
@@ -77,7 +77,7 @@ defmodule WorldloomWeb.TelemetryTest do
                    500
 
     assert_receive {:telemetry, [:worldloom, :signals, :buffer, :depth],
-                    %{depth: 4, observed_at: observed_at}, %{}},
+                    %{depth: 4, source_depth: 2, observed_at: observed_at}, %{source: :drand}},
                    500
 
     assert is_integer(observed_at)
@@ -116,6 +116,21 @@ defmodule WorldloomWeb.TelemetryTest do
     assert [:worldloom, :signals, :feed, :duration] in metric_names
     assert [:worldloom, :signals, :retry, :count] in metric_names
     assert [:worldloom, :signals, :buffer, :depth] in metric_names
+    assert [:worldloom, :signals, :buffer, :source_depth] in metric_names
+
+    buffer_metrics =
+      Enum.filter(Telemetry.metrics(), fn metric ->
+        metric.name in [
+          [:worldloom, :signals, :buffer, :depth],
+          [:worldloom, :signals, :buffer, :source_depth]
+        ]
+      end)
+
+    assert Enum.all?(buffer_metrics, fn metric ->
+             metric.event_name == [:worldloom, :signals, :buffer, :depth] and
+               metric.tags == [:source]
+           end)
+
     assert [:worldloom, :runtime, :viewer_count] in metric_names
     assert [:worldloom, :runtime, :live_view_count] in metric_names
     assert [:worldloom, :runtime, :beam_process_count] in metric_names
