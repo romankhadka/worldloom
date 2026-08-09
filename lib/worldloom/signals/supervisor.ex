@@ -2,7 +2,11 @@ defmodule Worldloom.Signals.Supervisor do
   use Supervisor
 
   alias Worldloom.Signals.Config
+  alias Worldloom.Signals.BlueskySocket
+  alias Worldloom.Signals.DrandWorker
   alias Worldloom.Signals.EarthquakeWorker
+  alias Worldloom.Signals.RipeSocket
+  alias Worldloom.Signals.SolanaSocket
   alias Worldloom.Signals.WeatherWorker
   alias Worldloom.Signals.WikimediaWorker
 
@@ -23,30 +27,40 @@ defmodule Worldloom.Signals.Supervisor do
     Supervisor.init(children, strategy: :one_for_one)
   end
 
-  defp configured_children(config) do
-    if configured?(config, :enabled, true) do
-      [
-        {Task.Supervisor, name: Worldloom.Signals.StreamSupervisor},
-        {WikimediaWorker,
-         url: fetch_config!(config, :wikimedia_url),
-         task_supervisor: Worldloom.Signals.StreamSupervisor},
-        {EarthquakeWorker,
-         url: fetch_config!(config, :usgs_url),
-         interval_ms: fetch_config!(config, :earthquake_interval_ms)},
-        {WeatherWorker,
-         url: fetch_config!(config, :open_meteo_url),
-         interval_ms: fetch_config!(config, :weather_interval_ms)}
-      ]
-    else
-      []
-    end
+  defp configured_children(%Config{enabled: false}), do: []
+
+  defp configured_children(%Config{enabled: true} = config) do
+    existing_children(config) ++
+      Enum.reject(
+        [
+          optional_child(
+            config.drand_enabled,
+            {DrandWorker, client_options: [origins: config.drand_relays]}
+          ),
+          optional_child(config.bluesky_enabled, {BlueskySocket, url: config.bluesky_url}),
+          optional_child(
+            config.ripe_enabled,
+            {RipeSocket, url: config.ripe_url, collectors: config.ripe_collectors}
+          ),
+          optional_child(config.solana_enabled, {SolanaSocket, url: config.solana_url})
+        ],
+        &is_nil/1
+      )
   end
 
+  defp existing_children(config) do
+    [
+      {Task.Supervisor, name: Worldloom.Signals.StreamSupervisor},
+      {WikimediaWorker,
+       url: config.wikimedia_url, task_supervisor: Worldloom.Signals.StreamSupervisor},
+      {EarthquakeWorker, url: config.usgs_url, interval_ms: config.earthquake_interval_ms},
+      {WeatherWorker, url: config.open_meteo_url, interval_ms: config.weather_interval_ms}
+    ]
+  end
+
+  defp optional_child(true, child), do: child
+  defp optional_child(false, _child), do: nil
   defp signal_config, do: Application.fetch_env!(:worldloom, Worldloom.Signals)
-  defp configured?(%Config{} = config, setting, _default), do: Map.fetch!(config, setting)
-  defp configured?(config, setting, default), do: Keyword.get(config, setting, default)
-  defp fetch_config!(%Config{} = config, setting), do: Map.fetch!(config, setting)
-  defp fetch_config!(config, setting), do: Keyword.fetch!(config, setting)
   defp registration_options(nil), do: []
   defp registration_options(name), do: [name: name]
 end

@@ -2,6 +2,7 @@ defmodule Worldloom.Signals.ConfigTest do
   use ExUnit.Case, async: true
 
   alias Worldloom.Signals.Config
+  alias Worldloom.Signals.DrandClient
   alias Worldloom.Signals.SafeEndpoint
 
   @boolean_settings [
@@ -120,14 +121,13 @@ defmodule Worldloom.Signals.ConfigTest do
       default_config()
       |> Keyword.merge(
         wikimedia_url: "http://localhost:4100/wikimedia",
-        drand_relays: "http://localhost:4101,http://localhost:4102",
         bluesky_url: "wss://localhost:4103/bluesky",
         ripe_url: "wss://localhost:4104/ripe"
       )
       |> Config.from_keyword!(:dev)
 
     assert config.wikimedia_url == "http://localhost:4100/wikimedia"
-    assert config.drand_relays == ["http://localhost:4101", "http://localhost:4102"]
+    assert config.drand_relays == DrandClient.allowed_origins()
     assert config.bluesky_url == "wss://localhost:4103/bluesky"
     assert config.ripe_url == "wss://localhost:4104/ripe"
   end
@@ -174,6 +174,20 @@ defmodule Worldloom.Signals.ConfigTest do
     end
   end
 
+  test "accepts only relay origins the drand client can start" do
+    for {environment, origin} <- [
+          {:dev, "http://localhost:4101"},
+          {:prod, "https://relay.example.test"},
+          {:prod, "https://api.drand.sh?token=private"}
+        ] do
+      assert_raise ArgumentError, ~r/WORLDLOOM_DRAND_RELAYS.*official drand HTTPS origins/, fn ->
+        default_config()
+        |> Keyword.put(:drand_relays, [origin])
+        |> Config.from_keyword!(environment)
+      end
+    end
+  end
+
   test "configured endpoint labels cannot expose query parameters" do
     config =
       default_config()
@@ -181,7 +195,6 @@ defmodule Worldloom.Signals.ConfigTest do
         wikimedia_url: "https://provider.example.test/wiki?token=wiki-secret",
         usgs_url: "https://provider.example.test/usgs?token=usgs-secret",
         open_meteo_url: "https://provider.example.test/weather?token=weather-secret",
-        drand_relays: ["https://provider.example.test/drand?token=drand-secret"],
         bluesky_url: "wss://provider.example.test/bluesky?cursor=bluesky-secret",
         ripe_url: "wss://provider.example.test/ripe?token=ripe-secret"
       )

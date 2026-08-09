@@ -1,6 +1,8 @@
 defmodule Worldloom.Signals.Config do
   @moduledoc false
 
+  alias Worldloom.Signals.DrandClient
+
   @derive {Inspect,
            only: [
              :enabled,
@@ -78,6 +80,7 @@ defmodule Worldloom.Signals.Config do
       |> parse_collections!()
       |> validate_intervals!()
       |> validate_endpoints!(environment)
+      |> validate_drand_origins!()
       |> apply_global_switch()
       |> validate_production_decisions!(environment)
 
@@ -234,6 +237,15 @@ defmodule Worldloom.Signals.Config do
     case configured[setting] do
       nil -> configured
       _url -> validate_url!(configured, setting, environment_key, kind, environment)
+    end
+  end
+
+  defp validate_drand_origins!(configured) do
+    if Enum.all?(configured.drand_relays, &(&1 in DrandClient.allowed_origins())) do
+      configured
+    else
+      raise ArgumentError,
+            "environment variable WORLDLOOM_DRAND_RELAYS must select official drand HTTPS origins"
     end
   end
 

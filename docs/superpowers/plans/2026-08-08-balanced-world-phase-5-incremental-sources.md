@@ -86,21 +86,21 @@ rtk git commit -m "Fail closed around independent public feed configuration"
 
 ## Task 2: Make supervisor composition independently reversible
 
-- [ ] **Step 1: Write child-composition tests**
+- [x] **Step 1: Write child-composition tests**
 
 Extend `test/worldloom/signals/supervisor_test.exs`. For every flag combination, assert exact child IDs. The all-off case still starts existing enabled Wikimedia, USGS, and Open-Meteo workers when global ingestion is on; global off starts none. Assert enabling one new source adds exactly one child and preserves `:one_for_one` sibling isolation.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 ```bash
 rtk mix test test/worldloom/signals/supervisor_test.exs
 ```
 
-- [ ] **Step 3: Build children from validated config**
+- [x] **Step 3: Build children from validated config**
 
 Update `Worldloom.Signals.Supervisor.configured_children/1` to append child specs in stable order: existing feeds, drand, Bluesky, RIPE, Solana. Pass only source-specific config to each child. A disabled source creates no process, timer, connection, checkpoint touch, or health claim.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 ```bash
 rtk mix test test/worldloom/signals/supervisor_test.exs

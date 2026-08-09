@@ -65,6 +65,9 @@ defmodule Worldloom.Signals.DrandClient do
 
   def new(_options), do: invalid_configuration!()
 
+  @spec allowed_origins() :: [String.t()]
+  def allowed_origins, do: @relay_origins
+
   @spec schedule(t()) :: %{period: 3, genesis_time: pos_integer()}
   def schedule(%__MODULE__{period: 3, genesis_time: genesis_time})
       when is_integer(genesis_time) and genesis_time > 0 do
