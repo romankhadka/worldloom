@@ -121,8 +121,7 @@ defmodule Worldloom.Signals.DrandClientTest do
                request: request,
                connect_timeout: 11,
                send_timeout: 12,
-               receive_timeout: 13,
-               task_timeout: 14
+               receive_timeout: 13
              )
 
     assert {:ok, %{round: 42}} = DrandClient.fetch_round(client, 42)
