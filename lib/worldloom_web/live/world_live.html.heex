@@ -93,26 +93,42 @@
 
     <aside
       id="signal-legend"
-      data-wikimedia-state={@feed_health.wikimedia.state}
-      data-usgs-state={@feed_health.usgs.state}
-      data-weather-state={@feed_health.open_meteo.state}
+      data-wikimedia-state={legend_health_state(@feed_health, @source_eligibility, :wikimedia)}
+      data-usgs-state={legend_health_state(@feed_health, @source_eligibility, :usgs)}
+      data-weather-state={legend_health_state(@feed_health, @source_eligibility, :open_meteo)}
       class="signal-legend"
       aria-label="Signal legend"
     >
-      <span class="legend-item legend-wikimedia" data-family="wikimedia">
-        <i aria-hidden="true"></i> Wikimedia
-      </span>
-      <span class="legend-item legend-usgs" data-family="usgs">
-        <i aria-hidden="true"></i>
-        Earth <small :if={@feed_health.usgs.state == :quiet}>quiet</small>
-      </span>
-      <span class="legend-item legend-weather" data-family="open_meteo">
-        <i aria-hidden="true"></i>
-        Weather <small :if={@feed_health.open_meteo.state == :stale}>stale</small>
-      </span>
-      <span class="legend-item legend-visitor" data-family="visitor">
-        <i aria-hidden="true"></i> Visitors
-      </span>
+      <div data-legend-layout="desktop" class="legend-desktop" aria-label="Signal legend">
+        <div class="legend-heading">
+          <p class="eyebrow">Material key</p>
+          <h2>Signals in the weave</h2>
+        </div>
+        <.legend_entries
+          feed_health={@feed_health}
+          source_eligibility={@source_eligibility}
+          id_prefix=""
+        />
+      </div>
+
+      <details data-legend-layout="compact" class="legend-compact">
+        <summary id="signal-legend-toggle" class="legend-toggle">
+          <span>Read the signals</span>
+          <small>8 distinct materials</small>
+          <.icon name="hero-chevron-down" class="size-4" />
+        </summary>
+        <div class="legend-body">
+          <div class="legend-heading">
+            <p class="eyebrow">Material key</p>
+            <h2>Signals in the weave</h2>
+          </div>
+          <.legend_entries
+            feed_health={@feed_health}
+            source_eligibility={@source_eligibility}
+            id_prefix="compact-"
+          />
+        </div>
+      </details>
     </aside>
 
     <div
@@ -300,6 +316,14 @@
       <div id="source-attribution" class="source-attribution">
         <h2>Public sources</h2>
         <a href="https://stream.wikimedia.org/" rel="noreferrer">Wikimedia EventStreams</a>
+        <a href="https://docs.bsky.app/blog/jetstream" rel="noreferrer">Bluesky Jetstream</a>
+        <a href="https://ris-live.ripe.net/manual/" rel="noreferrer">RIPE RIS Live</a>
+        <a href="https://solana.com/docs/rpc/websocket/slotsubscribe" rel="noreferrer">
+          Solana slot progression
+        </a>
+        <a href="https://docs.drand.love/developer/API-v2/drand-http-api/" rel="noreferrer">
+          drand Quicknet
+        </a>
         <a href="https://earthquake.usgs.gov/" rel="noreferrer">USGS Earthquake Hazards</a>
         <a href="https://open-meteo.com/" rel="noreferrer">Open-Meteo</a>
       </div>
@@ -313,9 +337,7 @@
     </section>
 
     <p id="live-summary" class="sr-only" aria-live="polite">
-      {@viewer_count} people are viewing. Latest public formation sequence: {List.last(
-        @instructions
-      )["sequence"] || 0}.
+      {@semantic_summary}
     </p>
 
     <div id="accessible-formations" phx-update="stream" class="sr-only">

@@ -18,11 +18,14 @@ defmodule WorldloomWeb.WorldLive do
   @accessible_limit 20
   @public_scaffold_limit 12
   @maximum_sequence 9_223_372_036_854_775_807
+  @health_sources [:wikimedia, :bluesky, :ripe_ris, :solana, :drand, :usgs, :open_meteo]
+  @health_states [:live, :quiet, :stale, :disconnected]
 
   @impl true
   def mount(_params, session, socket) do
     action = socket.assigns.live_action
     feed_health = HealthMonitor.current()
+    source_eligibility = source_eligibility()
 
     socket =
       socket
@@ -58,6 +61,10 @@ defmodule WorldloomWeb.WorldLive do
       |> assign(:permalink, nil)
       |> assign(:current_url, nil)
       |> assign(:feed_health, feed_health)
+      |> assign(:source_eligibility, source_eligibility)
+      |> assign(:semantic_snapshot, nil)
+      |> assign(:semantic_summary_key, nil)
+      |> assign(:semantic_summary, "This minute: no accepted public formations.")
       |> assign(:viewer_count, Presence.viewer_count())
       |> assign(:visitor_identity, session["visitor_identity"] || session[:visitor_identity])
       |> assign(:peer_address, peer_address(socket))
@@ -106,7 +113,9 @@ defmodule WorldloomWeb.WorldLive do
   def handle_info({:loom_snapshot, %LiveSnapshot{}}, socket), do: {:noreply, socket}
 
   def handle_info({:feed_health, health}, socket) do
-    {:noreply, assign(socket, :feed_health, health)}
+    socket = assign(socket, :feed_health, health)
+
+    {:noreply, maybe_assign_semantic_summary(socket, socket.assigns.semantic_snapshot)}
   end
 
   def handle_info({:gesture_ready, token}, %{assigns: %{cooldown_token: token}} = socket),
@@ -490,6 +499,305 @@ defmodule WorldloomWeb.WorldLive do
     )
     |> assign(:history_requested_at, nil)
     |> stream(:accessible_formations, accessible_formations, reset: true)
+    |> maybe_assign_semantic_summary(snapshot)
+  end
+
+  defp maybe_assign_semantic_summary(socket, nil), do: socket
+
+  defp maybe_assign_semantic_summary(socket, %LiveSnapshot{} = snapshot) do
+    health = semantic_health(socket.assigns.feed_health, socket.assigns.source_eligibility)
+    summary_key = {semantic_bucket(snapshot.window_end), health}
+    socket = assign(socket, :semantic_snapshot, snapshot)
+
+    if summary_key == socket.assigns.semantic_summary_key do
+      socket
+    else
+      assign(socket,
+        semantic_summary_key: summary_key,
+        semantic_summary: semantic_summary(snapshot, health)
+      )
+    end
+  end
+
+  defp semantic_summary(%LiveSnapshot{} = snapshot, health) when is_map(health) do
+    eligible_display_events =
+      Enum.filter(snapshot.display_events, &semantically_eligible?(&1, health))
+
+    eligible_memory_events =
+      Enum.filter(snapshot.memory_events, &semantically_eligible?(&1, health))
+
+    display_counts = Enum.frequencies_by(eligible_display_events, & &1.source)
+    memory_counts = Enum.frequencies_by(eligible_memory_events, &{&1.source, &1.kind})
+    visitor_memory_count = Enum.count(eligible_memory_events, &(&1.source == "visitor"))
+
+    activity =
+      [
+        count_phrase(display_counts["wikimedia"], "Wikimedia window"),
+        count_phrase(display_counts["bluesky"], "Bluesky activity window"),
+        count_phrase(display_counts["ripe_ris"], "RIPE route window"),
+        count_phrase(display_counts["solana"], "Solana slot window"),
+        count_phrase(display_counts["drand"], "drand round"),
+        count_phrase(display_counts["usgs"], "earthquake rupture"),
+        count_phrase(display_counts["visitor"], "visitor intervention"),
+        count_phrase(memory_counts[{"usgs", "earthquake"}], "earthquake memory"),
+        count_phrase(visitor_memory_count, "visitor memory")
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    activity_summary =
+      case activity do
+        [] -> "This minute: no accepted public formations."
+        phrases -> "This minute: #{sentence_list(phrases)}."
+      end
+
+    activity_summary <> " " <> health_summary(health)
+  end
+
+  defp semantic_bucket(%DateTime{} = window_end),
+    do: window_end |> DateTime.to_unix(:second) |> div(10)
+
+  defp semantic_bucket(_window_end), do: nil
+
+  defp semantically_eligible?(%Event{source: "visitor"}, _health), do: true
+
+  defp semantically_eligible?(%Event{source: source}, health) do
+    case source_atom(source) do
+      nil -> false
+      source -> Map.get(health, source) != :disabled
+    end
+  end
+
+  defp source_atom("wikimedia"), do: :wikimedia
+  defp source_atom("bluesky"), do: :bluesky
+  defp source_atom("ripe_ris"), do: :ripe_ris
+  defp source_atom("solana"), do: :solana
+  defp source_atom("drand"), do: :drand
+  defp source_atom("usgs"), do: :usgs
+  defp source_atom("open_meteo"), do: :open_meteo
+  defp source_atom(_source), do: nil
+
+  defp count_phrase(count, singular) when is_integer(count) and count > 0 do
+    noun = if count == 1, do: singular, else: pluralize(singular)
+    "#{count} #{noun}"
+  end
+
+  defp count_phrase(_count, _singular), do: nil
+
+  defp pluralize(singular) do
+    if String.ends_with?(singular, "memory") do
+      String.trim_trailing(singular, "y") <> "ies"
+    else
+      singular <> "s"
+    end
+  end
+
+  defp sentence_list([phrase]), do: phrase
+  defp sentence_list([first, second]), do: first <> " and " <> second
+
+  defp sentence_list(phrases) do
+    {last, leading} = List.pop_at(phrases, -1)
+    Enum.join(leading, ", ") <> ", and " <> last
+  end
+
+  defp health_summary(health) do
+    states = Enum.map(@health_sources, &{&1, Map.get(health, &1)})
+    enabled_states = Enum.reject(states, &(elem(&1, 1) in [nil, :disabled]))
+    live_count = Enum.count(enabled_states, &(elem(&1, 1) == :live))
+
+    degraded =
+      enabled_states
+      |> Enum.reject(&(elem(&1, 1) == :live))
+      |> Enum.map(fn {source, state} -> health_clause(source, state) end)
+
+    cond do
+      enabled_states == [] ->
+        "All provider feeds are disabled."
+
+      degraded == [] ->
+        "All enabled sources are live."
+
+      live_count == 0 ->
+        Enum.join(degraded, "; ") <> "."
+
+      live_count == 1 ->
+        Enum.join(degraded, "; ") <> "; the other enabled source is live."
+
+      true ->
+        Enum.join(degraded, "; ") <> "; the other enabled sources are live."
+    end
+  end
+
+  defp health_clause(source, :quiet), do: source_name(source) <> " is quiet"
+  defp health_clause(source, :stale), do: source_name(source) <> " is stale"
+  defp health_clause(source, :disconnected), do: source_name(source) <> " is disconnected"
+  defp health_clause(source, _unknown), do: source_name(source) <> " status is unavailable"
+
+  defp semantic_health(feed_health, source_eligibility) do
+    Map.new(@health_sources, fn source ->
+      {source, source_health_state(feed_health, source_eligibility, source)}
+    end)
+  end
+
+  defp source_health_state(feed_health, source_eligibility, source) do
+    if Map.get(source_eligibility, source, false) do
+      case health_field(feed_health, source, :state) do
+        state when state in @health_states -> state
+        _unknown -> :unknown
+      end
+    else
+      :disabled
+    end
+  end
+
+  defp health_field(feed_health, source, field) when is_map(feed_health) do
+    case Map.get(feed_health, source) do
+      source_health when is_map(source_health) -> Map.get(source_health, field)
+      _missing -> nil
+    end
+  end
+
+  defp health_field(_feed_health, _source, _field), do: nil
+
+  defp source_eligibility do
+    config = Application.fetch_env!(:worldloom, Worldloom.Signals)
+    globally_enabled? = signal_setting(config, :enabled, true)
+
+    %{
+      wikimedia: globally_enabled?,
+      usgs: globally_enabled?,
+      open_meteo: globally_enabled?,
+      bluesky: globally_enabled? and signal_setting(config, :bluesky_enabled, false),
+      ripe_ris: globally_enabled? and signal_setting(config, :ripe_enabled, false),
+      solana: globally_enabled? and signal_setting(config, :solana_enabled, false),
+      drand: globally_enabled? and signal_setting(config, :drand_enabled, false)
+    }
+  end
+
+  defp signal_setting(%Worldloom.Signals.Config{} = config, setting, default),
+    do: Map.get(config, setting, default)
+
+  defp signal_setting(config, setting, default) when is_list(config),
+    do: Keyword.get(config, setting, default)
+
+  defp source_name(:wikimedia), do: "Wikimedia"
+  defp source_name(:bluesky), do: "Bluesky"
+  defp source_name(:ripe_ris), do: "RIPE RIS Live"
+  defp source_name(:solana), do: "Solana"
+  defp source_name(:drand), do: "drand"
+  defp source_name(:usgs), do: "USGS"
+  defp source_name(:open_meteo), do: "Open-Meteo"
+
+  defp health_label(:live), do: "Live"
+  defp health_label(:quiet), do: "Quiet"
+  defp health_label(:stale), do: "Stale"
+  defp health_label(:disconnected), do: "Disconnected"
+  defp health_label(:disabled), do: "Disabled"
+  defp health_label(:participatory), do: "Participatory"
+  defp health_label(_unknown), do: "Status unavailable"
+
+  defp legend_health_state(_feed_health, _source_eligibility, :visitor), do: :participatory
+
+  defp legend_health_state(feed_health, source_eligibility, source),
+    do: source_health_state(feed_health, source_eligibility, source)
+
+  defp legend_entries(assigns) do
+    assigns = assign(assigns, :items, source_legend())
+
+    ~H"""
+    <ol class="legend-list" aria-label="Worldloom signal sources">
+      <%= for item <- @items do %>
+        <% state = legend_health_state(@feed_health, @source_eligibility, item.source) %>
+        <li
+          id={"#{@id_prefix}legend-#{item.family}"}
+          data-family={item.family}
+          data-health-state={state}
+          class={["legend-item", "legend-#{item.family}"]}
+        >
+          <i class="legend-swatch" data-shape={item.shape} aria-hidden="true"></i>
+          <span class="legend-copy">
+            <span class="legend-line">
+              <%= if item.href do %>
+                <a href={item.href} rel="noreferrer" class="legend-name">{item.name}</a>
+              <% else %>
+                <span class="legend-name">{item.name}</span>
+              <% end %>
+              <small class="legend-health">{health_label(state)}</small>
+            </span>
+            <span class="legend-material">{item.material}</span>
+          </span>
+        </li>
+      <% end %>
+    </ol>
+    """
+  end
+
+  defp source_legend do
+    [
+      %{
+        source: :wikimedia,
+        family: "wikimedia",
+        name: "Wikimedia",
+        shape: "strand",
+        material: "Connective strands extend the public backbone.",
+        href: "https://www.mediawiki.org/wiki/EventStreams"
+      },
+      %{
+        source: :bluesky,
+        family: "bluesky",
+        name: "Bluesky",
+        shape: "fan",
+        material: "Conversation fans branch and return without showing posts.",
+        href: "https://docs.bsky.app/blog/jetstream"
+      },
+      %{
+        source: :ripe_ris,
+        family: "ripe_ris",
+        name: "RIPE RIS Live",
+        shape: "fork",
+        material: "Angular route forks extend and withdraw.",
+        href: "https://ris-live.ripe.net/manual/"
+      },
+      %{
+        source: :solana,
+        family: "solana",
+        name: "Solana",
+        shape: "beads",
+        material: "Precise slot beads pause where genuine gaps occur.",
+        href: "https://solana.com/docs/rpc/websocket/slotsubscribe"
+      },
+      %{
+        source: :drand,
+        family: "drand",
+        name: "drand Quicknet",
+        shape: "crystal",
+        material: "One crystalline pulse marks each accepted public round.",
+        href: "https://docs.drand.love/developer/API-v2/drand-http-api/"
+      },
+      %{
+        source: :usgs,
+        family: "usgs",
+        name: "USGS earthquakes",
+        shape: "rupture",
+        material: "Rupture rings hold physical events as ember memories.",
+        href: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/geojson.php"
+      },
+      %{
+        source: :open_meteo,
+        family: "open_meteo",
+        name: "Open-Meteo weather",
+        shape: "atmosphere",
+        material: "A weather field shapes the shared atmosphere.",
+        href: "https://open-meteo.com/en/docs"
+      },
+      %{
+        source: :visitor,
+        family: "visitor",
+        name: "Visitors",
+        shape: "intervention",
+        material: "Warm interventions bend, join, or illuminate the living edge.",
+        href: nil
+      }
+    ]
   end
 
   defp encode_snapshot(snapshot) do

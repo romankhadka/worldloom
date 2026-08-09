@@ -200,7 +200,7 @@ rtk git commit -m "Compose and paint every world signal"
 
 ## Task 5: Add source health, legend, and semantic summaries
 
-- [ ] **Step 1: Write failing LiveView semantics tests**
+- [x] **Step 1: Write failing LiveView semantics tests**
 
 In `test/worldloom_web/live/world_live_test.exs`, assert the source legend names all eight source roles, uses text plus a non-color swatch shape, displays independent health, and links source attribution. Assert the semantic live region summarizes an accepted snapshot once per ten-second bucket rather than once per raw frame.
 
@@ -212,23 +212,23 @@ This minute: 15 Wikimedia windows, 15 Bluesky activity windows, 15 RIPE route wi
 
 The exact numbers come from the snapshot; omit disabled/ineligible sources and never announce fabricated activity.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 ```bash
 rtk mix test test/worldloom_web/live/world_live_test.exs
 ```
 
-- [ ] **Step 3: Implement server-owned semantics**
+- [x] **Step 3: Implement server-owned semantics**
 
 Update `world_live.ex` with a pure `semantic_summary/2` over snapshot and health. Assign it only when the event-time ten-second bucket or health projection changes. Keep the trusted detail sheet source-owned and content-free.
 
 Update `world_live.html.heex` with a compact legend/list using real links and plain-language material descriptions. Use HEEx attributes and components; do not inject HTML strings.
 
-- [ ] **Step 4: Style the legend and responsive hierarchy**
+- [x] **Step 4: Style the legend and responsive hierarchy**
 
 Update `assets/css/app.css` using Tailwind utilities/custom selectors without `@apply`. Desktop can show the legend as a side rail; tablet and mobile collapse it into a readable disclosure without covering canvas controls. Preserve focus visibility, 44px touch targets, and readable contrast over worst-case weather atmosphere.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 ```bash
 rtk mix test test/worldloom_web/live/world_live_test.exs

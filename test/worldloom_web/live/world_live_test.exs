@@ -791,6 +791,7 @@ defmodule WorldloomWeb.WorldLiveTest do
   end
 
   test "receives shared safe feed health without polling in the view", %{conn: conn} do
+    enable_core_signal_sources()
     {:ok, live_view, _html} = live(conn, "/")
 
     safe_health = %{
@@ -809,6 +810,184 @@ defmodule WorldloomWeb.WorldLiveTest do
              has_element?(live_view, "#signal-legend[data-usgs-state='quiet']") and
                has_element?(live_view, "#signal-legend[data-weather-state='stale']")
            end)
+  end
+
+  test "explains all eight signal materials with independent health and attribution", %{
+    conn: conn
+  } do
+    enable_balanced_signal_sources()
+
+    {:ok, live_view, _html} = live(conn, "/")
+
+    for {family, name, shape, state} <- [
+          {"wikimedia", "Wikimedia", "strand", "disconnected"},
+          {"bluesky", "Bluesky", "fan", "disconnected"},
+          {"ripe_ris", "RIPE RIS Live", "fork", "disconnected"},
+          {"solana", "Solana", "beads", "disabled"},
+          {"drand", "drand Quicknet", "crystal", "stale"},
+          {"usgs", "USGS earthquakes", "rupture", "quiet"},
+          {"open_meteo", "Open-Meteo weather", "atmosphere", "stale"},
+          {"visitor", "Visitors", "intervention", "participatory"}
+        ] do
+      assert has_element?(
+               live_view,
+               "#legend-#{family}[data-family='#{family}'][data-health-state='#{state}']"
+             )
+
+      assert has_element?(live_view, "#legend-#{family} .legend-name", name)
+      assert has_element?(live_view, "#legend-#{family} .legend-swatch[data-shape='#{shape}']")
+      assert has_element?(live_view, "#legend-#{family} .legend-material")
+    end
+
+    assert has_element?(
+             live_view,
+             "#signal-legend [data-legend-layout='desktop'][aria-label='Signal legend']"
+           )
+
+    assert has_element?(
+             live_view,
+             "#signal-legend details[data-legend-layout='compact'] #signal-legend-toggle",
+             "Read the signals"
+           )
+
+    assert has_element?(live_view, "#legend-wikimedia .legend-health", "Disconnected")
+    assert has_element?(live_view, "#legend-solana .legend-health", "Disabled")
+
+    for {family, href} <- [
+          {"wikimedia", "https://www.mediawiki.org/wiki/EventStreams"},
+          {"bluesky", "https://docs.bsky.app/blog/jetstream"},
+          {"ripe_ris", "https://ris-live.ripe.net/manual/"},
+          {"solana", "https://solana.com/docs/rpc/websocket/slotsubscribe"},
+          {"drand", "https://docs.drand.love/developer/API-v2/drand-http-api/"},
+          {"usgs", "https://earthquake.usgs.gov/earthquakes/feed/v1.0/geojson.php"},
+          {"open_meteo", "https://open-meteo.com/en/docs"}
+        ] do
+      assert has_element?(
+               live_view,
+               "#legend-#{family} a[href='#{href}'][rel='noreferrer']"
+             )
+    end
+  end
+
+  test "marks every provider disabled when signal ingestion is globally off", %{conn: conn} do
+    {:ok, live_view, _html} = live(conn, "/")
+
+    for family <- ~w(wikimedia bluesky ripe_ris solana drand usgs open_meteo) do
+      assert has_element?(
+               live_view,
+               "#legend-#{family}[data-health-state='disabled'] .legend-health",
+               "Disabled"
+             )
+    end
+
+    assert has_element?(live_view, "#live-summary", "All provider feeds are disabled")
+  end
+
+  test "announces accepted snapshot totals once per event-time bucket and on health change", %{
+    conn: conn
+  } do
+    enable_balanced_signal_sources()
+    first_snapshot = semantic_snapshot_fixture(~U[2026-08-08 12:00:09Z])
+    put_current_snapshot(first_snapshot)
+
+    {:ok, live_view, _html} = live(conn, "/")
+
+    healthy_except_bluesky = %{
+      wikimedia: %{state: :live, observed_at: ~U[2026-08-08 12:00:09Z]},
+      bluesky: %{state: :quiet, observed_at: ~U[2026-08-08 12:00:01Z]},
+      ripe_ris: %{state: :live, observed_at: ~U[2026-08-08 12:00:08Z]},
+      drand: %{state: :live, observed_at: ~U[2026-08-08 12:00:09Z]},
+      usgs: %{state: :live, observed_at: ~U[2026-08-08 11:59:00Z]},
+      open_meteo: %{state: :live, observed_at: ~U[2026-08-08 11:50:00Z]},
+      solana: %{state: :disconnected, observed_at: nil}
+    }
+
+    send(live_view.pid, {:feed_health, healthy_except_bluesky})
+
+    first_summary =
+      "This minute: 1 Wikimedia window, 1 Bluesky activity window, 1 RIPE route window, 1 drand round, 1 earthquake memory, and 1 visitor memory. Bluesky is quiet; the other enabled sources are live."
+
+    assert eventually(fn -> has_element?(live_view, "#live-summary", first_summary) end)
+
+    same_bucket_snapshot = %{
+      first_snapshot
+      | commit_watermark: 208,
+        display_events:
+          first_snapshot.display_events ++
+            [synthetic_event(208, "wikimedia", "wikimedia", ~U[2026-08-08 12:00:08Z])]
+    }
+
+    put_current_snapshot(same_bucket_snapshot)
+    send(live_view.pid, {:loom_snapshot, same_bucket_snapshot})
+    assert_push_event live_view, "worldloom:snapshot", %{}
+    assert has_element?(live_view, "#live-summary", first_summary)
+
+    next_bucket_snapshot = %{
+      same_bucket_snapshot
+      | window_end: ~U[2026-08-08 12:00:10Z],
+        commit_watermark: 209,
+        display_events:
+          same_bucket_snapshot.display_events ++
+            [synthetic_event(209, "wikimedia", "wikimedia", ~U[2026-08-08 12:00:10Z])]
+    }
+
+    put_current_snapshot(next_bucket_snapshot)
+    send(live_view.pid, {:loom_snapshot, next_bucket_snapshot})
+    assert_push_event live_view, "worldloom:snapshot", %{}
+
+    assert eventually(fn ->
+             has_element?(
+               live_view,
+               "#live-summary",
+               "This minute: 3 Wikimedia windows, 1 Bluesky activity window, 1 RIPE route window, 1 drand round, 1 earthquake memory, and 1 visitor memory. Bluesky is quiet; the other enabled sources are live."
+             )
+           end)
+
+    changed_health = put_in(healthy_except_bluesky, [:bluesky, :state], :disconnected)
+    send(live_view.pid, {:feed_health, changed_health})
+
+    assert eventually(fn ->
+             has_element?(live_view, "#live-summary", "Bluesky is disconnected")
+           end)
+
+    usgs_quiet_health =
+      healthy_except_bluesky
+      |> put_in([:bluesky, :state], :live)
+      |> put_in([:usgs, :state], :quiet)
+
+    send(live_view.pid, {:feed_health, usgs_quiet_health})
+
+    assert eventually(fn -> has_element?(live_view, "#live-summary", "USGS is quiet") end)
+    refute has_element?(live_view, "#live-summary", "USGS earthquakes is quiet")
+  end
+
+  test "renders source-owned formation detail as plain text", %{conn: conn} do
+    unsafe_summary = "<img src=x onerror=alert('worldloom')>"
+    [stored_event] = seed_events(1, ~U[2026-08-08 12:00:08Z])
+
+    stored_event =
+      stored_event
+      |> Ecto.Changeset.change(%{
+        payload: %{
+          "summary" => unsafe_summary,
+          "visual" => %{"bend" => 0.1, "pulse" => 0.2, "spread" => 0.3}
+        }
+      })
+      |> Repo.update!()
+
+    put_current_snapshot(%LiveSnapshot{
+      window_end: ~U[2026-08-08 12:00:09Z],
+      commit_watermark: stored_event.id,
+      display_events: [stored_event],
+      memory_events: [],
+      ambient: nil
+    })
+
+    {:ok, live_view, _html} = live(conn, "/")
+    render_hook(live_view, "select-formation", %{"sequence" => stored_event.id})
+
+    assert has_element?(live_view, "#signal-detail .detail-summary", unsafe_summary)
+    refute has_element?(live_view, "#signal-detail img")
   end
 
   test "exposes direct gesture actions and adjusts the lane with keyboard events", %{conn: conn} do
@@ -964,6 +1143,7 @@ defmodule WorldloomWeb.WorldLiveTest do
   end
 
   test "renders the Living Fiber semantics and public source attribution", %{conn: conn} do
+    enable_core_signal_sources()
     {:ok, live_view, html} = live(conn, "/")
 
     assert has_element?(live_view, "#wordmark", "Worldloom")
@@ -1312,6 +1492,64 @@ defmodule WorldloomWeb.WorldLiveTest do
 
     put_current_snapshot(snapshot)
     snapshot
+  end
+
+  defp semantic_snapshot_fixture(window_end) do
+    %LiveSnapshot{
+      window_end: window_end,
+      commit_watermark: 207,
+      display_events: [
+        synthetic_event(200, "slot", "solana", ~U[2026-08-08 12:00:00Z]),
+        synthetic_event(201, "wikimedia", "wikimedia", ~U[2026-08-08 12:00:00Z]),
+        synthetic_event(202, "public_activity", "bluesky", ~U[2026-08-08 12:00:01Z]),
+        synthetic_event(203, "route_change", "ripe_ris", ~U[2026-08-08 12:00:02Z]),
+        synthetic_event(204, "randomness", "drand", ~U[2026-08-08 12:00:03Z])
+      ],
+      memory_events: [
+        synthetic_event(205, "earthquake", "usgs", ~U[2026-08-08 11:58:00Z]),
+        synthetic_event(206, "illuminate", "visitor", ~U[2026-08-08 11:59:00Z])
+      ],
+      ambient: synthetic_event(207, "weather", "open_meteo", ~U[2026-08-08 12:00:00Z])
+    }
+  end
+
+  defp enable_balanced_signal_sources do
+    configure_signal_sources(%{
+      enabled: true,
+      bluesky_enabled: true,
+      ripe_enabled: true,
+      drand_enabled: true,
+      solana_enabled: false
+    })
+  end
+
+  defp enable_core_signal_sources do
+    configure_signal_sources(%{
+      enabled: true,
+      bluesky_enabled: false,
+      ripe_enabled: false,
+      drand_enabled: false,
+      solana_enabled: false
+    })
+  end
+
+  defp configure_signal_sources(settings) do
+    previous_config = Application.fetch_env!(:worldloom, Worldloom.Signals)
+
+    enabled_config =
+      case previous_config do
+        %Worldloom.Signals.Config{} = config ->
+          struct!(config, settings)
+
+        config when is_list(config) ->
+          Keyword.merge(config, Map.to_list(settings))
+      end
+
+    Application.put_env(:worldloom, Worldloom.Signals, enabled_config)
+
+    on_exit(fn ->
+      Application.put_env(:worldloom, Worldloom.Signals, previous_config)
+    end)
   end
 
   defp synthetic_live_snapshot_fixture do
