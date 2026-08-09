@@ -209,7 +209,8 @@ defmodule Worldloom.Loom.VisualParametersTest do
           "slot_count" => 4,
           "first_slot" => 101,
           "last_slot" => 105,
-          "gap_count" => 1
+          "gap_count" => 1,
+          "truncated" => false
         }
       }),
       drand_event("drand-round:42", 42, ~U[2026-08-03 12:01:03.000000Z], @drand_identity)

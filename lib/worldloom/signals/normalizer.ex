@@ -1,6 +1,7 @@
 defmodule Worldloom.Signals.Normalizer do
   alias Worldloom.Loom.SourceEvent
 
+  @json_safe_max 9_007_199_254_740_991
   @maximum_languages 5
   @uint32_max 4_294_967_295
 
@@ -159,6 +160,66 @@ defmodule Worldloom.Signals.Normalizer do
   end
 
   def ripe_window(_window), do: {:error, :invalid_window}
+
+  @spec solana_window(map()) :: {:ok, SourceEvent.t()} | {:error, atom()}
+  def solana_window(
+        %{
+          window_start: %DateTime{} = window_start,
+          slot_count: slot_count,
+          first_slot: first_slot,
+          last_slot: last_slot,
+          gap_count: gap_count,
+          truncated: truncated
+        } = window
+      ) do
+    continuity_anchor = Map.get(window, :continuity_anchor)
+
+    approved_metrics = %{
+      slot_count: slot_count,
+      first_slot: first_slot,
+      last_slot: last_slot,
+      gap_count: gap_count
+    }
+
+    with true <- uint32?(slot_count),
+         true <- slot_count > 0,
+         true <- uint32?(gap_count),
+         true <- json_safe_integer?(first_slot),
+         true <- json_safe_integer?(last_slot),
+         true <- first_slot <= last_slot,
+         true <- slot_count <= last_slot - first_slot + 1,
+         true <- is_boolean(truncated),
+         true <- valid_continuity_anchor?(continuity_anchor, first_slot),
+         true <- valid_solana_truncation?(slot_count, gap_count, truncated),
+         logical_span <- solana_logical_span(continuity_anchor, first_slot, last_slot),
+         true <- possible_solana_total_includes?(slot_count, gap_count, truncated, logical_span),
+         {:ok, utc_window_start} <- DateTime.shift_zone(window_start, "Etc/UTC"),
+         {:ok, event} <-
+           SourceEvent.new(%{
+             kind: :slot,
+             source: :solana,
+             external_id: "solana-window:#{DateTime.to_unix(utc_window_start, :second)}:4",
+             occurred_at: utc_window_start,
+             lane: stable_lane(approved_metrics),
+             intensity: clamp_unit(slot_count / 40 + min(gap_count / 40, 0.5)),
+             payload: %{
+               "summary" => "#{slot_count} Solana slots advanced with #{gap_count} gaps",
+               "window_count" => 1,
+               "window_span_seconds" => 4,
+               "slot_count" => slot_count,
+               "first_slot" => first_slot,
+               "last_slot" => last_slot,
+               "gap_count" => gap_count,
+               "truncated" => truncated
+             }
+           }) do
+      {:ok, event}
+    else
+      _invalid -> {:error, :invalid_window}
+    end
+  end
+
+  def solana_window(_window), do: {:error, :invalid_window}
 
   @spec earthquakes(map()) :: {:ok, [SourceEvent.t()]} | {:error, atom()}
   def earthquakes(%{"features" => features}) when is_list(features) do
@@ -436,7 +497,30 @@ defmodule Worldloom.Signals.Normalizer do
   defp ranges_intersect?({:at_least, minimum}, {:exact, exact}), do: exact >= minimum
   defp ranges_intersect?({:at_least, _first}, {:at_least, _second}), do: true
 
+  defp valid_continuity_anchor?(nil, _first_slot), do: true
+
+  defp valid_continuity_anchor?(continuity_anchor, first_slot),
+    do: json_safe_integer?(continuity_anchor) and continuity_anchor < first_slot
+
+  defp valid_solana_truncation?(_slot_count, _gap_count, false), do: true
+
+  defp valid_solana_truncation?(slot_count, gap_count, true),
+    do: slot_count == @uint32_max or gap_count == @uint32_max
+
+  defp solana_logical_span(nil, first_slot, last_slot), do: last_slot - first_slot + 1
+
+  defp solana_logical_span(continuity_anchor, _first_slot, last_slot),
+    do: last_slot - continuity_anchor
+
+  defp possible_solana_total_includes?(slot_count, gap_count, true, logical_span)
+       when slot_count == @uint32_max or gap_count == @uint32_max,
+       do: slot_count + gap_count <= logical_span
+
+  defp possible_solana_total_includes?(slot_count, gap_count, _truncated, logical_span),
+    do: slot_count + gap_count == logical_span
+
   defp uint32?(number), do: is_integer(number) and number in 0..@uint32_max
+  defp json_safe_integer?(number), do: is_integer(number) and number in 0..@json_safe_max
   defp format_decimal(number), do: :erlang.float_to_binary(number, decimals: 1)
   defp to_float(number) when is_float(number), do: number
   defp to_float(number) when is_integer(number), do: number * 1.0

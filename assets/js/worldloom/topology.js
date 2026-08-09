@@ -384,17 +384,25 @@ function validVersionTwoMetrics(source, metrics) {
         ["truncated"],
       )
     case "solana":
-      return validWindowMetrics(
-        metrics,
-        [
-          "window_count",
-          "window_span_seconds",
-          "slot_count",
-          "first_slot",
-          "last_slot",
-          "gap_count",
-        ],
-      ) && metrics.first_slot <= metrics.last_slot
+      return exactKeys(metrics, [
+        "window_count",
+        "window_span_seconds",
+        "slot_count",
+        "first_slot",
+        "last_slot",
+        "gap_count",
+        "truncated",
+      ]) &&
+        uint32(metrics.window_count) && metrics.window_count > 0 &&
+        uint32(metrics.window_span_seconds) &&
+        metrics.window_span_seconds === metrics.window_count * 4 &&
+        uint32(metrics.slot_count) && metrics.slot_count > 0 &&
+        uint32(metrics.gap_count) &&
+        nonNegativeSafeInteger(metrics.first_slot) &&
+        nonNegativeSafeInteger(metrics.last_slot) &&
+        metrics.first_slot <= metrics.last_slot &&
+        metrics.slot_count <= metrics.last_slot - metrics.first_slot + 1 &&
+        typeof metrics.truncated === "boolean"
     case "drand":
       return exactKeys(metrics, ["round"]) && uint32(metrics.round) && metrics.round > 0
     default:
@@ -418,6 +426,10 @@ function exactKeys(object, expectedKeys) {
 
 function uint32(number) {
   return Number.isInteger(number) && number >= 0 && number <= uint32Maximum
+}
+
+function nonNegativeSafeInteger(number) {
+  return Number.isSafeInteger(number) && number >= 0
 }
 
 function fallbackFor(instruction, semantic) {

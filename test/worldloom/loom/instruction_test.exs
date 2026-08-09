@@ -312,7 +312,8 @@ defmodule Worldloom.Loom.InstructionTest do
       "slot_count" => 4,
       "first_slot" => 101,
       "last_slot" => 105,
-      "gap_count" => 1
+      "gap_count" => 1,
+      "truncated" => false
     }
   end
 

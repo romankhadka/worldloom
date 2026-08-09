@@ -17,7 +17,7 @@ defmodule Worldloom.Loom.SourceEventTest do
   ]
 
   @render_identity String.duplicate("a", 64)
-  @uint32_max 4_294_967_295
+  @json_safe_max 9_007_199_254_740_991
 
   test "accepts every approved kind and source pairing" do
     Enum.each(@pairs, fn {kind, source} ->
@@ -133,7 +133,7 @@ defmodule Worldloom.Loom.SourceEventTest do
       ripe_ris:
         ~w(summary window_count window_span_seconds announced withdrawn ipv4 ipv6 collector_count peer_count truncated),
       solana:
-        ~w(summary window_count window_span_seconds slot_count first_slot last_slot gap_count),
+        ~w(summary window_count window_span_seconds slot_count first_slot last_slot gap_count truncated),
       drand: ~w(summary round)
     }
 
@@ -235,7 +235,14 @@ defmodule Worldloom.Loom.SourceEventTest do
       Map.merge(valid_payload(:solana), %{"first_slot" => 106, "last_slot" => 105}),
       Map.put(valid_payload(:solana), "last_slot", 1.5),
       Map.put(valid_payload(:solana), "slot_count", 4_294_967_296),
-      Map.put(valid_payload(:solana), "gap_count", -1)
+      Map.put(valid_payload(:solana), "slot_count", 0),
+      Map.put(valid_payload(:solana), "gap_count", -1),
+      Map.put(valid_payload(:solana), "truncated", "false"),
+      Map.merge(valid_payload(:solana), %{
+        "slot_count" => 4,
+        "first_slot" => 101,
+        "last_slot" => 103
+      })
     ]
 
     Enum.each(invalid_payloads, fn payload ->
@@ -244,14 +251,18 @@ defmodule Worldloom.Loom.SourceEventTest do
     end)
   end
 
-  test "bounds each Solana slot endpoint to an unsigned thirty-two-bit integer" do
+  test "bounds each Solana slot endpoint to an exact JSON-safe integer" do
     first_slot_at_maximum =
       valid_payload(:solana)
-      |> Map.merge(%{"first_slot" => @uint32_max, "last_slot" => @uint32_max})
+      |> Map.merge(%{
+        "slot_count" => 1,
+        "first_slot" => @json_safe_max,
+        "last_slot" => @json_safe_max
+      })
 
     last_slot_at_maximum =
       valid_payload(:solana)
-      |> Map.merge(%{"first_slot" => 0, "last_slot" => @uint32_max})
+      |> Map.merge(%{"first_slot" => 0, "last_slot" => @json_safe_max})
 
     assert {:ok, _event} =
              SourceEvent.new(valid_attributes(:slot, :solana, %{payload: first_slot_at_maximum}))
@@ -262,13 +273,13 @@ defmodule Worldloom.Loom.SourceEventTest do
     first_slot_overflow =
       valid_payload(:solana)
       |> Map.merge(%{
-        "first_slot" => @uint32_max + 1,
-        "last_slot" => @uint32_max + 1
+        "first_slot" => @json_safe_max + 1,
+        "last_slot" => @json_safe_max + 1
       })
 
     last_slot_overflow =
       valid_payload(:solana)
-      |> Map.merge(%{"first_slot" => 0, "last_slot" => @uint32_max + 1})
+      |> Map.merge(%{"first_slot" => 0, "last_slot" => @json_safe_max + 1})
 
     assert {:error, {:payload, :invalid_shape}} =
              SourceEvent.new(valid_attributes(:slot, :solana, %{payload: first_slot_overflow}))
@@ -436,7 +447,8 @@ defmodule Worldloom.Loom.SourceEventTest do
       "slot_count" => 4,
       "first_slot" => 101,
       "last_slot" => 105,
-      "gap_count" => 1
+      "gap_count" => 1,
+      "truncated" => false
     }
   end
 

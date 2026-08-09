@@ -6,6 +6,8 @@ defmodule Worldloom.Signals.NormalizerTest do
 
   @fixtures "test/support/fixtures/feeds"
   @forbidden ~w(user user_text ip title comment revision server_url)
+  @json_safe_max 9_007_199_254_740_991
+  @uint32_max 4_294_967_295
 
   test "normalizes a privacy-preserving Wikimedia bucket" do
     frames = read_fixture("wikimedia_frames.json")
@@ -307,6 +309,149 @@ defmodule Worldloom.Signals.NormalizerTest do
     assert {:error, :invalid_window} = Normalizer.ripe_window(incompatible)
   end
 
+  test "normalizes a deterministic privacy-preserving Solana slot window" do
+    window =
+      normalizable_solana_window()
+      |> Map.merge(%{
+        account: "synthetic-account-never-retained",
+        transaction: "synthetic-transaction-never-retained",
+        wallet: "synthetic-wallet-never-retained",
+        parent: 104,
+        root: 90,
+        subscription: 7
+      })
+
+    assert {:ok, %SourceEvent{} = event} = Normalizer.solana_window(window)
+    assert {:ok, repeated_event} = Normalizer.solana_window(window)
+    assert event.kind == :slot
+    assert event.source == :solana
+    assert event.external_id == "solana-window:1786204803:4"
+    assert event.occurred_at == ~U[2026-08-08 16:00:03.000000Z]
+    assert event.lane == repeated_event.lane
+    assert event.intensity == repeated_event.intensity
+    assert event.lane >= 0.0 and event.lane <= 1.0
+    assert event.intensity >= 0.0 and event.intensity <= 1.0
+
+    assert event.payload == %{
+             "summary" => "3 Solana slots advanced with 2 gaps",
+             "window_count" => 1,
+             "window_span_seconds" => 4,
+             "slot_count" => 3,
+             "first_slot" => 101,
+             "last_slot" => 105,
+             "gap_count" => 2,
+             "truncated" => false
+           }
+
+    inspected = inspect(event)
+
+    for private_value <-
+          ~w(continuity_anchor account transaction wallet parent root subscription synthetic-account-never-retained synthetic-transaction-never-retained synthetic-wallet-never-retained) do
+      refute inspected =~ private_value
+    end
+  end
+
+  test "validates Solana reconnect continuity and exact logical spans" do
+    assert {:ok, %SourceEvent{}} =
+             normalizable_solana_window()
+             |> Map.merge(%{
+               slot_count: 1,
+               first_slot: 104,
+               last_slot: 104,
+               gap_count: 3,
+               continuity_anchor: 100
+             })
+             |> Normalizer.solana_window()
+
+    assert {:ok, %SourceEvent{}} =
+             normalizable_solana_window()
+             |> Map.delete(:continuity_anchor)
+             |> Normalizer.solana_window()
+
+    for impossible <- [
+          Map.put(normalizable_solana_window(), :gap_count, 1),
+          normalizable_solana_window()
+          |> Map.delete(:continuity_anchor)
+          |> Map.put(:gap_count, 1),
+          Map.put(normalizable_solana_window(), :continuity_anchor, 101),
+          Map.put(normalizable_solana_window(), :continuity_anchor, -1),
+          Map.put(normalizable_solana_window(), :continuity_anchor, @json_safe_max + 1),
+          Map.merge(normalizable_solana_window(), %{
+            slot_count: 4,
+            first_slot: 101,
+            last_slot: 103,
+            gap_count: 0,
+            continuity_anchor: nil
+          })
+        ] do
+      assert {:error, :invalid_window} = Normalizer.solana_window(impossible)
+    end
+  end
+
+  test "accepts only compatible saturated Solana logical ranges" do
+    compatible =
+      normalizable_solana_window()
+      |> Map.merge(%{
+        slot_count: @uint32_max,
+        first_slot: 1,
+        last_slot: @uint32_max + 20,
+        gap_count: 10,
+        continuity_anchor: 0,
+        truncated: true
+      })
+
+    assert {:ok, %SourceEvent{}} = Normalizer.solana_window(compatible)
+
+    incompatible = Map.put(compatible, :last_slot, @uint32_max + 5)
+    assert {:error, :invalid_window} = Normalizer.solana_window(incompatible)
+
+    assert {:error, :invalid_window} =
+             normalizable_solana_window()
+             |> Map.put(:truncated, true)
+             |> Normalizer.solana_window()
+
+    exact_maximum =
+      normalizable_solana_window()
+      |> Map.merge(%{
+        slot_count: @uint32_max,
+        first_slot: 0,
+        last_slot: @uint32_max - 1,
+        gap_count: 0,
+        continuity_anchor: nil,
+        truncated: false
+      })
+
+    assert {:ok, exact_event} = Normalizer.solana_window(exact_maximum)
+
+    assert {:ok, truncated_event} =
+             exact_maximum
+             |> Map.put(:truncated, true)
+             |> Normalizer.solana_window()
+
+    assert truncated_event.lane == exact_event.lane
+    assert truncated_event.intensity == exact_event.intensity
+  end
+
+  test "rejects malformed and out-of-range Solana aggregates" do
+    invalid_windows = [
+      Map.put(normalizable_solana_window(), :slot_count, 0),
+      Map.put(normalizable_solana_window(), :slot_count, @uint32_max + 1),
+      Map.put(normalizable_solana_window(), :gap_count, -1),
+      Map.put(normalizable_solana_window(), :gap_count, 1.0),
+      Map.put(normalizable_solana_window(), :first_slot, -1),
+      Map.put(normalizable_solana_window(), :last_slot, @json_safe_max + 1),
+      Map.put(normalizable_solana_window(), :last_slot, 105.0),
+      Map.merge(normalizable_solana_window(), %{first_slot: 106, last_slot: 105}),
+      Map.put(normalizable_solana_window(), :truncated, :yes),
+      Map.delete(normalizable_solana_window(), :first_slot),
+      nil
+    ]
+
+    for invalid <- invalid_windows do
+      assert {:error, :invalid_window} = Normalizer.solana_window(invalid)
+    end
+  end
+
   test "normalizes public USGS features and clamps impossible magnitudes" do
     geojson = read_fixture("usgs.json")
 
@@ -386,6 +531,18 @@ defmodule Worldloom.Signals.NormalizerTest do
       collector_count: 2,
       peer_count: 2,
       truncated: false
+    }
+  end
+
+  defp normalizable_solana_window do
+    %{
+      window_start: ~U[2026-08-08 16:00:03Z],
+      slot_count: 3,
+      first_slot: 101,
+      last_slot: 105,
+      gap_count: 2,
+      truncated: false,
+      continuity_anchor: 100
     }
   end
 

@@ -216,6 +216,24 @@ test("renders every version two contract instruction as a deterministic neutral 
   }
 })
 
+test("preserves JSON-safe Solana positions beyond the uint32 counter range", () => {
+  const solana = structuredClone(versionTwoContract[2])
+  solana.metrics = {
+    ...solana.metrics,
+    slot_count: 1,
+    first_slot: Number.MAX_SAFE_INTEGER,
+    last_slot: Number.MAX_SAFE_INTEGER,
+    gap_count: 0,
+    truncated: false,
+  }
+
+  const topology = buildTopology([solana])
+
+  assert.equal(topology.fallbacks.length, 1)
+  assert.equal(topology.fallbacks[0].kind, "slot")
+  assert.equal(topology.fallbacks[0].source, "solana")
+})
+
 test("neutralizes mismatched or malformed version two contracts", () => {
   const [bluesky, ripeRis, solana, drand] = versionTwoContract
   const malformed = [
@@ -235,6 +253,18 @@ test("neutralizes mismatched or malformed version two contracts", () => {
     {
       ...structuredClone(solana),
       metrics: {...solana.metrics, first_slot: solana.metrics.last_slot + 1},
+    },
+    {
+      ...structuredClone(solana),
+      metrics: {...solana.metrics, first_slot: Number.MAX_SAFE_INTEGER + 1},
+    },
+    {
+      ...structuredClone(solana),
+      metrics: {...solana.metrics, slot_count: 6},
+    },
+    {
+      ...structuredClone(solana),
+      metrics: {...solana.metrics, truncated: "false"},
     },
     {
       ...structuredClone(drand),

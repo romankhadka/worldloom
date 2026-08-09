@@ -3,6 +3,7 @@ defmodule Worldloom.Loom.InstructionMetricsTest do
 
   alias Worldloom.Loom.InstructionMetrics
 
+  @json_safe_max 9_007_199_254_740_991
   @uint32_max 4_294_967_295
 
   @payloads %{
@@ -38,7 +39,8 @@ defmodule Worldloom.Loom.InstructionMetricsTest do
       "slot_count" => 4,
       "first_slot" => 101,
       "last_slot" => 105,
-      "gap_count" => 1
+      "gap_count" => 1,
+      "truncated" => false
     },
     "drand" => %{
       "summary" => "drand Quicknet round 42",
@@ -76,7 +78,8 @@ defmodule Worldloom.Loom.InstructionMetricsTest do
       "slot_count" => 4,
       "first_slot" => 101,
       "last_slot" => 105,
-      "gap_count" => 1
+      "gap_count" => 1,
+      "truncated" => false
     },
     "drand" => %{"round" => 42}
   }
@@ -142,9 +145,10 @@ defmodule Worldloom.Loom.InstructionMetricsTest do
        @payloads["solana"]
        |> Map.merge(%{
          "slot_count" => @uint32_max,
-         "first_slot" => @uint32_max,
-         "last_slot" => @uint32_max,
-         "gap_count" => @uint32_max
+         "first_slot" => 0,
+         "last_slot" => @json_safe_max,
+         "gap_count" => @uint32_max,
+         "truncated" => true
        })},
       {"drand", Map.put(@payloads["drand"], "round", @uint32_max)}
     ]
@@ -162,7 +166,9 @@ defmodule Worldloom.Loom.InstructionMetricsTest do
       {"bluesky", Map.put(@payloads["bluesky"], "truncated", "false")},
       {"ripe_ris", Map.put(@payloads["ripe_ris"], "peer_count", nil)},
       {"solana", Map.put(@payloads["solana"], "first_slot", %{"slot" => 101})},
+      {"solana", Map.put(@payloads["solana"], "first_slot", @json_safe_max + 1)},
       {"solana", Map.put(@payloads["solana"], "gap_count", [1])},
+      {"solana", Map.put(@payloads["solana"], "truncated", "false")},
       {"drand", Map.put(@payloads["drand"], "round", 42.0)}
     ]
 
@@ -190,6 +196,13 @@ defmodule Worldloom.Loom.InstructionMetricsTest do
       {"bluesky", Map.put(@payloads["bluesky"], "window_span_seconds", 8)},
       {"ripe_ris", Map.put(@payloads["ripe_ris"], "window_span_seconds", 4)},
       {"solana", Map.merge(@payloads["solana"], %{"first_slot" => 106, "last_slot" => 105})},
+      {"solana",
+       Map.merge(@payloads["solana"], %{
+         "slot_count" => 4,
+         "first_slot" => 101,
+         "last_slot" => 103
+       })},
+      {"solana", Map.put(@payloads["solana"], "slot_count", 0)},
       {"drand", Map.put(@payloads["drand"], "round", 0)}
     ]
 

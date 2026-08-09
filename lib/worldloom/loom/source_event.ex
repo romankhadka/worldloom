@@ -72,10 +72,11 @@ defmodule Worldloom.Loom.SourceEvent do
     ripe_ris:
       ~w(summary window_count window_span_seconds announced withdrawn ipv4 ipv6 collector_count peer_count truncated),
     solana:
-      ~w(summary window_count window_span_seconds slot_count first_slot last_slot gap_count),
+      ~w(summary window_count window_span_seconds slot_count first_slot last_slot gap_count truncated),
     drand: ~w(summary round)
   }
   @exact_payload_sources [:bluesky, :ripe_ris, :solana, :drand]
+  @json_safe_max 9_007_199_254_740_991
   @uint32_max 4_294_967_295
 
   @spec new(map()) :: {:ok, t()} | {:error, {atom(), atom()}}
@@ -242,9 +243,12 @@ defmodule Worldloom.Loom.SourceEvent do
   defp validate_payload_shape(payload, :solana) do
     valid? =
       validate_window_payload(payload, ~w(slot_count gap_count)) and
-        uint32?(payload["first_slot"]) and
-        uint32?(payload["last_slot"]) and
-        payload["first_slot"] <= payload["last_slot"]
+        json_safe_integer?(payload["first_slot"]) and
+        json_safe_integer?(payload["last_slot"]) and
+        payload["first_slot"] <= payload["last_slot"] and
+        payload["slot_count"] > 0 and
+        payload["slot_count"] <= payload["last_slot"] - payload["first_slot"] + 1 and
+        boolean?(payload["truncated"])
 
     boolean_result(valid?)
   end
@@ -289,6 +293,7 @@ defmodule Worldloom.Loom.SourceEvent do
   defp optional_positive_uint32?(number), do: uint32?(number) and number > 0
 
   defp uint32?(number), do: is_integer(number) and number in 0..@uint32_max
+  defp json_safe_integer?(number), do: is_integer(number) and number in 0..@json_safe_max
   defp boolean?(value), do: value in [true, false]
   defp boolean_result(true), do: :ok
   defp boolean_result(false), do: :error

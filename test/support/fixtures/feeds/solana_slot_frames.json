@@ -1,0 +1,67 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "method": "slotNotification",
+    "params": {
+      "subscription": 7,
+      "result": {
+        "slot": 101,
+        "parent": 100,
+        "root": 90,
+        "account": "synthetic-account-never-retained",
+        "transaction": "synthetic-transaction-never-retained"
+      },
+      "wallet": "synthetic-wallet-never-retained"
+    },
+    "program": "synthetic-program-never-retained",
+    "token": "synthetic-token-never-retained"
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "slotNotification",
+    "params": {
+      "subscription": 7,
+      "result": {
+        "slot": 102,
+        "parent": 101,
+        "root": 91
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "slotNotification",
+    "params": {
+      "subscription": 7,
+      "result": {
+        "slot": 105,
+        "parent": 104,
+        "root": 92
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "slotNotification",
+    "params": {
+      "subscription": 7,
+      "result": {
+        "slot": 105,
+        "parent": 104,
+        "root": 92
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "slotNotification",
+    "params": {
+      "subscription": 7,
+      "result": {
+        "slot": 104,
+        "parent": 103,
+        "root": 92
+      }
+    }
+  }
+]
