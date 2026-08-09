@@ -129,6 +129,25 @@ defmodule WorldloomWeb.TelemetryTest do
     assert [:worldloom, :runtime, :durable_event_bytes] in metric_names
   end
 
+  test "keeps WebSocket transport details outside exported metrics" do
+    assert Code.ensure_loaded?(Mint.WebSocket)
+
+    signal_metrics =
+      Enum.filter(Telemetry.metrics(), fn metric ->
+        Enum.take(metric.name, 2) == [:worldloom, :signals]
+      end)
+
+    refute Enum.any?(Telemetry.metrics(), fn metric ->
+             :mint in metric.name or :mint_web_socket in metric.name
+           end)
+
+    assert signal_metrics != []
+
+    for metric <- signal_metrics do
+      assert Enum.all?(metric.tags, &(&1 in [:source, :status, :operation]))
+    end
+  end
+
   test "runtime measurement stays available while supervised dependencies are starting" do
     handler_id = {__MODULE__, make_ref()}
     test_process = self()

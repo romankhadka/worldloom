@@ -6,7 +6,7 @@
 
 **Architecture:** Each WebSocket source uses one source-specific GenServer that owns its Mint connection, upgrade reference, `Mint.WebSocket` decoder, subscription, reconnect timer, and bounded aggregate state. A processless helper centralizes only secure transport mechanics and coarse failures; provider behavior stays explicit. A health registry records coarse lifecycle observations. Buffer partitions isolate source pressure and drain round-robin. Source-specific associative reducers collapse scheduled summaries; drand preserves up to twenty ordered rounds and never merges.
 
-**Tech Stack:** Elixir 1.20, OTP supervisors, Mint WebSocket 1.0.5, Mint 1.9, Req, Ecto, Phoenix PubSub, Telemetry, ExUnit.
+**Tech Stack:** Elixir 1.20, OTP supervisors, Mint WebSocket 1.0.5 plus its pinned official Elixir 1.20 compatibility commit, Mint 1.9, Req, Ecto, Phoenix PubSub, Telemetry, ExUnit.
 
 ---
 
@@ -42,12 +42,14 @@
 
 ## Task 1: Add Mint WebSocket with a verified transport contract
 
-- [ ] **Step 1: Add the dependency and inspect its exact lock**
+- [x] **Step 1: Add the dependency and inspect its exact lock**
 
 Add to `mix.exs`:
 
 ```elixir
-{:mint_web_socket, "~> 1.0.5"}
+{:mint_web_socket,
+ git: "https://github.com/elixir-mint/mint_web_socket.git",
+ ref: "0c630f75d0a0f27ee337d7e1208abe15e8f20b22"}
 ```
 
 Then:
@@ -58,21 +60,30 @@ rtk mix deps.compile mint_web_socket
 rtk mix hex.audit
 ```
 
-Review `mix.lock`; do not change unrelated dependency constraints.
+Review `mix.lock`; do not change unrelated dependency constraints. The full immutable ref is temporary: return to a checksummed Hex release as soon as one contains `0c630f75`, diff that release against this pin, and restore ordinary Hex advisory coverage for the package.
 
-- [ ] **Step 2: Audit the exact dependency boundary**
+- [x] **Step 2: Audit the exact dependency boundary**
 
 Inspect the locked `mint_web_socket` source and changelog. Confirm it delegates network I/O to Mint, emits no raw-frame telemetry or logs, and supports active/passive connections without replacing Mint's TLS configuration. Record the evidence in this plan before closing the task. Do not infer safety from package naming.
 
-- [ ] **Step 3: Verify the existing observability boundary**
+Audit evidence, 2026-08-08:
 
-Assert `WorldloomWeb.Telemetry.metrics/0` contains no Mint or Mint WebSocket transport metric, and that Worldloom source metrics contain only coarse source and status fields. The provider edge tests in Task 5 will attach marker collectors and exercise the real helper; the locked-source audit in Step 2 proves the dependency introduces no second observability path.
+- The official v1.0.5 source delegates network I/O to Mint, keeps the API processless, returns decoded frames to its caller, and contains no Telemetry or Logger calls.
+- The immutable official commit `0c630f75d0a0f27ee337d7e1208abe15e8f20b22` is exactly two commits ahead of v1.0.5: one README badge fix and the Elixir 1.20 pin-operator/type-warning fix. Its source delta is four additions and three deletions in `frame.ex`, one one-line fix in `per_message_deflate.ex`, and the minimum Elixir version update.
+- The first Hex v1.0.5 compile exposed two Elixir 1.20 warnings. The pinned commit compiles without them and retains Mint 1.9.3 with no new transitive dependency.
+- `mix hex.audit` covers every locked Hex package but cannot cover this Git dependency. Until the removal condition above is met, release review must check both the official repository's security advisories and Hex v1.0.5 retirement/advisory state explicitly.
+- The official repository currently reports no public security advisories, Hex v1.0.5 is not retired, the exact lock re-fetches cleanly, and the warning-as-error full suite passes 326 tests.
+
+- [x] **Step 3: Verify the existing observability boundary**
+
+Assert `WorldloomWeb.Telemetry.metrics/0` contains no Mint or Mint WebSocket transport metric, and that Worldloom source metrics contain only coarse source, status, and operation fields. The provider edge tests in Task 5 will attach marker collectors and exercise the real helper; the locked-source audit in Step 2 proves the dependency introduces no second observability path.
 
 ```bash
 rtk mix test test/worldloom/signals/supervisor_test.exs test/worldloom_web/telemetry_test.exs
 rtk mix deps.tree
 rtk mix deps.unlock --check-unused
 rtk mix hex.audit
+rtk mix deps.get --check-locked
 ```
 
 - [ ] **Step 4: Commit dependency and policy together**
