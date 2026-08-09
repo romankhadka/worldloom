@@ -5,8 +5,9 @@
 Worldloom is a persistent living tapestry woven in real time from Wikimedia edits,
 earthquakes, global weather, and three small anonymous visitor gestures. Qualified,
 false-by-default adapters can add drand rounds, Bluesky activity, and RIPE routing
-motion after a source-specific canary. The present lives at the luminous right edge;
-move left to revisit earlier UTC chapters.
+motion after a source-specific canary. Solana slot progression is fixture-qualified
+but has no approved production endpoint. The present lives at the luminous right
+edge; move left to revisit earlier UTC chapters.
 
 ![Worldloom's Living Reliquary](priv/static/images/worldloom-social-preview.png)
 
@@ -40,6 +41,7 @@ flowchart LR
   DQ[drand Quicknet opt-in] --> N
   BJ[Bluesky Jetstream opt-in] --> N
   RR[RIPE RIS Live opt-in] --> N
+  SS[Solana slots fixtures only] -.-> N
   V[Visitor gesture] --> P[Gesture policy]
   N --> BUF[Bounded signal buffer]
   BUF --> C[Single loom coordinator]
@@ -68,6 +70,7 @@ are explicitly approved; Solana has no approved production endpoint.
 | drand Quicknet | Off | Stale after 12 seconds | At most 20 exact rounds; report a larger gap |
 | Bluesky legacy Jetstream | Off | Quiet after 20 seconds | Five-second overlap within a 60-second horizon |
 | RIPE RIS Live | Off | Quiet after 20 seconds | Rejoin the live edge; never claim replay |
+| Solana slot progression | Off | Not applicable | Fixture-qualified only; no approved production endpoint |
 
 `WORLDLOOM_FEEDS_ENABLED=false` overrides every source. The independent opt-in
 switches are `WORLDLOOM_DRAND_ENABLED`, `WORLDLOOM_BLUESKY_ENABLED`, and
@@ -126,6 +129,12 @@ behavior, LiveView interaction, deterministic rendering, keyboard/touch operatio
 reduced motion, two-browser convergence, and reload reconstruction. The browser suite
 uses an isolated `worldloom_e2e` database and deterministic feed-disabled data.
 
+The explicit launch-capacity proof adds 100 independent Chromium contexts, real
+LiveView snapshot progress, WebSocket stability, aggregate Presence cleanup, and one
+server-owned connection/subscription set per streaming source. It is intentionally
+heavier than pull-request CI; follow [load/README.md](load/README.md) for the
+deterministic harness and exact `npm run test:browser-100` and k6 commands.
+
 ## Data, privacy, and accessibility
 
 Worldloom uses [Wikimedia EventStreams](https://www.mediawiki.org/wiki/EventStreams),
@@ -133,9 +142,11 @@ the [USGS real-time GeoJSON feed](https://earthquake.usgs.gov/earthquakes/feed/v
 and [Open-Meteo](https://open-meteo.com/en/docs). Qualified opt-in adapters target
 [drand Quicknet](https://docs.drand.love/blog/2023/10/16/quicknet-is-live/),
 [Bluesky legacy Jetstream](https://github.com/bluesky-social/jetstream-legacy), and
-[RIPE RIS Live](https://ris-live.ripe.net/manual/). The public Open-Meteo endpoint
-used here is a non-commercial tier; commercial deployment requires a fresh licensing
-and API-plan review. Full field-level handling and attribution are in
+[RIPE RIS Live](https://ris-live.ripe.net/manual/). A
+[Solana slot subscription](https://solana.com/docs/rpc/websocket/slotsubscribe)
+boundary is fixture-qualified but production-disabled. The public Open-Meteo
+endpoint used here is a non-commercial tier; commercial deployment requires a fresh
+licensing and API-plan review. Full field-level handling and attribution are in
 [docs/data-sources.md](docs/data-sources.md).
 
 Anonymous browser and network values exist only long enough to enforce contribution

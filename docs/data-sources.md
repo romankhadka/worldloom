@@ -12,6 +12,12 @@ conditions, network health, or personal behavior.
 The Worldloom server currently contacts only Wikimedia, the U.S. Geological Survey,
 and Open-Meteo. A visitor's browser does not contact those providers.
 
+The deterministic launch gate opens 100 isolated browsers and requires every one to
+receive real Worldloom snapshots without any browser contacting an upstream origin.
+It also requires one server-owned connection and subscription set per instrumented
+streaming source. This is an architectural ownership check against synthetic
+fixtures—not an availability claim about a public provider.
+
 ### Wikimedia EventStreams
 
 Source: [Wikimedia EventStreams](https://www.mediawiki.org/wiki/EventStreams), using

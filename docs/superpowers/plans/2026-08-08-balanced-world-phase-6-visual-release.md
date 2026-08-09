@@ -395,7 +395,7 @@ rtk git commit -m "Verify Worldloom with one hundred isolated browsers"
 
 ## Task 10: Finish the public release surface and evidence
 
-- [ ] **Step 1: Update About and attribution**
+- [x] **Step 1: Update About and attribution**
 
 Update the About panel, README, and source/privacy/operations docs. Name every source and link directly to official documentation. Explain the source's visual material and limits. State that Solana is qualified in fixtures but not production-enabled. Avoid endorsement language and uptime promises.
 
@@ -415,7 +415,7 @@ rtk mix hex.audit
 
 The Postgrex advisory must be upgraded away or handled through the explicitly approved verified mitigation gate in the roadmap. A known unapproved advisory blocks release.
 
-- [ ] **Step 3: Review exact release-candidate diff**
+- [x] **Step 3: Review exact release-candidate diff**
 
 Review:
 
@@ -431,7 +431,7 @@ Audit the complete diff against all twelve acceptance criteria in the design spe
 - [ ] **Step 4: Commit the public surface**
 
 ```bash
-rtk git add README.md docs/data-sources.md docs/privacy.md docs/operations.md lib/worldloom_web/live/world_live.html.heex
+rtk git add README.md assets/css/app.css assets/test/browser_100.test.js docs/data-sources.md docs/privacy.md docs/operations.md docs/superpowers/specs/2026-08-08-balanced-world-signals-design.md load/README.md load/browser_100.mjs lib/worldloom_web/live/world_live.html.heex test/worldloom_web/live/world_live_test.exs docs/superpowers/plans/2026-08-08-balanced-world-phase-6-visual-release.md
 rtk git commit -m "Present Worldloom as a balanced living world"
 ```
 
@@ -441,9 +441,9 @@ After all local gates and a fresh code review pass, report the exact commits and
 
 ## Phase 6 completion gate
 
-- [ ] All eight signal roles remain recognizable without color and under reduced motion.
-- [ ] Deterministic ten-second intervals contain all scheduled fixture families and no family exceeds 40 percent of primary anchors.
-- [ ] Production balance measurement is honest, bounded, ephemeral, and does not fabricate events.
-- [ ] Desktop, tablet, mobile, outage, recovery, memory, and reduced-motion screenshots were reviewed at full size.
-- [ ] One hundred isolated browsers observe real server broadcasts while upstream connection/subscription count remains one per enabled streaming source.
+- [x] All eight signal roles remain recognizable without color and under reduced motion.
+- [x] Deterministic ten-second intervals contain all scheduled fixture families and no family exceeds 40 percent of primary anchors.
+- [x] Production balance measurement is honest, bounded, ephemeral, and does not fabricate events.
+- [x] Desktop, tablet, mobile, outage, recovery, memory, and reduced-motion screenshots were reviewed at full size.
+- [x] One hundred isolated browsers observe real server broadcasts while upstream connection/subscription count remains one per enabled streaming source.
 - [ ] Accessibility, privacy, provider attribution, container build, dependency audit, and all test suites pass before integration.

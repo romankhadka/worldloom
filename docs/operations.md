@@ -60,6 +60,36 @@ The deployment image and migration overlay are defined with continuous delivery 
 the repository. Do not run multiple application instances until coordinator leadership
 is implemented and verified.
 
+### Capacity and release evidence
+
+Before a release candidate is integrated, run the deterministic balanced-world
+harness described in [load/README.md](../load/README.md). It starts the real test app,
+all seven source workers, and one local TLS upstream; it never contacts production
+providers or changes a production source flag.
+
+The release gate then requires both:
+
+- `npm run test:browser-100`: 100 independent Chromium contexts, one stable LiveView
+  WebSocket each, two or more strictly increasing snapshot advances per page, zero
+  browser/upstream-origin failures, exact Presence cleanup, and one server-owned
+  provider connection/subscription set throughout the run;
+- the `local-100` k6 profile against `http://localhost:4002`: 100 concurrent viewers
+  plus ten gesture attempts per second for one minute, with zero protocol errors and
+  p95 durable-gesture observation below 300 milliseconds.
+
+Run the protocol profile exactly as:
+
+```sh
+k6 run \
+  -e WORLDLOOM_PROFILE=local-100 \
+  -e WORLDLOOM_BASE_URL=http://localhost:4002 \
+  load/worldloom.js
+```
+
+The browser gate needs roughly two minutes and at least 4 GB of free memory. Keep its
+aggregate output with the release evidence. Never point the deterministic upstream,
+its test certificate, or its fixed ports at a public deployment.
+
 ## Health and source status
 
 `GET /healthz` intentionally checks only database connectivity and the authoritative

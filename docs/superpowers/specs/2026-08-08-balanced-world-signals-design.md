@@ -104,7 +104,15 @@ Each summary contains accepted slot count, first and last slot, observed forward
 
 `gap_count` sums the missing positions between consecutive accepted observations, including the first accepted observation after a window boundary or reconnect when a previous slot is known. It never expands gaps into fabricated slot observations. `slot_count` and `gap_count` saturate independently at the unsigned 32-bit maximum and set `truncated` when either loses precision.
 
-The public aggregate is internally consistent: exactly one accepted slot has identical first and last positions, while distinct endpoints require at least two accepted slots. A true `truncated` flag requires at least one counter at the unsigned 32-bit maximum and a logical span strictly larger than the bounded counter sum. The internal continuity anchor and within-window endpoint span bound the possible raw counts before normalization; the anchor is then omitted from persistence and browser instructions.
+The public aggregate is internally consistent: exactly one accepted slot has identical
+first and last positions, while distinct endpoints require at least two accepted
+slots. A true `truncated` flag requires `slot_count` or `gap_count` at the unsigned
+32-bit maximum, or `window_count` at its pressure-compaction maximum of
+`floor((2^32 - 1) / 4)`. A saturated slot or gap counter is a lower bound; a saturated
+window count discloses that additional four-second summaries were compacted. Because
+`gap_count` can include the gap from the private continuity anchor to the first public
+slot, the public endpoints alone cannot reconstruct a stricter total-span equality.
+The continuity anchor is omitted from persistence and browser instructions.
 
 Official public Solana endpoints are suitable only for development: they are rate-limited, have no SLA, may block clients, and are explicitly not intended for production applications. The adapter and deterministic fixtures can be implemented without enabling the source publicly. Production Solana remains disabled until the owner explicitly approves a dedicated provider or self-hosted endpoint; changing endpoints does not change Worldloom's event contract.
 
@@ -220,7 +228,7 @@ All new summaries use `SourceEvent` and the existing Buffer, Coordinator, and St
 
 The Buffer changes from one retrying FIFO to fair per-source partitions drained round-robin within one global bound. A failing source can delay its own partition but cannot hold the head of every other source. No source worker writes directly to PostgreSQL or broadcasts directly to a LiveView.
 
-Under pressure, Wikimedia, Bluesky, RIPE, and Solana may combine adjacent pending summaries through source-specific associative reducers. The result declares its actual `window_count` and `window_span_seconds`; it is never mislabeled a normal four-second window. If either field reaches its safe cap, `truncated` is true and the summary labels both values as lower bounds with “at least” rather than claiming exactness. More generally, a true `truncated` flag means one or more saturated statistics may be lower bounds. Reducers combine saturated integer sufficient statistics and then recompute visual lane and intensity from those final statistics, so regrouping cannot accumulate floating-point averaging error. Solana sums only gaps already observed by ingestion and takes the minimum and maximum slot endpoints; it never invents a gap between input summaries. drand rounds never merge. They remain in a bounded twenty-round recovery queue, after which skipped rounds are reported honestly. Every new source receives an explicit `Merger` implementation so queue pressure cannot trigger the current unsupported-source pattern-match crash.
+Under pressure, Wikimedia, Bluesky, RIPE, and Solana may combine adjacent pending summaries through source-specific associative reducers. The result declares its actual `window_count` and `window_span_seconds`; it is never mislabeled a normal four-second window. If the true combined value exceeds either field's safe cap, the stored value remains at the cap, `truncated` is true, and the summary labels both values as lower bounds with “at least” rather than claiming exactness. More generally, a true `truncated` flag means one or more saturated statistics may be lower bounds. Reducers combine saturated integer sufficient statistics and then recompute visual lane and intensity from those final statistics, so regrouping cannot accumulate floating-point averaging error. Solana sums only gaps already observed by ingestion and takes the minimum and maximum slot endpoints; it never invents a gap between input summaries. drand rounds never merge. They remain in a bounded twenty-round recovery queue, after which skipped rounds are reported honestly. Every new source receives an explicit `Merger` implementation so queue pressure cannot trigger the current unsupported-source pattern-match crash.
 
 ## Checkpoints and recovery
 

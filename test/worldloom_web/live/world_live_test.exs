@@ -1220,25 +1220,30 @@ defmodule WorldloomWeb.WorldLiveTest do
              "The canvas is not the only way in"
            )
 
-    assert has_element?(
-             about_view,
-             "#source-attribution a[href='https://stream.wikimedia.org/'][rel='noreferrer']",
-             "Wikimedia"
-           )
+    expected_sources = [
+      {"https://www.mediawiki.org/wiki/EventStreams", "Wikimedia EventStreams",
+       "Connective strands"},
+      {"https://docs.bsky.app/blog/jetstream", "Bluesky Jetstream", "Conversation fans"},
+      {"https://ris-live.ripe.net/manual/", "RIPE RIS Live", "Route forks"},
+      {"https://solana.com/docs/rpc/websocket/slotsubscribe", "Solana", "Slot beads"},
+      {"https://docs.drand.love/developer/API-v2/drand-http-api/", "drand", "Crystalline pulses"},
+      {"https://earthquake.usgs.gov/", "USGS", "Rupture rings"},
+      {"https://open-meteo.com/", "Open-Meteo", "shared atmosphere"}
+    ]
 
-    assert has_element?(
-             about_view,
-             "#source-attribution a[href='https://earthquake.usgs.gov/'][rel='noreferrer']",
-             "USGS"
-           )
-
-    assert has_element?(
-             about_view,
-             "#source-attribution a[href='https://open-meteo.com/'][rel='noreferrer']",
-             "Open-Meteo"
-           )
+    for {href, name, material} <- expected_sources do
+      selector = "#source-attribution a[href='#{href}'][rel='noreferrer']"
+      assert has_element?(about_view, selector, name)
+      assert has_element?(about_view, selector, material)
+    end
 
     assert has_element?(about_view, "#source-attribution h2", "Public sources")
+
+    assert has_element?(
+             about_view,
+             "#source-attribution .source-attribution-posture",
+             "Solana is fixture-qualified and production-disabled"
+           )
 
     assert has_element?(
              about_view,

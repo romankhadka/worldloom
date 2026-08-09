@@ -81,7 +81,7 @@ export function capacityObservationErrors(
     }
 
     for (const failure of observation?.failures ?? []) {
-      errors.push(failure)
+      errors.push(safeDiagnosticText(failure))
     }
 
     for (const url of observation?.networkURLs ?? []) {
@@ -108,6 +108,32 @@ export function browserURLAllowed(candidate, baseURL) {
   } catch (_invalidURL) {
     return false
   }
+}
+
+export function safeNetworkURL(candidate) {
+  try {
+    const url = new URL(candidate)
+
+    if (url.protocol === "about:") return `about:${url.pathname}`
+    if (["blob:", "data:"].includes(url.protocol)) return url.protocol
+
+    return `${url.protocol}//${url.host}${url.pathname}`
+  } catch (_invalidURL) {
+    return "invalid-url"
+  }
+}
+
+export function safeDiagnosticText(candidate) {
+  const diagnostic = String(candidate)
+  const withoutAbsoluteSecrets = diagnostic.replace(
+    /\b(?:https?|wss?):\/\/[^\s"'<>]+|\b(?:about|blob|data):[^\s"'<>]+/giu,
+    (url) => safeNetworkURL(url),
+  )
+
+  return withoutAbsoluteSecrets.replace(
+    /(^|[\s([{=:])((?:\/{1,2}|\.\.?\/)[^\s"'<>?#]*)(?:\?[^\s"'<>#]*)?(?:#[^\s"'<>]*)?/gu,
+    (_url, prefix, pathname) => `${prefix}${pathname}`,
+  )
 }
 
 export function viewerCountFromHTML(html) {
@@ -375,7 +401,8 @@ async function openVisitor(browser, visitor, settings) {
       {timeout: settings.readyTimeoutMs},
     )
   } catch (error) {
-    visitor.failures.push(
+    recordVisitorFailure(
+      visitor,
       `visitor ${visitor.index + 1} startup: ${error.message}`,
     )
   }
@@ -426,7 +453,7 @@ function installCapacityObserver(token) {
 function monitorPage(visitor, baseURL) {
   const {page} = visitor
   const recordFailure = (message) => {
-    if (!visitor.closing) visitor.failures.push(message)
+    if (!visitor.closing) recordVisitorFailure(visitor, message)
   }
 
   page.on("console", (message) => {
@@ -440,22 +467,24 @@ function monitorPage(visitor, baseURL) {
   page.on("crash", () =>
     recordFailure(`visitor ${visitor.index + 1} page crashed`),
   )
-  page.on("request", (request) => visitor.networkURLs.push(request.url()))
+  page.on("request", (request) =>
+    visitor.networkURLs.push(safeNetworkURL(request.url())),
+  )
   page.on("requestfailed", (request) =>
     recordFailure(
-      `visitor ${visitor.index + 1} request: ${request.method()} ${request.url()} ${request.failure()?.errorText}`,
+      `visitor ${visitor.index + 1} request: ${request.method()} ${safeNetworkURL(request.url())} ${request.failure()?.errorText}`,
     ),
   )
   page.on("response", (response) => {
     if (response.status() >= 400) {
       recordFailure(
-        `visitor ${visitor.index + 1} response: ${response.status()} ${response.url()}`,
+        `visitor ${visitor.index + 1} response: ${response.status()} ${safeNetworkURL(response.url())}`,
       )
     }
   })
   page.on("websocket", (socket) => {
     visitor.websocketOpens += 1
-    visitor.networkURLs.push(socket.url())
+    visitor.networkURLs.push(safeNetworkURL(socket.url()))
     socket.on("socketerror", (error) =>
       recordFailure(`visitor ${visitor.index + 1} websocket: ${error}`),
     )
@@ -483,7 +512,8 @@ async function waitForSnapshotAdvances(visitor, minimumAdvances, timeout) {
       {timeout},
     )
   } catch (error) {
-    visitor.failures.push(
+    recordVisitorFailure(
+      visitor,
       `visitor ${visitor.index + 1} snapshot observation: ${error.message}`,
     )
   }
@@ -536,7 +566,8 @@ async function collectObservation(visitor) {
       networkURLs: [...visitor.networkURLs],
     }
   } catch (error) {
-    visitor.failures.push(
+    recordVisitorFailure(
+      visitor,
       `visitor ${visitor.index + 1} evidence: ${error.message}`,
     )
     return collectObservation({...visitor, page: null})
@@ -573,6 +604,10 @@ async function closeVisitor(visitor) {
   } finally {
     visitor.closed = true
   }
+}
+
+function recordVisitorFailure(visitor, message) {
+  visitor.failures.push(safeDiagnosticText(message))
 }
 
 function providerBaselineErrors(stats, phase) {
@@ -816,7 +851,7 @@ const invokedModule = process.argv[1]
 
 if (import.meta.url === invokedModule) {
   main().catch((error) => {
-    process.stderr.write(`${error.stack ?? error.message}\n`)
+    process.stderr.write(`${safeDiagnosticText(error.stack ?? error.message)}\n`)
     process.exitCode = 1
   })
 }

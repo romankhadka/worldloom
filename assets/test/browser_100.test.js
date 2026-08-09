@@ -5,6 +5,8 @@ import {
   browserURLAllowed,
   capacityObservationErrors,
   postCloseInvariantErrors,
+  safeDiagnosticText,
+  safeNetworkURL,
   upstreamInvariantErrors,
   viewerCountFromHTML,
 } from "../../load/browser_100.mjs"
@@ -66,7 +68,9 @@ test("reports shared identity, stale projections, browser failures, and direct u
       storageToken: "capacity-000",
       websocketOpens: 2,
       unexpectedWebsocketCloses: 1,
-      failures: ["visitor 2 websocket: closed unexpectedly"],
+      failures: [
+        "visitor 2 websocket: wss://visitor:secret@localhost:4002/live/websocket?_csrf_token=signed#private closed unexpectedly",
+      ],
       networkURLs: ["wss://localhost:4443/bluesky/subscribe"],
     },
   ]
@@ -106,6 +110,20 @@ test("reports shared identity, stale projections, browser failures, and direct u
     true,
   )
   assert.equal(
+    errors.some((error) =>
+      error.includes("wss://localhost:4002/live/websocket closed unexpectedly"),
+    ),
+    true,
+  )
+  assert.equal(
+    errors.some((error) =>
+      ["visitor:secret", "_csrf_token", "signed", "#private"].some(
+        (privateValue) => error.includes(privateValue),
+      ),
+    ),
+    false,
+  )
+  assert.equal(
     errors.some((error) => error.includes("direct non-app network")),
     true,
   )
@@ -128,6 +146,37 @@ test("allows only application HTTP and WebSocket URLs", () => {
     false,
   )
   assert.equal(browserURLAllowed("not a url", baseURL), false)
+})
+
+test("keeps only network origin and path in diagnostics", () => {
+  assert.equal(
+    safeNetworkURL(
+      "wss://visitor:secret@localhost:4002/live/websocket?_csrf_token=signed#private",
+    ),
+    "wss://localhost:4002/live/websocket",
+  )
+  assert.equal(
+    safeNetworkURL("http://localhost:4002/live/longpoll?token=signed"),
+    "http://localhost:4002/live/longpoll",
+  )
+  assert.equal(safeNetworkURL("about:blank"), "about:blank")
+  assert.equal(safeNetworkURL("not a url"), "invalid-url")
+})
+
+test("scrubs embedded absolute and relative URLs from failure diagnostics", () => {
+  const diagnostic =
+    "socket wss://visitor:secret@localhost:4002/live/websocket?_csrf_token=signed#private failed; fallback /live/longpoll?token=signed#private"
+
+  assert.equal(
+    safeDiagnosticText(diagnostic),
+    "socket wss://localhost:4002/live/websocket failed; fallback /live/longpoll",
+  )
+  assert.equal(diagnostic.includes("signed"), true)
+  assert.equal(safeDiagnosticText(diagnostic).includes("signed"), false)
+  assert.equal(
+    safeDiagnosticText(new Error(diagnostic)),
+    "Error: socket wss://localhost:4002/live/websocket failed; fallback /live/longpoll",
+  )
 })
 
 test("reads a disconnected viewer baseline without creating a LiveView", () => {

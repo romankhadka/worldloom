@@ -124,6 +124,10 @@ at least 4 GB of free memory available. A diagnostic run may override visitor,
 batch, ramp, hold, or timeout values with the `WORLDLOOM_BROWSER_*` variables,
 but only the default 100-browser, 60-second run is release evidence.
 
+Successful output is aggregate-only. When a request or WebSocket fails, the runner
+keeps its origin and path for diagnosis but strips credentials, query parameters,
+and fragments before retaining or printing the URL.
+
 ## Local commands
 
 Start the real app with public feeds disabled in a separate terminal:

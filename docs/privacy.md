@@ -85,6 +85,15 @@ Connected LiveViews receive a random, ephemeral Presence key. The interface disp
 only an aggregate viewer count and up to 12 decorative pulses. It has no avatar,
 cursor, geographic location, stable identifier, or list of viewers.
 
+The local 100-browser capacity gate creates synthetic, numbered cookie and
+local-storage tokens solely to prove browser-context isolation. They never enter a
+loom event or the fake upstream statistics. A passing run prints only aggregate
+counts, minimum snapshot progress, browser failure totals, and provider connection
+totals. Failed network diagnostics retain the method, status, origin, and path needed
+for debugging but remove credentials, query parameters, and fragments before storage
+or output. The gate does not use production traffic, visitor cookies, IP addresses,
+or raw snapshots as release evidence.
+
 ## Retention and control
 
 Normalized loom events are append-only and retained for the first public release so

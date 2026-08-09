@@ -1014,11 +1014,30 @@ a.legend-name:focus-visible {
 }
 
 .source-attribution a {
-  display: inline-flex;
-  min-height: 44px;
-  align-items: center;
+  display: flex;
+  width: 100%;
+  min-height: 56px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 3px;
+  border-bottom: 1px solid color-mix(in srgb, var(--loom-border) 66%, transparent);
   color: var(--loom-cyan);
   font-size: .76rem;
+  text-decoration: none;
+}
+
+.source-attribution a strong { font-weight: 500; }
+
+.source-attribution a span,
+.source-attribution-posture {
+  color: var(--loom-muted);
+  font-size: .68rem;
+  line-height: 1.55;
+}
+
+.source-attribution-posture {
+  margin: 18px 0 0;
 }
 
 .about-technology {

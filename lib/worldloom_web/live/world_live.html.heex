@@ -315,17 +315,39 @@
       </div>
       <div id="source-attribution" class="source-attribution">
         <h2>Public sources</h2>
-        <a href="https://stream.wikimedia.org/" rel="noreferrer">Wikimedia EventStreams</a>
-        <a href="https://docs.bsky.app/blog/jetstream" rel="noreferrer">Bluesky Jetstream</a>
-        <a href="https://ris-live.ripe.net/manual/" rel="noreferrer">RIPE RIS Live</a>
+        <a href="https://www.mediawiki.org/wiki/EventStreams" rel="noreferrer">
+          <strong>Wikimedia EventStreams</strong>
+          <span>Connective strands from four-second aggregates; no page text or editor identity.</span>
+        </a>
+        <a href="https://docs.bsky.app/blog/jetstream" rel="noreferrer">
+          <strong>Bluesky Jetstream</strong>
+          <span>Conversation fans from action counts; no post text or identity. Off by default.</span>
+        </a>
+        <a href="https://ris-live.ripe.net/manual/" rel="noreferrer">
+          <strong>RIPE RIS Live</strong>
+          <span>Route forks from routing totals; no prefixes or peers. Off by default.</span>
+        </a>
         <a href="https://solana.com/docs/rpc/websocket/slotsubscribe" rel="noreferrer">
-          Solana slot progression
+          <strong>Solana slot progression</strong>
+          <span>Slot beads from bounded progression summaries; fixtures only, with no production endpoint.</span>
         </a>
         <a href="https://docs.drand.love/developer/API-v2/drand-http-api/" rel="noreferrer">
-          drand Quicknet
+          <strong>drand Quicknet</strong>
+          <span>Crystalline pulses from exact rounds; structural validation, not signature verification.</span>
         </a>
-        <a href="https://earthquake.usgs.gov/" rel="noreferrer">USGS Earthquake Hazards</a>
-        <a href="https://open-meteo.com/" rel="noreferrer">Open-Meteo</a>
+        <a href="https://earthquake.usgs.gov/" rel="noreferrer">
+          <strong>USGS Earthquake Hazards</strong>
+          <span>Rupture rings from public observations; artistic context, not an alert.</span>
+        </a>
+        <a href="https://open-meteo.com/" rel="noreferrer">
+          <strong>Open-Meteo</strong>
+          <span>One shared atmosphere from twelve fixed anchors; never a visitor location.</span>
+        </a>
+        <p class="source-attribution-posture">
+          Wikimedia, USGS, and Open-Meteo are core server-side sources. Bluesky, RIPE, and drand
+          are qualified but off by default. Solana is fixture-qualified and production-disabled
+          because no endpoint is approved. Browsers never contact providers directly.
+        </p>
       </div>
       <p class="about-technology">
         Worldloom is built with Phoenix LiveView, OTP, PubSub, Presence, PostgreSQL, and a
