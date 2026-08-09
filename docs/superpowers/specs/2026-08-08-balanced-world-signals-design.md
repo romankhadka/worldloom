@@ -104,6 +104,8 @@ Each summary contains accepted slot count, first and last slot, observed forward
 
 `gap_count` sums the missing positions between consecutive accepted observations, including the first accepted observation after a window boundary or reconnect when a previous slot is known. It never expands gaps into fabricated slot observations. `slot_count` and `gap_count` saturate independently at the unsigned 32-bit maximum and set `truncated` when either loses precision.
 
+The public aggregate is internally consistent: exactly one accepted slot has identical first and last positions, while distinct endpoints require at least two accepted slots. A true `truncated` flag requires at least one counter at the unsigned 32-bit maximum and a logical span strictly larger than the bounded counter sum. The internal continuity anchor and within-window endpoint span bound the possible raw counts before normalization; the anchor is then omitted from persistence and browser instructions.
+
 Official public Solana endpoints are suitable only for development: they are rate-limited, have no SLA, may block clients, and are explicitly not intended for production applications. The adapter and deterministic fixtures can be implemented without enabling the source publicly. Production Solana remains disabled until the owner explicitly approves a dedicated provider or self-hosted endpoint; changing endpoints does not change Worldloom's event contract.
 
 Source documentation: [Solana `slotSubscribe`](https://solana.com/docs/rpc/websocket/slotsubscribe) and [Solana public RPC guidance](https://solana.com/docs/references/clusters).
