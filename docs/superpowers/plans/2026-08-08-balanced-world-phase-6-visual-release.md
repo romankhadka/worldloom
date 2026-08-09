@@ -72,7 +72,7 @@ rtk git commit -m "Define deterministic balanced-world acceptance fixtures"
 
 ## Task 2: Encode source meaning before color
 
-- [ ] **Step 1: Write the failing grammar tests**
+- [x] **Step 1: Write the failing grammar tests**
 
 Create `assets/test/source_grammar.test.js`. Assert exact role outputs:
 
@@ -89,13 +89,13 @@ assert.equal(grammarFor(visitor).role, "intervention")
 
 For each grammar assert bounded counts/widths, finite parameters, stable output, and a unique combination of `pathStyle`, `markerStyle`, and `rhythm`. Unknown positive render versions return the neutral fallback.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 ```bash
 rtk node --test assets/test/source_grammar.test.js
 ```
 
-- [ ] **Step 3: Implement the pure grammar table**
+- [x] **Step 3: Implement the pure grammar table**
 
 Create `assets/js/worldloom/source_grammar.js`. Rebuild metrics from an allow list and clamp every input. Implement:
 
@@ -110,11 +110,11 @@ Create `assets/js/worldloom/source_grammar.js`. Rebuild metrics from an allow li
 
 Do not put RGB values in this module; it defines structure and rhythm only.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 ```bash
 rtk node --test assets/test/source_grammar.test.js assets/test/smoke.test.js
-rtk git add assets/js/worldloom/source_grammar.js assets/test/source_grammar.test.js
+rtk git add assets/js/worldloom/source_grammar.js assets/test/source_grammar.test.js docs/superpowers/plans/2026-08-08-balanced-world-phase-6-visual-release.md
 rtk git commit -m "Define a non-color grammar for every public signal"
 ```
 
