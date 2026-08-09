@@ -2,10 +2,74 @@ defmodule Worldloom.Signals.WikimediaWorkerTest do
   use Worldloom.DataCase
 
   alias Worldloom.Loom.FeedCheckpoint
+  alias Worldloom.Signals.HealthMonitor
+  alias Worldloom.Signals.HealthRegistry
   alias Worldloom.Signals.WikimediaWorker
 
   @fixture "test/support/fixtures/feeds/wikimedia_frames.json"
   @window_start ~U[2026-08-03 12:00:00.000000Z]
+
+  test "projects valid Wikimedia lifecycle transitions without exposing stream details" do
+    [first | _rest] = read_frames()
+    test_process = self()
+    clock = start_agent(fn -> ~U[2026-08-03 12:00:01Z] end)
+    clock_reader = fn -> Agent.get(clock, & &1) end
+    monitor_name = Worldloom.Signals.WikimediaWorkerTest.HealthMonitorProcess
+    registry = start_health_registry(clock_reader, monitor_name)
+
+    {:ok, monitor} =
+      HealthMonitor.start_link(
+        name: monitor_name,
+        registry: registry,
+        loader: fn -> [] end,
+        broadcaster: fn health -> send(test_process, {:health, health}) end,
+        clock: clock_reader,
+        timer: fn _process, _message, _delay -> make_ref() end
+      )
+
+    assert_receive {:health, %{wikimedia: %{state: :disconnected}}}, 500
+
+    stream = fn _url, _cursor, callback ->
+      callback.(frame("cursor-health", first))
+      send(test_process, {:valid_frame_accepted, self()})
+
+      receive do
+        :finish_stream -> {:error, :disconnected}
+      end
+    end
+
+    {worker, _task_supervisor} =
+      start_worker(
+        stream: stream,
+        buffer: fn _events, _checkpoint -> :ok end,
+        clock: clock_reader,
+        health_registry: registry
+      )
+
+    assert_receive {:valid_frame_accepted, stream_pid}, 500
+    assert_receive {:health, connected_health}, 500
+    assert connected_health.wikimedia == %{state: :quiet, observed_at: nil}
+
+    Agent.update(clock, fn _time -> ~U[2026-08-03 12:00:05Z] end)
+    send(worker, :flush_bucket)
+    :sys.get_state(worker)
+    send(monitor, :health_registry_changed)
+
+    assert_receive {:health, live_health}, 500
+
+    assert live_health.wikimedia == %{
+             state: :live,
+             observed_at: ~U[2026-08-03 12:00:05Z]
+           }
+
+    send(stream_pid, :finish_stream)
+    assert_receive {:health, disconnected_health}, 500
+
+    assert disconnected_health.wikimedia == %{
+             state: :disconnected,
+             observed_at: ~U[2026-08-03 12:00:05Z]
+           }
+  end
 
   test "restores Last-Event-ID and closes a window only after its lateness grace" do
     attach_signal_telemetry()
@@ -495,6 +559,11 @@ defmodule Worldloom.Signals.WikimediaWorkerTest do
         overrides
       )
 
+    options =
+      Keyword.put_new_lazy(options, :health_registry, fn ->
+        start_health_registry(Keyword.fetch!(options, :clock))
+      end)
+
     {:ok, worker} = WikimediaWorker.start_link(options)
 
     on_exit(fn ->
@@ -530,6 +599,13 @@ defmodule Worldloom.Signals.WikimediaWorkerTest do
     start_supervised!(%{
       id: make_ref(),
       start: {Agent, :start_link, [initializer]}
+    })
+  end
+
+  defp start_health_registry(clock, monitor \\ nil) do
+    start_supervised!(%{
+      id: make_ref(),
+      start: {HealthRegistry, :start_link, [[name: nil, monitor: monitor, clock: clock]]}
     })
   end
 

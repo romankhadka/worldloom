@@ -15,9 +15,10 @@ defmodule Worldloom.Application do
       WorldloomWeb.Presence,
       Worldloom.Loom.RateLimiter,
       {Worldloom.Loom.Coordinator, configured_options(Worldloom.Loom.Coordinator)},
+      Worldloom.Signals.HealthRegistry,
+      {Worldloom.Signals.HealthMonitor, enabled: signal_ingestion_enabled?()},
       Worldloom.Signals.Buffer,
       Worldloom.Signals.Supervisor,
-      {Worldloom.Signals.HealthMonitor, enabled: signal_ingestion_enabled?()},
       # Start a worker by calling: Worldloom.Worker.start_link(arg)
       # {Worldloom.Worker, arg},
       # Start to serve requests, typically the last entry

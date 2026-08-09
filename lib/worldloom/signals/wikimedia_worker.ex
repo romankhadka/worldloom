@@ -6,6 +6,7 @@ defmodule Worldloom.Signals.WikimediaWorker do
   alias Worldloom.Signals.Backoff
   alias Worldloom.Signals.Buffer
   alias Worldloom.Signals.Client
+  alias Worldloom.Signals.HealthRegistry
   alias Worldloom.Signals.Normalizer
   alias Worldloom.Signals.WikimediaBucket
   alias WorldloomWeb.Telemetry
@@ -38,6 +39,7 @@ defmodule Worldloom.Signals.WikimediaWorker do
       task_supervisor: Keyword.get(options, :task_supervisor, Worldloom.Signals.StreamSupervisor),
       stream: Keyword.get(options, :stream, &Client.stream_sse/3),
       buffer: Keyword.get(options, :buffer, &Buffer.submit/2),
+      health_registry: Keyword.get(options, :health_registry, HealthRegistry),
       clock: Keyword.get(options, :clock, &DateTime.utc_now/0),
       random: Keyword.get(options, :random, &:rand.uniform/0),
       timer: Keyword.get(options, :timer, &Process.send_after/3)
@@ -68,7 +70,7 @@ defmodule Worldloom.Signals.WikimediaWorker do
 
       {:error, _reason} ->
         record_feed(:failure, 0, 0, state.attempt)
-        {:noreply, schedule_reconnect(state)}
+        {:noreply, state |> record_health(:disconnected) |> schedule_reconnect()}
     end
   end
 
@@ -77,7 +79,8 @@ defmodule Worldloom.Signals.WikimediaWorker do
   def handle_info({:stream_ended, stream_pid, _reason}, %{stream_pid: stream_pid} = state) do
     Process.demonitor(state.stream_monitor, [:flush])
     record_feed(:failure, 0, 0, state.attempt)
-    {:noreply, state |> clear_stream() |> schedule_reconnect()}
+
+    {:noreply, state |> record_health(:disconnected) |> clear_stream() |> schedule_reconnect()}
   end
 
   def handle_info(
@@ -85,7 +88,8 @@ defmodule Worldloom.Signals.WikimediaWorker do
         %{stream_pid: stream_pid, stream_monitor: monitor} = state
       ) do
     record_feed(:failure, 0, 0, state.attempt)
-    {:noreply, state |> clear_stream() |> schedule_reconnect()}
+
+    {:noreply, state |> record_health(:disconnected) |> clear_stream() |> schedule_reconnect()}
   end
 
   def handle_info(:flush_bucket, state) do
@@ -112,8 +116,10 @@ defmodule Worldloom.Signals.WikimediaWorker do
     end
   end
 
-  defp reply_to_frame({:accepted, state}, _progress?),
-    do: {:reply, :ok, %{state | attempt: 0}}
+  defp reply_to_frame({:accepted, state}, _progress?) do
+    connected_state = state |> record_health(:connected) |> record_health(:contact)
+    {:reply, :ok, %{connected_state | attempt: 0}}
+  end
 
   defp reply_to_frame({:ignored, state}, progress?),
     do: {:reply, :ok, maybe_reset_attempt(state, progress?)}
@@ -257,7 +263,12 @@ defmodule Worldloom.Signals.WikimediaWorker do
           persisted_state.attempt
         )
 
-        {:ok, persisted_state, true}
+        active_state =
+          if count > 0,
+            do: record_health(persisted_state, {:activity, count}),
+            else: persisted_state
+
+        {:ok, active_state, true}
 
       {:error, _reason} = failure ->
         record_feed(:failure, System.monotonic_time() - started_at, 0, state.attempt)
@@ -336,8 +347,14 @@ defmodule Worldloom.Signals.WikimediaWorker do
     attempt = state.attempt + 1
 
     Telemetry.record_retry(:wikimedia, :connection, attempt: attempt, delay: delay)
+    state = record_health(state, {:retry, 1})
     state.timer.(self(), :connect, delay)
     %{state | attempt: attempt}
+  end
+
+  defp record_health(state, observation) do
+    :ok = HealthRegistry.record(state.health_registry, :wikimedia, observation)
+    state
   end
 
   defp record_feed(status, duration, count, attempt) do

@@ -95,7 +95,7 @@ rtk git commit -m "Select a private peer-verified WebSocket transport"
 
 ## Task 2: Record ephemeral feed lifecycle truth
 
-- [ ] **Step 1: Write failing registry tests**
+- [x] **Step 1: Write failing registry tests**
 
 Create `test/worldloom/signals/health_registry_test.exs`. With an injected clock, record and assert distinct observations for:
 
@@ -112,13 +112,13 @@ HealthRegistry.record(registry, :bluesky, :disconnected)
 
 Assert no raw reason, cursor, URL, frame, prefix, identity, or response body is retained. Unknown source/event tuples return `{:error, :invalid_observation}` without atom creation.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 ```bash
 rtk mix test test/worldloom/signals/health_registry_test.exs
 ```
 
-- [ ] **Step 3: Implement the bounded registry**
+- [x] **Step 3: Implement the bounded registry**
 
 Create `lib/worldloom/signals/health_registry.ex` as a named GenServer. Store for each allow-listed source only connection state, last contact/activity times, and saturating aggregate counts for drops, merges, recovered windows, retries, and last coarse reason atom from a fixed allow list.
 
@@ -131,7 +131,7 @@ Expose:
 
 The registry never publishes public health. On a connection-state transition, it sends `HealthMonitor` only the payload-free message `:health_registry_changed`, so a disconnect projects immediately without copying registry state through a mailbox. Periodic monitor refreshes age quiet/stale activity. `HealthMonitor` remains the sole owner of public health telemetry, cache, PubSub topic, and broadcasts.
 
-- [ ] **Step 4: Replace checkpoint-derived high-cadence health**
+- [x] **Step 4: Replace checkpoint-derived high-cadence health**
 
 Update `FeedHealth.project/2` and `HealthMonitor` to use this explicit input contract:
 
@@ -160,13 +160,15 @@ Registry counters and coarse reasons remain internal and are never part of `Feed
 - checkpoints remain durability/replay state only; and
 - public `observed_at` is the last activity time for high-cadence sources and the checkpoint success time for polling sources.
 
+Wire the existing Wikimedia worker's connection, valid-frame contact, durable activity, retry, and disconnect transitions into `HealthRegistry` in this task. A started stream task is not proof of a connected transport: record `:connected` only when the worker receives a valid SSE event or heartbeat. Record activity only after a non-empty window is durably accepted by Buffer. This prevents today's active source from regressing to public `:disconnected` while Task 7 remains focused on replay and the two polling workers.
+
 - [ ] **Step 5: Supervise and verify**
 
 Start `HealthRegistry`, then `HealthMonitor`, before Buffer and Signals Supervisor in `lib/worldloom/application.ex`, so no worker can notify a missing monitor. `HealthMonitor` handles `:health_registry_changed` with an immediate projection refresh but does not schedule an additional periodic timer. Keep `/healthz` unchanged.
 
 ```bash
-rtk mix test test/worldloom/signals/health_registry_test.exs test/worldloom/signals/feed_health_test.exs test/worldloom/signals/health_monitor_test.exs test/worldloom_web/controllers/health_controller_test.exs
-rtk git add lib/worldloom/application.ex lib/worldloom/signals/health_registry.ex lib/worldloom/signals/feed_health.ex lib/worldloom/signals/health_monitor.ex test/worldloom/signals/health_registry_test.exs test/worldloom/signals/feed_health_test.exs test/worldloom/signals/health_monitor_test.exs
+rtk mix test test/worldloom/signals/health_registry_test.exs test/worldloom/signals/feed_health_test.exs test/worldloom/signals/health_monitor_test.exs test/worldloom/signals/wikimedia_worker_test.exs test/worldloom_web/controllers/health_controller_test.exs
+rtk git add lib/worldloom/application.ex lib/worldloom/signals/health_registry.ex lib/worldloom/signals/feed_health.ex lib/worldloom/signals/health_monitor.ex lib/worldloom/signals/wikimedia_worker.ex test/worldloom/signals/health_registry_test.exs test/worldloom/signals/feed_health_test.exs test/worldloom/signals/health_monitor_test.exs test/worldloom/signals/wikimedia_worker_test.exs
 rtk git commit -m "Report ephemeral feed connection and activity health"
 ```
 
@@ -341,11 +343,11 @@ rtk git commit -m "Recover bounded drand rounds in order"
 
 - [ ] **Step 1: Add recovery and health tests**
 
-Extend `wikimedia_worker_test.exs`, `earthquake_worker_test.exs`, and `weather_worker_test.exs`. Prove Wikimedia resumes with Last-Event-ID for at most sixty seconds, late recovery rows persist as history-only through the snapshot projection, and every worker records lifecycle health without putting checkpoint metadata into public health.
+Extend `wikimedia_worker_test.exs`, `earthquake_worker_test.exs`, and `weather_worker_test.exs`. Prove Wikimedia resumes with Last-Event-ID for at most sixty seconds, late recovery rows persist as history-only through the snapshot projection, and the polling workers record lifecycle health without putting checkpoint metadata into public health. Preserve the Wikimedia lifecycle observations introduced in Task 2.
 
 - [ ] **Step 2: Implement source-local backoff and observations**
 
-Update workers to record through `HealthRegistry`. Preserve their independent `Backoff` states. Do not change `/healthz` or turn feed degradation into application unready status.
+Extend Wikimedia recovery observations and update the polling workers to record through `HealthRegistry`. Preserve their independent `Backoff` states. Do not change `/healthz` or turn feed degradation into application unready status.
 
 - [ ] **Step 3: Complete transport verification**
 

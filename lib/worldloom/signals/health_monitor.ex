@@ -4,7 +4,9 @@ defmodule Worldloom.Signals.HealthMonitor do
   alias Worldloom.Loom.FeedCheckpoint
   alias Worldloom.Repo
   alias Worldloom.Signals.FeedHealth
+  alias Worldloom.Signals.HealthRegistry
 
+  @observed_sources [:wikimedia, :bluesky, :ripe_ris, :solana, :drand]
   @refresh_interval 15_000
   @topic "signals:health"
 
@@ -23,12 +25,17 @@ defmodule Worldloom.Signals.HealthMonitor do
   @impl true
   def init(options) do
     clock = Keyword.get(options, :clock, &DateTime.utc_now/0)
+    registry = Keyword.get(options, :registry, HealthRegistry)
+
+    observation_loader =
+      Keyword.get(options, :observation_loader, fn -> HealthRegistry.current(registry) end)
 
     state = %{
       enabled: Keyword.get(options, :enabled, true),
-      health: FeedHealth.project([], clock.()),
+      health: initial_health(observation_loader, clock),
       broadcasted?: false,
       loader: Keyword.get(options, :loader, &load_checkpoints/0),
+      observation_loader: observation_loader,
       broadcaster: Keyword.get(options, :broadcaster, &broadcast/1),
       clock: clock,
       timer: Keyword.get(options, :timer, &Process.send_after/3)
@@ -43,7 +50,22 @@ defmodule Worldloom.Signals.HealthMonitor do
 
   @impl true
   def handle_info(:refresh, state) do
-    health = state.loader.() |> FeedHealth.project(state.clock.())
+    updated_state = refresh(state)
+    state.timer.(self(), :refresh, @refresh_interval)
+    {:noreply, updated_state}
+  end
+
+  def handle_info(:health_registry_changed, state), do: {:noreply, refresh(state)}
+
+  defp refresh(state) do
+    health =
+      FeedHealth.project(
+        %{
+          observations: state.observation_loader.() |> public_observations(),
+          checkpoints: state.loader.()
+        },
+        state.clock.()
+      )
 
     :telemetry.execute(
       [:worldloom, :signals, :health],
@@ -52,10 +74,30 @@ defmodule Worldloom.Signals.HealthMonitor do
     )
 
     broadcasted? = maybe_broadcast(state, health)
-    state.timer.(self(), :refresh, @refresh_interval)
-
-    {:noreply, %{state | health: health, broadcasted?: broadcasted?}}
+    %{state | health: health, broadcasted?: broadcasted?}
   end
+
+  defp initial_health(observation_loader, clock) do
+    FeedHealth.project(
+      %{observations: observation_loader.() |> public_observations(), checkpoints: []},
+      clock.()
+    )
+  end
+
+  defp public_observations(observations) when is_map(observations) do
+    Map.new(@observed_sources, fn source ->
+      observation = Map.get(observations, source, %{})
+
+      {source,
+       %{
+         connection: field(observation, :connection),
+         last_contact_at: field(observation, :last_contact_at),
+         last_activity_at: field(observation, :last_activity_at)
+       }}
+    end)
+  end
+
+  defp public_observations(_observations), do: %{}
 
   defp maybe_broadcast(%{broadcasted?: true, health: health}, health), do: true
 
@@ -69,6 +111,9 @@ defmodule Worldloom.Signals.HealthMonitor do
   defp broadcast(health) do
     Phoenix.PubSub.broadcast(Worldloom.PubSub, @topic, {:feed_health, health})
   end
+
+  defp field(container, key) when is_map(container), do: Map.get(container, key)
+  defp field(_container, _key), do: nil
 
   defp registration_options(nil), do: []
   defp registration_options(name), do: [name: name]
