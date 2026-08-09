@@ -27,7 +27,7 @@ defmodule WorldloomWeb.PageMetadataTest do
     end
 
     expected_image_alt =
-      "A cyan, ember, and olive living weave above Worldloom's gesture dock."
+      "An oxblood, jade, copper, and saffron living weave above Worldloom's lacquered gesture dock."
 
     assert document
            |> LazyHTML.query("meta[property='og:image:alt']")
@@ -54,7 +54,7 @@ defmodule WorldloomWeb.PageMetadataTest do
            |> Enum.count() == 1
 
     assert document
-           |> LazyHTML.query("meta[name='theme-color'][content='#07110f']")
+           |> LazyHTML.query("meta[name='theme-color'][content='#120708']")
            |> Enum.count() == 1
 
     assert document |> LazyHTML.query("link[rel='canonical']") |> Enum.empty?()
@@ -70,5 +70,14 @@ defmodule WorldloomWeb.PageMetadataTest do
     assert response.status == 200
     assert get_resp_header(response, "content-type") == ["image/png"]
     assert byte_size(response.resp_body) > 0
+  end
+
+  test "serves copper Worldloom favicon artwork", %{conn: conn} do
+    response = get(conn, "/images/logo.svg")
+
+    assert response.status == 200
+    assert get_resp_header(response, "content-type") == ["image/svg+xml"]
+    assert response.resp_body =~ ~s(fill="#E07245")
+    refute response.resp_body =~ "#FD4F00"
   end
 end
