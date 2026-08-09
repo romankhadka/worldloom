@@ -59,7 +59,7 @@ defmodule Worldloom.MixProject do
        compile: false,
        depth: 1},
       {:swoosh, "~> 1.16"},
-      {:mint, "~> 1.9"},
+      {:mint, "~> 1.9.2"},
       {:req, "~> 0.6.3"},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},

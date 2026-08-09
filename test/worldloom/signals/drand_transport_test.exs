@@ -90,12 +90,54 @@ defmodule Worldloom.Signals.DrandTransportTest do
     refute_receive :mint_connected
   end
 
-  defp transport_options do
+  test "collapses request raises and receive exits while closing the connection" do
+    for mint <- [
+          Worldloom.Signals.DrandTransportTest.RequestRaisesMint,
+          Worldloom.Signals.DrandTransportTest.RequestErrorsMint,
+          Worldloom.Signals.DrandTransportTest.ReceiveExitsMint,
+          Worldloom.Signals.DrandTransportTest.ReceiveErrorsMint
+        ] do
+      assert {:error, :unavailable} =
+               DrandTransport.get(
+                 "https://api.drand.sh/v2/chains/synthetic/info",
+                 transport_options(),
+                 mint
+               )
+
+      assert_receive :mint_connection_closed
+    end
+  end
+
+  test "uses one absolute receive deadline instead of refreshing on partial progress" do
+    assert {:error, :unavailable} =
+             DrandTransport.get(
+               "https://api.drand.sh/v2/chains/synthetic/info",
+               transport_options(receive_timeout: 35),
+               Worldloom.Signals.DrandTransportTest.PartialProgressMint
+             )
+
+    observed_timeouts = collect_receive_timeouts()
+
+    assert length(observed_timeouts) >= 2
+    assert hd(observed_timeouts) <= 35
+    assert List.last(observed_timeouts) < hd(observed_timeouts)
+    assert_receive :mint_connection_closed
+  end
+
+  defp transport_options(overrides \\ []) do
     [
       headers: [{"user-agent", "Worldloom/Test"}, {"accept", "application/json"}],
       connect_options: [timeout: 11, transport_opts: [send_timeout: 12]],
-      receive_timeout: 13
+      receive_timeout: Keyword.get(overrides, :receive_timeout, 13)
     ]
+  end
+
+  defp collect_receive_timeouts(timeouts \\ []) do
+    receive do
+      {:mint_receive_timeout, timeout} -> collect_receive_timeouts([timeout | timeouts])
+    after
+      0 -> Enum.reverse(timeouts)
+    end
   end
 
   defmodule SuccessfulMint do
@@ -179,6 +221,75 @@ defmodule Worldloom.Signals.DrandTransportTest do
     def connect(_scheme, _host, _port, _options) do
       send(self(), :mint_connected)
       {:error, :unexpected_connection}
+    end
+  end
+
+  defmodule RequestRaisesMint do
+    def connect(:https, "api.drand.sh", 443, _options), do: {:ok, %{owner: self()}}
+    def request(_connection, "GET", _path, _headers, nil), do: raise("private request error")
+
+    def close(connection) do
+      send(connection.owner, :mint_connection_closed)
+      {:ok, connection}
+    end
+  end
+
+  defmodule ReceiveExitsMint do
+    def connect(:https, "api.drand.sh", 443, _options), do: {:ok, %{owner: self()}}
+
+    def request(connection, "GET", _path, _headers, nil),
+      do: {:ok, connection, :request}
+
+    def recv(_connection, 0, _timeout), do: exit(:private_receive_error)
+
+    def close(connection) do
+      send(connection.owner, :mint_connection_closed)
+      {:ok, connection}
+    end
+  end
+
+  defmodule RequestErrorsMint do
+    def connect(:https, "api.drand.sh", 443, _options), do: {:ok, %{owner: self()}}
+
+    def request(connection, "GET", _path, _headers, nil),
+      do: {:error, connection, :private_request_error}
+
+    def close(connection) do
+      send(connection.owner, :mint_connection_closed)
+      {:ok, connection}
+    end
+  end
+
+  defmodule ReceiveErrorsMint do
+    def connect(:https, "api.drand.sh", 443, _options), do: {:ok, %{owner: self()}}
+
+    def request(connection, "GET", _path, _headers, nil),
+      do: {:ok, connection, :request}
+
+    def recv(connection, 0, _timeout),
+      do: {:error, connection, :private_receive_error, []}
+
+    def close(connection) do
+      send(connection.owner, :mint_connection_closed)
+      {:ok, connection}
+    end
+  end
+
+  defmodule PartialProgressMint do
+    def connect(:https, "api.drand.sh", 443, _options), do: {:ok, %{owner: self()}}
+
+    def request(connection, "GET", _path, _headers, nil),
+      do: {:ok, connection, :request}
+
+    def recv(connection, 0, timeout) do
+      send(connection.owner, {:mint_receive_timeout, timeout})
+      Process.sleep(min(timeout, 10))
+      {:ok, connection, []}
+    end
+
+    def close(connection) do
+      send(connection.owner, :mint_connection_closed)
+      {:ok, connection}
     end
   end
 end
