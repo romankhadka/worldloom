@@ -41,6 +41,50 @@ defmodule Worldloom.Signals.NormalizerTest do
     assert private_noise_absent?(event)
   end
 
+  test "normalizes a privacy-preserving Bluesky activity window" do
+    window = %{
+      window_start: ~U[2026-08-08 16:00:01Z],
+      total_actions: 5,
+      original_posts: 2,
+      replies: 1,
+      reposts: 1,
+      creates: 3,
+      updates: 1,
+      deletes: 1,
+      truncated: false,
+      cursor: "synthetic-private-cursor",
+      identity: "did:example:synthetic-private-identity"
+    }
+
+    assert {:ok, %SourceEvent{} = event} = Normalizer.bluesky_window(window)
+    assert {:ok, repeated_event} = Normalizer.bluesky_window(window)
+    assert event.kind == :public_activity
+    assert event.source == :bluesky
+    assert event.external_id == "bluesky-window:1786204801:4"
+    assert event.occurred_at == ~U[2026-08-08 16:00:01.000000Z]
+    assert event.lane == repeated_event.lane
+    assert event.lane >= 0.0 and event.lane <= 1.0
+    assert event.intensity >= 0.0 and event.intensity <= 1.0
+
+    assert event.payload == %{
+             "summary" => "5 public Bluesky actions moved through the weave",
+             "window_count" => 1,
+             "window_span_seconds" => 4,
+             "total_actions" => 5,
+             "original_posts" => 2,
+             "replies" => 1,
+             "reposts" => 1,
+             "creates" => 3,
+             "updates" => 1,
+             "deletes" => 1,
+             "truncated" => false
+           }
+
+    inspected = inspect(event)
+    refute inspected =~ "synthetic-private-cursor"
+    refute inspected =~ "did:example:synthetic-private-identity"
+  end
+
   test "normalizes public USGS features and clamps impossible magnitudes" do
     geojson = read_fixture("usgs.json")
 
@@ -74,6 +118,7 @@ defmodule Worldloom.Signals.NormalizerTest do
 
   test "rejects malformed upstream collections and drops malformed USGS features" do
     assert {:error, :invalid_bucket} = Normalizer.wikimedia_bucket(%{count: 1})
+    assert {:error, :invalid_window} = Normalizer.bluesky_window(%{total_actions: 1})
     assert {:error, :invalid_geojson} = Normalizer.earthquakes(%{"features" => "wrong"})
     assert {:ok, []} = Normalizer.earthquakes(%{"features" => [%{"id" => nil}]})
     assert {:error, :invalid_weather} = Normalizer.weather([%{}], ["Vancouver"])

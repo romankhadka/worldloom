@@ -43,6 +43,61 @@ defmodule Worldloom.Signals.Normalizer do
 
   def wikimedia_bucket(_bucket), do: {:error, :invalid_bucket}
 
+  @spec bluesky_window(map()) :: {:ok, SourceEvent.t()} | {:error, atom()}
+  def bluesky_window(%{
+        window_start: %DateTime{} = window_start,
+        total_actions: total_actions,
+        original_posts: original_posts,
+        replies: replies,
+        reposts: reposts,
+        creates: creates,
+        updates: updates,
+        deletes: deletes,
+        truncated: truncated
+      }) do
+    counters = %{
+      total_actions: total_actions,
+      original_posts: original_posts,
+      replies: replies,
+      reposts: reposts,
+      creates: creates,
+      updates: updates,
+      deletes: deletes
+    }
+
+    with true <- Enum.all?(counters, fn {_name, count} -> uint32?(count) end),
+         true <- is_boolean(truncated),
+         {:ok, utc_window_start} <- DateTime.shift_zone(window_start, "Etc/UTC"),
+         {:ok, event} <-
+           SourceEvent.new(%{
+             kind: :public_activity,
+             source: :bluesky,
+             external_id: "bluesky-window:#{DateTime.to_unix(utc_window_start, :second)}:4",
+             occurred_at: utc_window_start,
+             lane: stable_lane(counters),
+             intensity: clamp_unit(total_actions / 40),
+             payload: %{
+               "summary" => "#{total_actions} public Bluesky actions moved through the weave",
+               "window_count" => 1,
+               "window_span_seconds" => 4,
+               "total_actions" => total_actions,
+               "original_posts" => original_posts,
+               "replies" => replies,
+               "reposts" => reposts,
+               "creates" => creates,
+               "updates" => updates,
+               "deletes" => deletes,
+               "truncated" => truncated
+             }
+           }) do
+      {:ok, event}
+    else
+      _invalid -> {:error, :invalid_window}
+    end
+  end
+
+  def bluesky_window(_window), do: {:error, :invalid_window}
+
   @spec earthquakes(map()) :: {:ok, [SourceEvent.t()]} | {:error, atom()}
   def earthquakes(%{"features" => features}) when is_list(features) do
     events = Enum.flat_map(features, &normalize_earthquake/1)
@@ -271,6 +326,7 @@ defmodule Worldloom.Signals.Normalizer do
   end
 
   defp stable_lane(public_shape), do: :erlang.phash2(public_shape, 10_001) / 10_000
+  defp uint32?(number), do: is_integer(number) and number in 0..4_294_967_295
   defp format_decimal(number), do: :erlang.float_to_binary(number, decimals: 1)
   defp to_float(number) when is_float(number), do: number
   defp to_float(number) when is_integer(number), do: number * 1.0

@@ -1,0 +1,82 @@
+[
+  {
+    "time_us": 1786204801100000,
+    "kind": "commit",
+    "did": "did:example:synthetic-alpha",
+    "handle": "synthetic.invalid",
+    "cursor": "synthetic-cursor-never-retained",
+    "commit": {
+      "collection": "app.bsky.feed.post",
+      "operation": "create",
+      "rkey": "synthetic-post-key",
+      "record": {
+        "text": "synthetic words used only to test privacy",
+        "uri": "at://did:example:synthetic-alpha/app.bsky.feed.post/synthetic-post-key",
+        "cid": "synthetic-content-id"
+      }
+    }
+  },
+  {
+    "time_us": 1786204802000000,
+    "kind": "commit",
+    "commit": {
+      "collection": "app.bsky.feed.post",
+      "operation": "create",
+      "record": {"reply": {"root": {}, "parent": {}}}
+    }
+  },
+  {
+    "time_us": 1786204803000000,
+    "kind": "commit",
+    "commit": {
+      "collection": "app.bsky.feed.repost",
+      "operation": "create",
+      "record": {}
+    }
+  },
+  {
+    "time_us": 1786204804000000,
+    "kind": "commit",
+    "commit": {
+      "collection": "app.bsky.feed.post",
+      "operation": "update",
+      "record": {}
+    }
+  },
+  {
+    "time_us": 1786204804500000,
+    "kind": "commit",
+    "commit": {
+      "collection": "app.bsky.feed.post",
+      "operation": "delete"
+    }
+  },
+  {
+    "time_us": 1786204802500000,
+    "kind": "commit",
+    "commit": {
+      "collection": "app.bsky.feed.like",
+      "operation": "create",
+      "record": {}
+    }
+  },
+  {
+    "time_us": "not-a-provider-time",
+    "kind": "commit",
+    "commit": {
+      "collection": "app.bsky.feed.post",
+      "operation": "create",
+      "record": {}
+    }
+  },
+  {
+    "time_us": 1786204802600000,
+    "kind": "identity",
+    "identity": {"did": "did:example:synthetic-identity"}
+  },
+  {
+    "time_us": 1786204802700000,
+    "kind": "account",
+    "account": {"did": "did:example:synthetic-account", "active": true}
+  }
+]
