@@ -1,5 +1,6 @@
 defmodule Worldloom.Loom.Instruction do
   alias Worldloom.Loom.Event
+  alias Worldloom.Loom.InstructionMetrics
 
   @kind_source_pairs MapSet.new([
                        {"wikimedia", "wikimedia"},
@@ -20,19 +21,11 @@ defmodule Worldloom.Loom.Instruction do
     with :ok <- validate_event(event),
          {:ok, occurred_at} <- DateTime.shift_zone(event.occurred_at, "Etc/UTC"),
          {:ok, summary} <- fetch_summary(event.payload),
-         {:ok, visual} <- fetch_visual(event.payload) do
-      %{
-        "sequence" => event.id,
-        "kind" => event.kind,
-        "source" => event.source,
-        "occurred_at" => DateTime.to_iso8601(occurred_at),
-        "render_version" => event.render_version,
-        "seed" => event.render_seed,
-        "lane" => event.lane,
-        "intensity" => event.intensity,
-        "visual" => visual,
-        "summary" => summary
-      }
+         {:ok, visual} <- fetch_visual(event.payload),
+         {:ok, metrics} <- fetch_metrics(event) do
+      event
+      |> instruction(occurred_at, summary, visual)
+      |> maybe_put_metrics(metrics)
     else
       _reason -> raise ArgumentError, "unsupported stored event: #{inspect(event.id)}"
     end
@@ -67,4 +60,31 @@ defmodule Worldloom.Loom.Instruction do
       _visual -> :error
     end
   end
+
+  defp fetch_metrics(%Event{render_version: 2, source: source, payload: payload}) do
+    case InstructionMetrics.from_payload(source, payload) do
+      metrics when is_map(metrics) -> {:ok, metrics}
+      :error -> :error
+    end
+  end
+
+  defp fetch_metrics(%Event{}), do: {:ok, :none}
+
+  defp instruction(event, occurred_at, summary, visual) do
+    %{
+      "sequence" => event.id,
+      "kind" => event.kind,
+      "source" => event.source,
+      "occurred_at" => DateTime.to_iso8601(occurred_at),
+      "render_version" => event.render_version,
+      "seed" => event.render_seed,
+      "lane" => event.lane,
+      "intensity" => event.intensity,
+      "visual" => visual,
+      "summary" => summary
+    }
+  end
+
+  defp maybe_put_metrics(instruction, :none), do: instruction
+  defp maybe_put_metrics(instruction, metrics), do: Map.put(instruction, "metrics", metrics)
 end

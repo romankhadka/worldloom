@@ -1,0 +1,82 @@
+[
+  {
+    "sequence": 201,
+    "kind": "public_activity",
+    "source": "bluesky",
+    "occurred_at": "2026-08-03T12:01:00.000000Z",
+    "render_version": 2,
+    "seed": 201000,
+    "lane": 0.2,
+    "intensity": 0.5,
+    "visual": {"spread": 0.3, "bend": -0.15, "pulse": 0.6},
+    "summary": "Public conversation moved through the weave",
+    "metrics": {
+      "window_count": 1,
+      "window_span_seconds": 4,
+      "total_actions": 12,
+      "original_posts": 4,
+      "replies": 2,
+      "reposts": 1,
+      "creates": 8,
+      "updates": 3,
+      "deletes": 1,
+      "truncated": false
+    }
+  },
+  {
+    "sequence": 202,
+    "kind": "route_change",
+    "source": "ripe_ris",
+    "occurred_at": "2026-08-03T12:01:01.000000Z",
+    "render_version": 2,
+    "seed": 201001,
+    "lane": 0.3,
+    "intensity": 0.6,
+    "visual": {"spread": 0.4, "bend": -0.05, "pulse": 0.7},
+    "summary": "Public routes shifted through the weave",
+    "metrics": {
+      "window_count": 2,
+      "window_span_seconds": 8,
+      "announced": 31,
+      "withdrawn": 4,
+      "ipv4": 28,
+      "ipv6": 7,
+      "collector_count": 2,
+      "peer_count": 18,
+      "truncated": false
+    }
+  },
+  {
+    "sequence": 203,
+    "kind": "slot",
+    "source": "solana",
+    "occurred_at": "2026-08-03T12:01:02.000000Z",
+    "render_version": 2,
+    "seed": 201002,
+    "lane": 0.4,
+    "intensity": 0.7,
+    "visual": {"spread": 0.5, "bend": 0.05, "pulse": 0.8},
+    "summary": "Public computation advanced through the weave",
+    "metrics": {
+      "window_count": 1,
+      "window_span_seconds": 4,
+      "slot_count": 4,
+      "first_slot": 101,
+      "last_slot": 105,
+      "gap_count": 1
+    }
+  },
+  {
+    "sequence": 204,
+    "kind": "randomness",
+    "source": "drand",
+    "occurred_at": "2026-08-03T12:01:03.000000Z",
+    "render_version": 2,
+    "seed": 201003,
+    "lane": 0.5,
+    "intensity": 0.8,
+    "visual": {"spread": 0.6, "bend": 0.15, "pulse": 0.9},
+    "summary": "drand Quicknet round 42",
+    "metrics": {"round": 42}
+  }
+]
