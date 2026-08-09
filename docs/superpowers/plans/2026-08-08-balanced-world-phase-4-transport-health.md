@@ -264,7 +264,7 @@ At the start of each Bluesky complete-frame callback, call the injected server c
 
 For Bluesky overlap deduplication, the canonical fingerprint material is the JSON encoding of the ordered array `[time_us, "commit", did, collection, operation, rkey]`. Hash that material immediately through `BlueskyRecovery`; never retain or expose the encoded array, DID, record key, cursor, CID, record, or content.
 
-One source-local timer may call `handle_info(:flush_window, state)` once per second. It closes only windows past the one-second lateness grace; a non-empty window submits its one sanitized event and checkpoint, while an empty elapsed window submits `[]` and the checkpoint. RIPE calls `RipeWindow.close/2` so the timer atomically flushes the completed current aggregate and promotes its at-most-one sanitized pending successor without losing reordered frames. Timer messages are lifecycle control, not deferred raw-frame work.
+One source-local timer may call `handle_info(:flush_window, state)` once per second. It closes only windows past the one-second lateness grace; a non-empty window submits its one sanitized event and checkpoint, while an empty elapsed window submits `[]` and the checkpoint. RIPE calls `RipeWindow.close/2`, submits the completed aggregate synchronously, and installs the returned next state only after successful durability. When `RipeWindow.add/3` returns `{:close_required, state}`, the same complete frame remains on the callback stack while this close/submit transition succeeds and is then retried with the same receipt time; it is never put in a process message. Timer messages are lifecycle control, not deferred raw-frame work.
 
 - [ ] **Step 5: Verify isolation and commit**
 
