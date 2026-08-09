@@ -256,15 +256,15 @@ Bluesky URL parameters must be exactly two repeated `wantedCollections` values, 
 
 RIPE first sends `request_rrc_list`, intersects the response with at most four configured collectors, then sends one `ris_subscribe` message per collector with `type: UPDATE`, `includeRaw: false`, and `acknowledge: true`. It has no replay.
 
-Solana sends only JSON-RPC `slotSubscribe`; it has no replay and remains production-disabled.
+Solana sends only the exact parameterless JSON-RPC `slotSubscribe` request. It accepts the exact acknowledgement for request ID `1`, retains its non-negative subscription ID only in socket state, and rejects any notification whose subscription ID does not match before calling the pure adapter. It has no replay and remains production-disabled.
 
 Each process records connected/contact/activity/drop/retry/disconnected observations directly through `HealthRegistry`. Do not `send(self(), decoded_frame)` or queue ordinary frame work.
 
-At the start of each Bluesky complete-frame callback, call the injected server clock exactly once, bind that value as `receipt_at`, use it for every temporal decision in that callback, and pass it unchanged to `BlueskyWindow.add/3`.
+At the start of each Bluesky or Solana complete-frame callback, call the injected server clock exactly once, bind that value as `receipt_at`, use it for every temporal decision in that callback, and pass it unchanged to the source reducer.
 
 For Bluesky overlap deduplication, the canonical fingerprint material is the JSON encoding of the ordered array `[time_us, "commit", did, collection, operation, rkey]`. Hash that material immediately through `BlueskyRecovery`; never retain or expose the encoded array, DID, record key, cursor, CID, record, or content.
 
-One source-local timer may call `handle_info(:flush_window, state)` once per second. It closes only windows past the one-second lateness grace; a non-empty window submits its one sanitized event and checkpoint, while an empty elapsed window submits `[]` and the checkpoint. RIPE calls `RipeWindow.close/2`, submits the completed aggregate synchronously, and installs the returned next state only after successful durability. When `RipeWindow.add/3` returns `{:close_required, state}`, the same complete frame remains on the callback stack while this close/submit transition succeeds and is then retried with the same receipt time; it is never put in a process message. Timer messages are lifecycle control, not deferred raw-frame work.
+One source-local timer may call `handle_info(:flush_window, state)` once per second. It closes only windows past the one-second lateness grace; a non-empty window submits its one sanitized event and checkpoint, while an empty elapsed window submits `[]` and the checkpoint. RIPE and Solana call their explicit `close/2`, submit the completed aggregate and checkpoint synchronously, and install the returned next state only after successful durability. The Solana checkpoint is the last accepted slot represented by the completed transition, never a merely received slot. When either reducer's `add/3` returns `{:close_required, state}`, the same complete frame remains on the callback stack while this close/submit transition succeeds and is then retried with the same receipt time; it is never put in a process message. Timer messages are lifecycle control, not deferred raw-frame work.
 
 - [ ] **Step 5: Verify isolation and commit**
 
