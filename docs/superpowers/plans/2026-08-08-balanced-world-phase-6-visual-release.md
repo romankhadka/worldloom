@@ -239,7 +239,7 @@ rtk git commit -m "Explain the balanced world without relying on canvas or color
 
 ## Task 6: Measure the five-source balance target honestly
 
-- [ ] **Step 1: Write pure rolling-window tests**
+- [x] **Step 1: Write pure rolling-window tests**
 
 Create `test/worldloom/signals/balance_monitor_test.exs`. Feed events and health observations across five minutes of one-second boundaries. Assert:
 
@@ -250,13 +250,13 @@ Create `test/worldloom/signals/balance_monitor_test.exs`. Feed events and health
 - memory, weather, earthquake, and visitor events never enter it;
 - state retains at most 310 occurrence/eligibility seconds, enough to evaluate a five-minute horizon plus one ten-second window.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 ```bash
 rtk mix test test/worldloom/signals/balance_monitor_test.exs
 ```
 
-- [ ] **Step 3: Implement bounded ephemeral measurement**
+- [x] **Step 3: Implement bounded ephemeral measurement**
 
 Create `lib/worldloom/signals/balance_monitor.ex`. Subscribe to the authoritative snapshot topic and health projection. Track a bounded set of occurrence seconds per scheduled source plus the eligible set for each observed second. At every one-second boundary, evaluate each ten-second interval ending in the rolling five-minute horizon; a source enters that interval's denominator only when its health is `:live` at the interval end, and passes only when it has a genuine occurrence inside the interval. Retain 310 seconds. Emit only aggregate ratios through:
 
@@ -266,13 +266,13 @@ Create `lib/worldloom/signals/balance_monitor.ex`. Subscribe to the authoritativ
 
 Measurements are integer observed/eligible interval counts; metadata contains only source atom. Do not persist, expose a dashboard, page a human, or call the metric an availability guarantee.
 
-- [ ] **Step 4: Supervise and verify**
+- [x] **Step 4: Supervise and verify**
 
 Start BalanceMonitor after Coordinator and HealthRegistry. Verify it restarts independently and an outage does not affect `/healthz`.
 
 ```bash
 rtk mix test test/worldloom/signals/balance_monitor_test.exs test/worldloom_web/controllers/health_controller_test.exs
-rtk git add lib/worldloom/application.ex lib/worldloom/signals/balance_monitor.ex test/worldloom/signals/balance_monitor_test.exs
+rtk git add lib/worldloom/application.ex lib/worldloom/signals/balance_monitor.ex test/worldloom/signals/balance_monitor_test.exs test/worldloom_web/controllers/health_controller_test.exs docs/superpowers/plans/2026-08-08-balanced-world-phase-6-visual-release.md
 rtk git commit -m "Measure eligible signal balance without fabricating marks"
 ```
 

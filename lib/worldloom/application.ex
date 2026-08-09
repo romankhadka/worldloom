@@ -17,6 +17,7 @@ defmodule Worldloom.Application do
       {Worldloom.Loom.Coordinator, configured_options(Worldloom.Loom.Coordinator)},
       Worldloom.Signals.HealthRegistry,
       {Worldloom.Signals.HealthMonitor, enabled: signal_ingestion_enabled?()},
+      Worldloom.Signals.BalanceMonitor,
       Worldloom.Signals.Buffer,
       Worldloom.Signals.Supervisor,
       # Start a worker by calling: Worldloom.Worker.start_link(arg)

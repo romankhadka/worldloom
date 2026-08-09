@@ -1,6 +1,8 @@
 defmodule WorldloomWeb.HealthControllerTest do
   use WorldloomWeb.ConnCase, async: false
 
+  alias Worldloom.Signals.BalanceMonitor
+
   defmodule AvailableRepo do
     def query("SELECT 1", [], options) do
       if Keyword.get(options, :timeout) == 1_000 do
@@ -70,5 +72,31 @@ defmodule WorldloomWeb.HealthControllerTest do
     assert json_response(conn, 503) == %{"status" => "unavailable"}
     assert conn.resp_body == ~s({"status":"unavailable"})
     refute conn.resp_body =~ "worldloom_missing_coordinator"
+  end
+
+  test "remains healthy while the balance monitor is intentionally absent", %{conn: conn} do
+    Application.put_env(:worldloom, WorldloomWeb.HealthController,
+      repo: AvailableRepo,
+      coordinator: Worldloom.Loom.Coordinator
+    )
+
+    assert is_pid(Process.whereis(BalanceMonitor))
+    :ok = Supervisor.terminate_child(Worldloom.Supervisor, BalanceMonitor)
+
+    on_exit(fn ->
+      if is_nil(Process.whereis(BalanceMonitor)) do
+        {:ok, _monitor} = Supervisor.restart_child(Worldloom.Supervisor, BalanceMonitor)
+      end
+    end)
+
+    assert is_nil(Process.whereis(BalanceMonitor))
+
+    conn = get(conn, ~p"/healthz")
+
+    assert json_response(conn, 200) == %{"status" => "ok"}
+    assert conn.resp_body == ~s({"status":"ok"})
+
+    {:ok, restarted_monitor} = Supervisor.restart_child(Worldloom.Supervisor, BalanceMonitor)
+    assert is_pid(restarted_monitor)
   end
 end
