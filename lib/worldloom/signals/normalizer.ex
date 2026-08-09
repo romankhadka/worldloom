@@ -187,12 +187,19 @@ defmodule Worldloom.Signals.Normalizer do
          true <- json_safe_integer?(first_slot),
          true <- json_safe_integer?(last_slot),
          true <- first_slot <= last_slot,
-         true <- slot_count <= last_slot - first_slot + 1,
+         public_width <- last_slot - first_slot + 1,
+         true <- slot_count <= public_width,
          true <- is_boolean(truncated),
          true <- valid_continuity_anchor?(continuity_anchor, first_slot),
-         true <- valid_solana_truncation?(slot_count, gap_count, truncated),
          logical_span <- solana_logical_span(continuity_anchor, first_slot, last_slot),
-         true <- possible_solana_total_includes?(slot_count, gap_count, truncated, logical_span),
+         true <-
+           feasible_solana_totals?(
+             slot_count,
+             gap_count,
+             truncated,
+             logical_span,
+             public_width
+           ),
          {:ok, utc_window_start} <- DateTime.shift_zone(window_start, "Etc/UTC"),
          {:ok, event} <-
            SourceEvent.new(%{
@@ -502,22 +509,31 @@ defmodule Worldloom.Signals.Normalizer do
   defp valid_continuity_anchor?(continuity_anchor, first_slot),
     do: json_safe_integer?(continuity_anchor) and continuity_anchor < first_slot
 
-  defp valid_solana_truncation?(_slot_count, _gap_count, false), do: true
-
-  defp valid_solana_truncation?(slot_count, gap_count, true),
-    do: slot_count == @uint32_max or gap_count == @uint32_max
-
   defp solana_logical_span(nil, first_slot, last_slot), do: last_slot - first_slot + 1
 
   defp solana_logical_span(continuity_anchor, _first_slot, last_slot),
     do: last_slot - continuity_anchor
 
-  defp possible_solana_total_includes?(slot_count, gap_count, true, logical_span)
-       when slot_count == @uint32_max or gap_count == @uint32_max,
-       do: slot_count + gap_count <= logical_span
-
-  defp possible_solana_total_includes?(slot_count, gap_count, _truncated, logical_span),
+  defp feasible_solana_totals?(slot_count, gap_count, false, logical_span, _public_width),
     do: slot_count + gap_count == logical_span
+
+  defp feasible_solana_totals?(slot_count, gap_count, true, logical_span, public_width) do
+    overflow_possible? = slot_count == @uint32_max or gap_count == @uint32_max
+    overflow_observed? = logical_span > slot_count + gap_count
+    {minimum_slots, maximum_slots} = raw_slot_range(slot_count, public_width)
+    {minimum_gaps, maximum_gaps} = raw_gap_range(gap_count, logical_span)
+    feasible_slot_minimum = max(minimum_slots, logical_span - maximum_gaps)
+    feasible_slot_maximum = min(maximum_slots, logical_span - minimum_gaps)
+
+    overflow_possible? and overflow_observed? and
+      feasible_slot_minimum <= feasible_slot_maximum
+  end
+
+  defp raw_slot_range(@uint32_max, public_width), do: {@uint32_max, public_width}
+  defp raw_slot_range(slot_count, _public_width), do: {slot_count, slot_count}
+
+  defp raw_gap_range(@uint32_max, logical_span), do: {@uint32_max, logical_span}
+  defp raw_gap_range(gap_count, _logical_span), do: {gap_count, gap_count}
 
   defp uint32?(number), do: is_integer(number) and number in 0..@uint32_max
   defp json_safe_integer?(number), do: is_integer(number) and number in 0..@json_safe_max

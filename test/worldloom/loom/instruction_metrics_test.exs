@@ -203,6 +203,7 @@ defmodule Worldloom.Loom.InstructionMetricsTest do
          "last_slot" => 103
        })},
       {"solana", Map.put(@payloads["solana"], "slot_count", 0)},
+      {"solana", Map.put(@payloads["solana"], "truncated", true)},
       {"drand", Map.put(@payloads["drand"], "round", 0)}
     ]
 

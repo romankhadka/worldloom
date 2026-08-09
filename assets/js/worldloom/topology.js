@@ -402,7 +402,9 @@ function validVersionTwoMetrics(source, metrics) {
         nonNegativeSafeInteger(metrics.last_slot) &&
         metrics.first_slot <= metrics.last_slot &&
         metrics.slot_count <= metrics.last_slot - metrics.first_slot + 1 &&
-        typeof metrics.truncated === "boolean"
+        typeof metrics.truncated === "boolean" &&
+        (!metrics.truncated ||
+          metrics.slot_count === uint32Maximum || metrics.gap_count === uint32Maximum)
     case "drand":
       return exactKeys(metrics, ["round"]) && uint32(metrics.round) && metrics.round > 0
     default:

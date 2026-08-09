@@ -248,7 +248,9 @@ defmodule Worldloom.Loom.SourceEvent do
         payload["first_slot"] <= payload["last_slot"] and
         payload["slot_count"] > 0 and
         payload["slot_count"] <= payload["last_slot"] - payload["first_slot"] + 1 and
-        boolean?(payload["truncated"])
+        boolean?(payload["truncated"]) and
+        (not payload["truncated"] or payload["slot_count"] == @uint32_max or
+           payload["gap_count"] == @uint32_max)
 
     boolean_result(valid?)
   end

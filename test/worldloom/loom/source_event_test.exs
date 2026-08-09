@@ -238,6 +238,7 @@ defmodule Worldloom.Loom.SourceEventTest do
       Map.put(valid_payload(:solana), "slot_count", 0),
       Map.put(valid_payload(:solana), "gap_count", -1),
       Map.put(valid_payload(:solana), "truncated", "false"),
+      Map.put(valid_payload(:solana), "truncated", true),
       Map.merge(valid_payload(:solana), %{
         "slot_count" => 4,
         "first_slot" => 101,

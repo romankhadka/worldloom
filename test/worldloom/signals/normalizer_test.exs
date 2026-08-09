@@ -405,6 +405,29 @@ defmodule Worldloom.Signals.NormalizerTest do
     incompatible = Map.put(compatible, :last_slot, @uint32_max + 5)
     assert {:error, :invalid_window} = Normalizer.solana_window(incompatible)
 
+    fixed_slot_capacity =
+      compatible
+      |> Map.merge(%{
+        gap_count: 0,
+        first_slot: 100,
+        last_slot: @uint32_max + 99,
+        continuity_anchor: 0
+      })
+
+    assert {:error, :invalid_window} = Normalizer.solana_window(fixed_slot_capacity)
+
+    valid_gap_overflow =
+      compatible
+      |> Map.merge(%{
+        slot_count: 10,
+        first_slot: @uint32_max + 1,
+        last_slot: @uint32_max + 11,
+        gap_count: @uint32_max,
+        continuity_anchor: 0
+      })
+
+    assert {:ok, %SourceEvent{}} = Normalizer.solana_window(valid_gap_overflow)
+
     assert {:error, :invalid_window} =
              normalizable_solana_window()
              |> Map.put(:truncated, true)
@@ -421,15 +444,12 @@ defmodule Worldloom.Signals.NormalizerTest do
         truncated: false
       })
 
-    assert {:ok, exact_event} = Normalizer.solana_window(exact_maximum)
+    assert {:ok, %SourceEvent{}} = Normalizer.solana_window(exact_maximum)
 
-    assert {:ok, truncated_event} =
+    assert {:error, :invalid_window} =
              exact_maximum
              |> Map.put(:truncated, true)
              |> Normalizer.solana_window()
-
-    assert truncated_event.lane == exact_event.lane
-    assert truncated_event.intensity == exact_event.intensity
   end
 
   test "rejects malformed and out-of-range Solana aggregates" do

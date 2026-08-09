@@ -267,6 +267,10 @@ test("neutralizes mismatched or malformed version two contracts", () => {
       metrics: {...solana.metrics, truncated: "false"},
     },
     {
+      ...structuredClone(solana),
+      metrics: {...solana.metrics, truncated: true},
+    },
+    {
       ...structuredClone(drand),
       metrics: {...drand.metrics, round: 0},
     },

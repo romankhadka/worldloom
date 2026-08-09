@@ -119,7 +119,7 @@ defmodule Worldloom.Signals.SolanaSlotAdapter do
            "result" => %{"slot" => slot, "parent" => parent, "root" => root}
          }
        }) do
-    if json_safe_integer?(subscription) and valid_slot_positions?(slot, parent, root) do
+    if nonnegative_integer?(subscription) and valid_slot_positions?(slot, parent, root) do
       {:ok, slot}
     else
       {:error, :invalid_notification}
@@ -136,6 +136,7 @@ defmodule Worldloom.Signals.SolanaSlotAdapter do
   end
 
   defp json_safe_integer?(number), do: is_integer(number) and number in 0..@json_safe_max
+  defp nonnegative_integer?(number), do: is_integer(number) and number >= 0
 
   defp slot_order(_slot, nil), do: :ok
   defp slot_order(slot, slot), do: {:drop, :duplicate_slot}

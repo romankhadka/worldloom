@@ -84,12 +84,17 @@ defmodule Worldloom.Signals.SolanaSlotAdapterTest do
     assert {:ok, _state} =
              SolanaSlotAdapter.add(state, private_extras, ~U[2026-08-08 16:00:03Z])
 
+    large_subscription =
+      put_in(frame, ["params", "subscription"], Integer.pow(10, 100))
+
+    assert {:ok, _state} =
+             SolanaSlotAdapter.add(state, large_subscription, ~U[2026-08-08 16:00:03Z])
+
     malformed = [
       put_in(frame, ["jsonrpc"], "1.0"),
       put_in(frame, ["method"], "rootNotification"),
       Map.delete(frame, "params"),
       put_in(frame, ["params", "subscription"], -1),
-      put_in(frame, ["params", "subscription"], @json_safe_max + 1),
       put_in(frame, ["params", "subscription"], 7.0),
       put_in(frame, ["params", "result", "slot"], -1),
       put_in(frame, ["params", "result", "slot"], @json_safe_max + 1),

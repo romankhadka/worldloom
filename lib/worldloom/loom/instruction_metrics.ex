@@ -57,7 +57,10 @@ defmodule Worldloom.Loom.InstructionMetrics do
     with :ok <- validate_window(metrics),
          true <- metrics["first_slot"] <= metrics["last_slot"],
          true <- metrics["slot_count"] > 0,
-         true <- metrics["slot_count"] <= metrics["last_slot"] - metrics["first_slot"] + 1 do
+         true <- metrics["slot_count"] <= metrics["last_slot"] - metrics["first_slot"] + 1,
+         true <-
+           not metrics["truncated"] or metrics["slot_count"] == @uint32_max or
+             metrics["gap_count"] == @uint32_max do
       :ok
     else
       _reason -> :error
