@@ -5,6 +5,9 @@ defmodule Worldloom.Loom.EventTest do
 
   @migration_version 20_260_808_180_000
   @migration_module Worldloom.Repo.Migrations.ExpandLoomSignalContracts
+  @canonical_constraint "loom_events_kind_source_pair"
+  @expanded_staging_constraint "loom_events_kind_source_pair_expanded_staged"
+  @original_staging_constraint "loom_events_kind_source_pair_original_staged"
   @migration_path Path.expand(
                     "../../../priv/repo/migrations/20260808180000_expand_loom_signal_contracts.exs",
                     __DIR__
@@ -141,9 +144,80 @@ defmodule Worldloom.Loom.EventTest do
     refute File.read!(@migration_path) =~ ~r/\bUPDATE\b/i
   end
 
+  test "migration stages table scans outside short write-blocking transactions" do
+    load_migration!()
+    migration_source = File.read!(@migration_path)
+
+    migration_configuration = apply(@migration_module, :__migration__, [])
+
+    assert migration_configuration[:disable_ddl_transaction]
+    assert migration_source =~ "NOT VALID"
+    assert migration_source =~ "VALIDATE CONSTRAINT"
+    assert migration_source =~ "LOCK TABLE"
+    assert migration_source =~ "IN SHARE ROW EXCLUSIVE MODE"
+
+    [_, up_source, down_source] =
+      Regex.run(
+        ~r/  def up do\n(.*?)\n  end\n\n  def down do\n(.*?)\n  end/s,
+        migration_source
+      )
+
+    assert operation_order(up_source) == [
+             "prepare_expanded_constraint",
+             "validate_expanded_constraint",
+             "install_expanded_constraint"
+           ]
+
+    assert operation_order(down_source) == [
+             "prepare_original_constraint",
+             "validate_original_constraint",
+             "install_original_constraint"
+           ]
+  end
+
+  test "rerunning up recovers a validated staging constraint and a completed swap" do
+    load_migration!()
+
+    Repo.query!("""
+    ALTER TABLE loom_events
+    ADD CONSTRAINT #{@expanded_staging_constraint} CHECK (true) NOT VALID
+    """)
+
+    Repo.query!("""
+    ALTER TABLE loom_events
+    VALIDATE CONSTRAINT #{@expanded_staging_constraint}
+    """)
+
+    assert %{validated: true} = constraint_state(@expanded_staging_constraint)
+
+    run_migration(:up)
+
+    assert_expanded_canonical_constraint()
+    assert constraint_state(@expanded_staging_constraint) == nil
+
+    run_migration(:up)
+
+    assert_expanded_canonical_constraint()
+    assert constraint_state(@expanded_staging_constraint) == nil
+  end
+
   test "rollback restores the original constraint when no new source rows exist" do
     load_migration!()
+
+    Repo.query!("""
+    ALTER TABLE loom_events
+    ADD CONSTRAINT #{@original_staging_constraint} CHECK (true) NOT VALID
+    """)
+
+    Repo.query!("""
+    ALTER TABLE loom_events
+    VALIDATE CONSTRAINT #{@original_staging_constraint}
+    """)
+
     run_migration(:down)
+
+    assert_original_canonical_constraint()
+    assert constraint_state(@original_staging_constraint) == nil
 
     assert_raise Postgrex.Error, fn ->
       Repo.transaction(fn ->
@@ -152,6 +226,8 @@ defmodule Worldloom.Loom.EventTest do
     end
 
     run_migration(:up)
+
+    assert_expanded_canonical_constraint()
 
     assert {1, _rows} =
              Repo.insert_all(Event, [raw_attributes("public_activity", "bluesky", 102)])
@@ -166,6 +242,9 @@ defmodule Worldloom.Loom.EventTest do
     assert_raise RuntimeError, ~r/cannot roll back.*new signal source rows exist/i, fn ->
       run_migration(:down)
     end
+
+    assert_expanded_canonical_constraint()
+    assert constraint_state(@original_staging_constraint) == nil
   end
 
   defp valid_attributes(overrides) do
@@ -229,5 +308,50 @@ defmodule Worldloom.Loom.EventTest do
              )
 
     serialized
+  end
+
+  defp operation_order(function_source) do
+    Regex.scan(
+      ~r/execute\(&([a-z_]+)\/0\)/,
+      function_source,
+      capture: :all_but_first
+    )
+    |> List.flatten()
+  end
+
+  defp assert_expanded_canonical_constraint do
+    assert %{definition: definition, validated: true} =
+             constraint_state(@canonical_constraint)
+
+    for source <- ~w(wikimedia usgs open_meteo visitor bluesky ripe_ris solana drand) do
+      assert definition =~ source
+    end
+  end
+
+  defp assert_original_canonical_constraint do
+    assert %{definition: definition, validated: true} =
+             constraint_state(@canonical_constraint)
+
+    for source <- ~w(wikimedia usgs open_meteo visitor) do
+      assert definition =~ source
+    end
+
+    for source <- ~w(bluesky ripe_ris solana drand) do
+      refute definition =~ source
+    end
+  end
+
+  defp constraint_state(name) do
+    case Repo.query!(
+           """
+           SELECT pg_get_constraintdef(oid, true), convalidated
+           FROM pg_constraint
+           WHERE conrelid = 'loom_events'::regclass AND conname = $1
+           """,
+           [name]
+         ).rows do
+      [[definition, validated]] -> %{definition: definition, validated: validated}
+      [] -> nil
+    end
   end
 end
