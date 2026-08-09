@@ -4,9 +4,9 @@
 
 **Goal:** Isolate every feed behind a supervised, bounded transport; drain persisted work fairly; and report ephemeral feed truth without confusing checkpoints with liveness.
 
-**Architecture:** WebSocket sources use one source-specific WebSockex process each and synchronously reduce complete frames into bounded aggregate state. A health registry records coarse lifecycle observations. Buffer partitions isolate source pressure and drain round-robin. Source-specific associative reducers collapse scheduled summaries; drand preserves up to twenty ordered rounds and never merges.
+**Architecture:** Each WebSocket source uses one source-specific GenServer that owns its Mint connection, upgrade reference, `Mint.WebSocket` decoder, subscription, reconnect timer, and bounded aggregate state. A processless helper centralizes only secure transport mechanics and coarse failures; provider behavior stays explicit. A health registry records coarse lifecycle observations. Buffer partitions isolate source pressure and drain round-robin. Source-specific associative reducers collapse scheduled summaries; drand preserves up to twenty ordered rounds and never merges.
 
-**Tech Stack:** Elixir 1.20, OTP supervisors, WebSockex 0.5.1, Req, Mint, Ecto, Phoenix PubSub, Telemetry, ExUnit.
+**Tech Stack:** Elixir 1.20, OTP supervisors, Mint WebSocket 1.0.5, Mint 1.9, Req, Ecto, Phoenix PubSub, Telemetry, ExUnit.
 
 ---
 
@@ -16,11 +16,16 @@
 
 - `lib/worldloom/signals/health_registry.ex`
 - `lib/worldloom/signals/safe_endpoint.ex`
+- `lib/worldloom/signals/websocket_transport.ex`
 - `lib/worldloom/signals/bluesky_socket.ex`
 - `lib/worldloom/signals/ripe_socket.ex`
 - `lib/worldloom/signals/solana_socket.ex`
 - `lib/worldloom/signals/drand_worker.ex`
 - `test/support/websocket_fixture_server.ex`
+- `test/support/fixtures/tls/localhost_ca.pem`
+- `test/support/fixtures/tls/localhost_certificate.pem`
+- `test/support/fixtures/tls/localhost_key.pem`
+- `test/worldloom/signals/websocket_transport_test.exs`
 - corresponding tests under `test/worldloom/signals/`
 
 ### Modify
@@ -35,50 +40,46 @@
 - `lib/worldloom/signals/wikimedia_worker.ex`
 - existing signal tests and telemetry tests
 
-## Task 1: Add WebSockex with an explicit raw-frame telemetry prohibition
+## Task 1: Add Mint WebSocket with a verified transport contract
 
 - [ ] **Step 1: Add the dependency and inspect its exact lock**
 
 Add to `mix.exs`:
 
 ```elixir
-{:websockex, "~> 0.5.1"}
+{:mint_web_socket, "~> 1.0.5"}
 ```
 
 Then:
 
 ```bash
 rtk mix deps.get
-rtk mix deps.compile websockex
+rtk mix deps.compile mint_web_socket
 rtk mix hex.audit
 ```
 
 Review `mix.lock`; do not change unrelated dependency constraints.
 
-- [ ] **Step 2: Write the telemetry attachment guard**
+- [ ] **Step 2: Audit the exact dependency boundary**
 
-In `test/worldloom/signals/supervisor_test.exs`, inspect these documented events:
+Inspect the locked `mint_web_socket` source and changelog. Confirm it delegates network I/O to Mint, emits no raw-frame telemetry or logs, and supports active/passive connections without replacing Mint's TLS configuration. Record the evidence in this plan before closing the task. Do not infer safety from package naming.
 
-```elixir
-for event <- [
-  [:websockex, :frame, :received],
-  [:websockex, :frame, :sent]
-], do: assert(:telemetry.list_handlers(event) == [])
-```
+- [ ] **Step 3: Verify the existing observability boundary**
 
-Also assert `WorldloomWeb.Telemetry.metrics/0` contains no WebSockex frame event. Connection/disconnection events may be observed only through Worldloom's own coarse callbacks, never by attaching to raw library events.
-
-- [ ] **Step 3: Run and verify the guard**
+Assert `WorldloomWeb.Telemetry.metrics/0` contains no Mint or Mint WebSocket transport metric, and that Worldloom source metrics contain only coarse source and status fields. The provider edge tests in Task 5 will attach marker collectors and exercise the real helper; the locked-source audit in Step 2 proves the dependency introduces no second observability path.
 
 ```bash
 rtk mix test test/worldloom/signals/supervisor_test.exs test/worldloom_web/telemetry_test.exs
+rtk mix deps.tree
+rtk mix deps.unlock --check-unused
+rtk mix hex.audit
 ```
 
 - [ ] **Step 4: Commit dependency and policy together**
 
 ```bash
-rtk git add mix.exs mix.lock test/worldloom/signals/supervisor_test.exs test/worldloom_web/telemetry_test.exs
-rtk git commit -m "Add WebSocket transport without raw-frame telemetry"
+rtk git add mix.exs mix.lock test/worldloom/signals/supervisor_test.exs test/worldloom_web/telemetry_test.exs docs/superpowers/plans/2026-08-08-balanced-world-phase-4-transport-health.md
+rtk git commit -m "Select a private peer-verified WebSocket transport"
 ```
 
 ## Task 2: Record ephemeral feed lifecycle truth
@@ -232,25 +233,33 @@ Create `test/worldloom/signals/safe_endpoint_test.exs`. Assert `SafeEndpoint.lab
 
 - [ ] **Step 2: Build fake WebSocket edge tests first**
 
-Create `test/support/websocket_fixture_server.ex` as a local Bandit/WebSock test server and use it in all three socket tests. For Bluesky, RIPE, and Solana, prove:
+Create `test/support/websocket_fixture_server.ex` as a local Bandit/WebSock server. Put shared transport coverage in `websocket_transport_test.exs` so provider tests remain focused on subscriptions, aggregation, recovery, and end-to-end privacy markers. Prove:
 
-- one complete text frame is decoded and reduced synchronously in `handle_frame/2`;
+- trusted local WSS succeeds while an untrusted certificate and hostname mismatch fail;
+- upgrade status, headers, and completion split across transport messages still establish exactly once;
+- TCP chunking and WebSocket fragmentation produce exactly one complete application frame;
+- ping payloads are echoed in pong frames, including during fragmentation, and close is acknowledged before state is cleared;
+- one complete text frame is decoded and reduced synchronously in the owning GenServer;
 - frames above 262,144 decoded bytes close/drop before JSON decoding;
-- fragmented messages are tested at the complete-frame callback boundary and the documented post-allocation limitation is explicit;
+- fragmented messages are tested at the complete-frame boundary and the documented post-allocation limitation is explicit;
+- a socket message decoding to more than 100 application frames drops the whole batch and disconnects before provider parsing;
 - malformed JSON records one coarse drop and keeps the sibling processes alive;
 - process `max_heap_size` is set to 2,000,000 words with `kill: true` and `error_logger: false`;
 - a mailbox above 100 messages closes the process before more application work;
-- logs and Worldloom telemetry contain no frame, cursor, URL query, or response body.
+- reconnect closes old state and ignores messages and request references from stale connections; and
+- errors containing frame, cursor, URL query, header, body, or provider-reason markers collapse to fixed atoms before logs, Worldloom telemetry, or health output.
 
 - [ ] **Step 3: Run and verify RED**
 
 ```bash
-rtk mix test test/worldloom/signals/safe_endpoint_test.exs test/worldloom/signals/bluesky_socket_test.exs test/worldloom/signals/ripe_socket_test.exs test/worldloom/signals/solana_socket_test.exs
+rtk mix test test/worldloom/signals/safe_endpoint_test.exs test/worldloom/signals/websocket_transport_test.exs test/worldloom/signals/bluesky_socket_test.exs test/worldloom/signals/ripe_socket_test.exs test/worldloom/signals/solana_socket_test.exs
 ```
 
-- [ ] **Step 4: Implement three explicit WebSockex modules**
+- [ ] **Step 4: Implement the processless helper and three explicit source GenServers**
 
-Create `BlueskySocket`, `RipeSocket`, and `SolanaSocket`; do not hide provider behavior behind one generic callback module.
+Create `WebSocketTransport` for connect, upgrade, stream/decode, encode/send, close, and fixed coarse error mapping. It owns no process or provider policy. Force HTTP/1 active mode (`active: :once` inside Mint), `log: false`, a 16 KiB response-header cap, finite connect/send/upgrade timeouts, peer verification, hostname/SNI, and operating-system certificate authorities. Never accept caller options that disable verification, enable logging, or weaken the caps.
+
+Create `BlueskySocket`, `RipeSocket`, and `SolanaSocket` as explicit GenServers; do not hide provider behavior behind one generic callback module. Each owns its Mint connection, upgrade reference, WebSocket decoder, reconnect timer, and aggregate state. It matches every socket message to the current connection, rejects stale request references, manually echoes ping payloads in pong frames, acknowledges close, closes old state before reconnect, and disconnects before provider parsing when one socket message decodes to more than 100 application frames.
 
 Bluesky URL parameters must be exactly two repeated `wantedCollections` values, `maxMessageSizeBytes=262144`, `compress=false`, and an optional replay cursor. Account and identity events are dropped. On reconnect, subtract five seconds from the last committed `time_us`, cap replay to sixty seconds, and deduplicate a bounded 4,096-entry hash set.
 
@@ -260,17 +269,17 @@ Solana sends only the exact parameterless JSON-RPC `slotSubscribe` request. It a
 
 Each process records connected/contact/activity/drop/retry/disconnected observations directly through `HealthRegistry`. Do not `send(self(), decoded_frame)` or queue ordinary frame work.
 
-At the start of each Bluesky or Solana complete-frame callback, call the injected server clock exactly once, bind that value as `receipt_at`, use it for every temporal decision in that callback, and pass it unchanged to the source reducer.
+At the start of each Bluesky or Solana complete-frame reduction, call the injected server clock exactly once, bind that value as `receipt_at`, use it for every temporal decision in that reduction, and pass it unchanged to the source reducer.
 
 For Bluesky overlap deduplication, the canonical fingerprint material is the JSON encoding of the ordered array `[time_us, "commit", did, collection, operation, rkey]`. Hash that material immediately through `BlueskyRecovery`; never retain or expose the encoded array, DID, record key, cursor, CID, record, or content.
 
-One source-local timer may call `handle_info(:flush_window, state)` once per second. It closes only windows past the one-second lateness grace; a non-empty window submits its one sanitized event and checkpoint, while an empty elapsed window submits `[]` and the checkpoint. RIPE and Solana call their explicit `close/2`, submit the completed aggregate and checkpoint synchronously, and install the returned next state only after successful durability. The Solana checkpoint is the last accepted slot represented by the completed transition, never a merely received slot. When either reducer's `add/3` returns `{:close_required, state}`, the same complete frame remains on the callback stack while this close/submit transition succeeds and is then retried with the same receipt time; it is never put in a process message. Timer messages are lifecycle control, not deferred raw-frame work.
+One source-local timer may call `handle_info(:flush_window, state)` once per second. It closes only windows past the one-second lateness grace; a non-empty window submits its one sanitized event and checkpoint, while an empty elapsed window submits `[]` and the checkpoint. RIPE and Solana call their explicit `close/2`, submit the completed aggregate and checkpoint synchronously, and install the returned next state only after successful durability. The Solana checkpoint is the last accepted slot represented by the completed transition, never a merely received slot. When either reducer's `add/3` returns `{:close_required, state}`, the same complete frame remains on the handler stack while this close/submit transition succeeds and is then retried with the same receipt time; it is never put in a process message. Timer messages are lifecycle control, not deferred raw-frame work.
 
 - [ ] **Step 5: Verify isolation and commit**
 
 ```bash
-rtk mix test test/worldloom/signals/safe_endpoint_test.exs test/worldloom/signals/bluesky_socket_test.exs test/worldloom/signals/ripe_socket_test.exs test/worldloom/signals/solana_socket_test.exs test/worldloom/signals/supervisor_test.exs
-rtk git add lib/worldloom/signals/safe_endpoint.ex lib/worldloom/signals/bluesky_socket.ex lib/worldloom/signals/ripe_socket.ex lib/worldloom/signals/solana_socket.ex test/support/websocket_fixture_server.ex test/worldloom/signals/safe_endpoint_test.exs test/worldloom/signals/bluesky_socket_test.exs test/worldloom/signals/ripe_socket_test.exs test/worldloom/signals/solana_socket_test.exs test/worldloom/signals/supervisor_test.exs
+rtk mix test test/worldloom/signals/safe_endpoint_test.exs test/worldloom/signals/websocket_transport_test.exs test/worldloom/signals/bluesky_socket_test.exs test/worldloom/signals/ripe_socket_test.exs test/worldloom/signals/solana_socket_test.exs test/worldloom/signals/supervisor_test.exs
+rtk git add lib/worldloom/signals/safe_endpoint.ex lib/worldloom/signals/websocket_transport.ex lib/worldloom/signals/bluesky_socket.ex lib/worldloom/signals/ripe_socket.ex lib/worldloom/signals/solana_socket.ex test/support/websocket_fixture_server.ex test/support/fixtures/tls/localhost_ca.pem test/support/fixtures/tls/localhost_certificate.pem test/support/fixtures/tls/localhost_key.pem test/worldloom/signals/safe_endpoint_test.exs test/worldloom/signals/websocket_transport_test.exs test/worldloom/signals/bluesky_socket_test.exs test/worldloom/signals/ripe_socket_test.exs test/worldloom/signals/solana_socket_test.exs test/worldloom/signals/supervisor_test.exs
 rtk git commit -m "Isolate bounded public WebSocket transports"
 ```
 
@@ -328,8 +337,10 @@ rtk git commit -m "Track bounded recovery across existing feeds"
 ## Phase 4 completion gate
 
 - [ ] Each source process can crash without restarting a sibling; supervision remains `:one_for_one`.
-- [ ] No app handler attaches to WebSockex frame telemetry.
-- [ ] Complete-frame, process-heap, mailbox, replay, dedupe, distinct-set, counter, and queue bounds are tested.
+- [ ] Source-owned Mint WebSocket transports retain peer and hostname verification; untrusted WSS fails closed.
+- [ ] No raw frame, cursor, query, header, body, or detailed transport failure reaches Worldloom logs, telemetry, or health output.
+- [ ] Complete-frame, frames-per-message, process-heap, mailbox, replay, dedupe, distinct-set, counter, and queue bounds are tested.
+- [ ] Ping/pong, close acknowledgement, split upgrade, fragmentation, stale-reference rejection, and reconnect cleanup are tested.
 - [ ] Fair draining prevents one source from monopolizing persistence.
 - [ ] Scheduled pressure reducers are associative; drand never merges.
 - [ ] Health comes from ephemeral connection/contact/activity observations, not immediate checkpoint state.

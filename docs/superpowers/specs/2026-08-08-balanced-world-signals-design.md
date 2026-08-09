@@ -164,7 +164,7 @@ This cadence targets one different high-volume family each second while limiting
 
 A zero-count window does not create a `loom_events` row. When a resumable stream advanced during that interval, the worker still submits a checkpoint-only commit through the same coordinator transaction. A source outage therefore creates an honest visual gap without forcing already-consumed frames to replay. The interface reports the source's health state separately.
 
-Complete decoded text frames larger than 256 KiB are rejected before JSON decoding. This is an application parsing limit, not a transport-allocation guarantee: WebSockex has already assembled the frame. Category maps contain fixed allow-listed keys, numeric counters saturate at a 32-bit unsigned maximum, and RIPE's worker-local collector and peer sets stop accepting new members at 2,048 entries each. JSON traversal, process heaps, and message queues receive explicit tested bounds. When a limit is reached, the aggregate records a bounded `truncated` flag; it never grows the collection or logs the discarded source material.
+Complete decoded text frames larger than 256 KiB are rejected before JSON decoding. This is an application parsing limit, not a transport-allocation guarantee: `Mint.WebSocket` has already assembled the frame. Category maps contain fixed allow-listed keys, numeric counters saturate at a 32-bit unsigned maximum, and RIPE's worker-local collector and peer sets stop accepting new members at 2,048 entries each. JSON traversal, process heaps, and message queues receive explicit tested bounds. A per-socket-message application-frame handling budget also prevents a burst of tiny frames from monopolizing a worker. When a limit is reached, the aggregate records a bounded `truncated` flag; it never grows the collection or logs the discarded source material.
 
 ## Architecture and components
 
@@ -178,13 +178,15 @@ Public provider -> source worker -> bounded normalizer/aggregator
 
 ### WebSocket transport
 
-A source-specific supervised process uses WebSockex for each WebSocket feed. WebSockex is chosen because it fits OTP supervision and callback-driven reconnect behavior without requiring Worldloom to implement WebSocket framing, ping/pong handling, and Mint connection state itself.
+A source-specific supervised GenServer owns each WebSocket feed. It uses the processless `Mint.WebSocket` API on Mint's peer-verifying TLS connection rather than a callback client that emits raw connection, frame, or failure metadata through library telemetry. Worldloom deliberately owns the upgrade, stream/decode, ping/pong, close, and reconnect lifecycle so those values cannot escape the source boundary by default.
 
-The WebSockex process owns connection, subscription, bounded synchronous frame handling, aggregation state, and reconnect timing for exactly one source. Pure normalizer and aggregator modules remain independent of that process. This avoids an ordinary `send/2` handoff and its unbounded mailbox. Reconnect delay blocks only that source process.
+The source process owns its Mint connection, upgrade reference, WebSocket decoder state, subscription, bounded synchronous frame handling, aggregate state, and reconnect timer for exactly one source. A small processless transport helper implements only shared connection mechanics and collapses every transport failure to a fixed coarse atom; provider behavior remains explicit in the three source processes. Pure normalizer and aggregator modules remain independent. This avoids an ordinary `send/2` handoff and its unbounded mailbox. The reconnect timer affects only that source while its GenServer remains responsive.
 
-WebSockex has no documented transport-level maximum-frame option and emits raw received frames in its own telemetry event metadata. Worldloom does not attach handlers, loggers, or exporters to raw WebSockex frame events, and an automated privacy test enforces that application telemetry observes only Worldloom's coarse derived events. Cursors embedded in connection URLs are redacted before logging. These are explicit dependency constraints, not claims that raw bytes never exist transiently in process memory.
+Connections force HTTP/1 active mode, which Mint implements with `active: :once`, disable Mint logging, cap response headers, and retain peer verification, hostname verification, SNI, and operating-system certificate authorities. Every socket message is matched to the current connection and upgrade reference; stale messages from a closed connection are ignored. Ping payloads are echoed in pong frames, close frames receive a bounded acknowledgement, and all connection state is cleared before retry. Cursors embedded in connection URLs are stripped from labels and never logged.
 
-WebSockex documentation: [hexdocs.pm/websockex](https://websockex.hexdocs.pm/).
+`Mint.WebSocket` buffers partial and fragmented messages and has no transport-level maximum-frame option. The 256 KiB complete-frame check therefore remains a post-allocation application bound, reinforced by the process heap ceiling, mailbox ceiling, and per-message application-frame handling budget. Raw bytes necessarily exist transiently in the owning process, but are never passed to Worldloom telemetry, application logs, health observations, persistence, or PubSub.
+
+Mint WebSocket documentation: [hexdocs.pm/mint_web_socket](https://hexdocs.pm/mint_web_socket/Mint.WebSocket.html).
 
 ### Source workers and aggregators
 
@@ -298,9 +300,9 @@ Source adapters follow a deny-by-default contract:
 - never place upstream URLs or connection details in public health output; and
 - discard raw values immediately after updating a bounded aggregate.
 
-Bluesky content and identity, RIPE routing identifiers, and Solana account-level activity cannot appear in `loom_events`, PubSub instructions, rendered HTML, semantic summaries, Worldloom telemetry, or application logs. WebSockex's internal raw-frame telemetry events remain handler-free; this constraint is covered by an automated attachment test and documented for future observability work.
+Bluesky content and identity, RIPE routing identifiers, and Solana account-level activity cannot appear in `loom_events`, PubSub instructions, rendered HTML, semantic summaries, Worldloom telemetry, or application logs. The Mint transport returns frames only to the owning process and emits no raw-frame library telemetry. Marker-based edge tests prove that frames, cursors, URL queries, headers, response bodies, and detailed transport failures never reach Worldloom-owned logs, telemetry, or health output.
 
-Per-source processes enforce a tested mailbox ceiling and terminate cleanly on sustained overload. A process heap ceiling limits damage from an unexpectedly large assembled frame, but the threat model remains explicit: the 256 KiB application check occurs after WebSockex allocates the complete frame. Eliminating that transient allocation would require a separately reviewed lower-level transport.
+Per-source processes enforce a tested mailbox ceiling and terminate cleanly on sustained overload. A process heap ceiling limits damage from an unexpectedly large assembled frame, but the threat model remains explicit: the 256 KiB application check occurs after `Mint.WebSocket` allocates the complete frame. Eliminating that transient allocation would require a separately reviewed streaming frame decoder.
 
 Existing visitor privacy remains unchanged: no accounts, analytics SDK, free-form content, stable public identity, raw address persistence, or browser-to-source requests.
 
@@ -354,7 +356,9 @@ Behavioral implementation follows red-green-refactor. Tests exercise pure source
 - Duplicate windows and rounds produce one stored row.
 - A source crash or malformed frame does not stop sibling workers.
 - Slow consumers, forced provider reconnects, oversized fragmented messages, mailbox pressure, process-heap limits, and database outages produce bounded degradation.
-- No Worldloom handler attaches to raw WebSockex frame telemetry, and URL cursors never reach application logs.
+- Trusted local WSS succeeds while an untrusted certificate and hostname mismatch fail; URL cursors never reach application logs.
+- Split upgrades, TCP chunking, WebSocket fragmentation, ping/pong, close acknowledgement, stale references, and reconnect cleanup preserve one bounded owner for transport state.
+- Synthetic frame, cursor, query, header, body, and failure markers never reach Worldloom logs, telemetry, health output, persistence, or PubSub.
 - Provider contract smoke tests run on a schedule outside deterministic CI and report drift without making pull requests flaky.
 
 ### Store and LiveView tests
@@ -403,7 +407,7 @@ This work is too broad for one coupled implementation gate. It is divided into i
 1. **Projection foundation:** introduce the deterministic snapshot envelope, separate `commit_watermark` from visible rows, remove Wikimedia-only minimum spacing, and reproject rather than append after a real gap. This phase fixes the reported defect with no new provider.
 2. **Contract migration:** add render version 2 metrics, the separate memory layer, old-row compatibility, expanded source/checkpoint allow lists, and four-second Wikimedia windows.
 3. **Provider qualification:** prove the pinned legacy Jetstream contract, bounded RIPE collector subscription and load, drand v2 failover and seed derivation, and the Solana adapter against development infrastructure. No provider is production-enabled in this phase.
-4. **Transport and health:** add the supervised WebSockex workers, handler-free raw telemetry policy, bounded process behavior, ephemeral health registry, fair per-source buffering, and pressure reducers.
+4. **Transport and health:** add supervised source-owned Mint WebSocket workers, verified TLS and raw-data containment, bounded process behavior, ephemeral health registry, fair per-source buffering, and pressure reducers.
 5. **Incremental sources:** enable drand first, then Bluesky and RIPE one at a time through independently reversible canaries. Solana remains disabled until its production endpoint is separately approved.
 6. **Balanced visual release:** add the complete source materials, legend, semantic summaries, deterministic balance fixtures, provider-aware documentation, and instrumented 100-browser verification.
 

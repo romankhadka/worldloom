@@ -6,7 +6,7 @@
 
 **Architecture:** Land six independently reviewable phases. First make the snapshot and event-time projection correct, then widen the durable contract, qualify providers without enabling them, harden transport and health, activate sources through reversible canaries, and finish with a balanced visual and accessibility release.
 
-**Tech Stack:** Elixir 1.20, Phoenix 1.8, Phoenix LiveView 1.2, Ecto/PostgreSQL, Req, WebSockex 0.5.1, Canvas 2D, browser-native JavaScript, Node test runner, Playwright, k6, Docker, GitHub Actions.
+**Tech Stack:** Elixir 1.20, Phoenix 1.8, Phoenix LiveView 1.2, Ecto/PostgreSQL, Req, Mint 1.9, Mint WebSocket 1.0, Canvas 2D, browser-native JavaScript, Node test runner, Playwright, k6, Docker, GitHub Actions.
 
 ---
 
@@ -84,7 +84,7 @@ Execute them in order. Every phase ends in working software, a focused review, a
 
 - [ ] Complete phase 4 with one independently supervised process per source.
 - [ ] Prove fair draining, bounded pressure reduction, bounded replay, redacted telemetry, and sibling survival.
-- [ ] Prove no application handler is attached to WebSockex raw-frame telemetry events.
+- [ ] Prove source-owned Mint WebSocket transports retain verified TLS and expose no raw transport data through Worldloom logs, telemetry, or health output.
 - [ ] Run `rtk mix precommit`, targeted stress tests, and `rtk npm test`.
 
 ### Gate 5: Incremental canaries

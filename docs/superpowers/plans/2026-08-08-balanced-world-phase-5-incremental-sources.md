@@ -6,7 +6,7 @@
 
 **Architecture:** A typed runtime configuration validates source flags and secure endpoints. Signals Supervisor builds children only for explicitly enabled sources. Each source lands in its own commit with deterministic tests, an external contract probe, operational evidence requirements, and a rollback switch. Enabling a production flag or deploying a canary is a separate authorized operational action, not an automatic side effect of merging code.
 
-**Tech Stack:** Elixir 1.20, Phoenix releases, WebSockex, Req, Mint, GitHub Actions, Fly.io-compatible runtime configuration.
+**Tech Stack:** Elixir 1.20, Phoenix releases, Mint WebSocket, Req, Mint, GitHub Actions, Fly.io-compatible runtime configuration.
 
 ---
 
@@ -151,7 +151,7 @@ rtk git commit -m "Prepare the drand public pulse for canary release"
 
 - [ ] **Step 1: Add the complete fake-edge vertical test**
 
-Use a local fake WebSocket server to emit fixture frames, disconnect, and replay a five-second overlap. Assert one WebSockex process, two `wantedCollections` query values, `maxMessageSizeBytes=262144`, dedupe, one durable aggregate per non-empty four-second window, checkpoint cursor advancement, and no account/identity/content retention.
+Use a local fake WebSocket server to emit fixture frames, disconnect, and replay a five-second overlap. Assert one source-owned GenServer, two `wantedCollections` query values, `maxMessageSizeBytes=262144`, dedupe, one durable aggregate per non-empty four-second window, checkpoint cursor advancement, and no account/identity/content retention.
 
 - [ ] **Step 2: Run focused verification**
 
@@ -190,7 +190,7 @@ rtk git commit -m "Prepare bounded Bluesky summaries for canary release"
 
 - [ ] **Step 1: Add the complete fake-edge vertical test**
 
-Use a local fake WebSocket server to answer `request_rrc_list`, acknowledge subscriptions, emit fixture UPDATEs, close as a slow consumer, and reconnect. Assert one socket process, one string-host subscription per approved current collector, no replay after reconnect, honest gap health, one aggregate per non-empty window, and no prefix/peer/collector identity outside ephemeral hashed sets.
+Use a local fake WebSocket server to answer `request_rrc_list`, acknowledge subscriptions, emit fixture UPDATEs, close as a slow consumer, and reconnect. Assert one source-owned GenServer, one string-host subscription per approved current collector, no replay after reconnect, honest gap health, one aggregate per non-empty window, and no prefix/peer/collector identity outside ephemeral hashed sets.
 
 - [ ] **Step 2: Run focused verification**
 
