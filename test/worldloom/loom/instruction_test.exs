@@ -21,6 +21,19 @@ defmodule Worldloom.Loom.InstructionTest do
      0.75, 0.8, "A visitor illuminated a thread"}
   ]
 
+  @approved_pairs [
+    {"wikimedia", "wikimedia"},
+    {"earthquake", "usgs"},
+    {"weather", "open_meteo"},
+    {"tug", "visitor"},
+    {"knot", "visitor"},
+    {"illuminate", "visitor"},
+    {"public_activity", "bluesky"},
+    {"route_change", "ripe_ris"},
+    {"slot", "solana"},
+    {"randomness", "drand"}
+  ]
+
   test "emits the exact string-keyed client contract and strips private payload fields" do
     event = %Event{
       id: 42,
@@ -58,6 +71,28 @@ defmodule Worldloom.Loom.InstructionTest do
 
     assert %{"render_version" => 9, "kind" => "wikimedia"} =
              Instruction.from_event(event)
+  end
+
+  test "recognizes every approved stored kind and source pairing" do
+    Enum.each(Enum.with_index(@approved_pairs, 1), fn {{kind, source}, sequence} ->
+      event = %Event{
+        id: sequence,
+        kind: kind,
+        source: source,
+        external_id: if(source == "visitor", do: nil, else: "#{source}-#{sequence}"),
+        occurred_at: ~U[2026-08-03 12:00:00.000000Z],
+        render_version: if(source in ~w(bluesky ripe_ris solana drand), do: 2, else: 1),
+        render_seed: sequence,
+        lane: 0.4,
+        intensity: 0.6,
+        payload: %{
+          "summary" => "A public signal entered the weave",
+          "visual" => %{"spread" => 0.2, "bend" => 0.0, "pulse" => 0.4}
+        }
+      }
+
+      assert %{"kind" => ^kind, "source" => ^source} = Instruction.from_event(event)
+    end)
   end
 
   test "rejects unknown or mismatched stored kind and source values" do

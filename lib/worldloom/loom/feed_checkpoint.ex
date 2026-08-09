@@ -5,7 +5,7 @@ defmodule Worldloom.Loom.FeedCheckpoint do
 
   @primary_key {:source, :string, autogenerate: false}
   @timestamps_opts [type: :utc_datetime_usec]
-  @sources ~w(wikimedia usgs open_meteo)
+  @sources ~w(wikimedia usgs open_meteo bluesky ripe_ris solana drand)
 
   @type t :: %__MODULE__{}
 

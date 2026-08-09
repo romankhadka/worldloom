@@ -7,7 +7,11 @@ defmodule Worldloom.Loom.Instruction do
                        {"weather", "open_meteo"},
                        {"tug", "visitor"},
                        {"knot", "visitor"},
-                       {"illuminate", "visitor"}
+                       {"illuminate", "visitor"},
+                       {"public_activity", "bluesky"},
+                       {"route_change", "ripe_ris"},
+                       {"slot", "solana"},
+                       {"randomness", "drand"}
                      ])
   @visual_keys ~w(spread bend pulse)
 

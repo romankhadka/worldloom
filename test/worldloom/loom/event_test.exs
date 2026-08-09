@@ -88,6 +88,44 @@ defmodule Worldloom.Loom.EventTest do
     assert "does not match source" in errors_on(changeset).kind
   end
 
+  test "application changesets accept exactly the ten approved pairs" do
+    Enum.each(@original_pairs ++ @new_pairs, fn {kind, source} ->
+      changeset =
+        Event.changeset(
+          %Event{},
+          valid_attributes(%{
+            kind: kind,
+            source: source,
+            external_id: if(source == "visitor", do: nil, else: "#{source}-changeset")
+          })
+        )
+
+      assert changeset.valid?, "expected #{source}/#{kind} to be accepted"
+    end)
+
+    mismatch =
+      Event.changeset(
+        %Event{},
+        valid_attributes(%{kind: "slot", source: "bluesky"})
+      )
+
+    refute mismatch.valid?
+    assert "does not match source" in errors_on(mismatch).kind
+  end
+
+  test "every external source requires an external id" do
+    for {kind, source} <- @original_pairs ++ @new_pairs, source != "visitor" do
+      changeset =
+        Event.changeset(
+          %Event{},
+          valid_attributes(%{kind: kind, source: source, external_id: nil})
+        )
+
+      refute changeset.valid?
+      assert "can't be blank" in errors_on(changeset).external_id
+    end
+  end
+
   test "upstream external ids are unique per source" do
     attributes = valid_attributes(%{external_id: "revision-42"})
 

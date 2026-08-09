@@ -9,7 +9,8 @@ defmodule Worldloom.Loom.Store do
   alias Worldloom.Loom.VisualParameters
   alias Worldloom.Repo
 
-  @live_sources ~w(wikimedia usgs visitor)
+  @primary_sources ~w(wikimedia bluesky ripe_ris solana drand)
+  @context_sources ~w(usgs visitor)
   @live_source_limit 240
   @memory_lookback_seconds 24 * 60 * 60
   @live_window_seconds 60
@@ -283,7 +284,7 @@ defmodule Worldloom.Loom.Store do
     window_ceiling = window_end |> DateTime.truncate(:second) |> DateTime.add(1, :second)
 
     display_candidates =
-      Enum.flat_map(@live_sources, fn source ->
+      Enum.flat_map(@primary_sources ++ @context_sources, fn source ->
         live_source_rows(source, window_start, window_ceiling, commit_watermark)
       end)
 

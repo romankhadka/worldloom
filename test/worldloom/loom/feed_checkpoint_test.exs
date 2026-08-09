@@ -14,15 +14,22 @@ defmodule Worldloom.Loom.FeedCheckpointTest do
            } = errors_on(changeset)
   end
 
-  test "only known feed sources are accepted" do
-    changeset =
+  test "accepts the seven external feed sources and rejects visitors" do
+    for source <- ~w(wikimedia usgs open_meteo bluesky ripe_ris solana drand) do
+      assert FeedCheckpoint.changeset(
+               %FeedCheckpoint{},
+               valid_attributes(%{source: source})
+             ).valid?
+    end
+
+    visitor =
       FeedCheckpoint.changeset(
         %FeedCheckpoint{},
         valid_attributes(%{source: "visitor"})
       )
 
-    refute changeset.valid?
-    assert "is invalid" in errors_on(changeset).source
+    refute visitor.valid?
+    assert "is invalid" in errors_on(visitor).source
   end
 
   test "cursor and etag have hard length limits" do

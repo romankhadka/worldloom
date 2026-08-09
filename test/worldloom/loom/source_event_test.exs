@@ -9,8 +9,14 @@ defmodule Worldloom.Loom.SourceEventTest do
     {:weather, :open_meteo},
     {:tug, :visitor},
     {:knot, :visitor},
-    {:illuminate, :visitor}
+    {:illuminate, :visitor},
+    {:public_activity, :bluesky},
+    {:route_change, :ripe_ris},
+    {:slot, :solana},
+    {:randomness, :drand}
   ]
+
+  @render_identity String.duplicate("a", 64)
 
   test "accepts every approved kind and source pairing" do
     Enum.each(@pairs, fn {kind, source} ->
@@ -119,6 +125,157 @@ defmodule Worldloom.Loom.SourceEventTest do
              ["coordinates", "magnitude", "place", "summary"]
   end
 
+  test "accepts exactly the public aggregate fields for each new source" do
+    expected_keys = %{
+      bluesky:
+        ~w(summary window_count window_span_seconds total_actions original_posts replies reposts creates updates deletes truncated),
+      ripe_ris:
+        ~w(summary window_count window_span_seconds announced withdrawn ipv4 ipv6 collector_count peer_count truncated),
+      solana:
+        ~w(summary window_count window_span_seconds slot_count first_slot last_slot gap_count),
+      drand: ~w(summary round)
+    }
+
+    Enum.each(expected_keys, fn {source, keys} ->
+      {kind, ^source} = Enum.find(@pairs, fn {_kind, pair_source} -> pair_source == source end)
+
+      assert {:ok, event} = SourceEvent.new(valid_attributes(kind, source))
+      assert event.payload |> Map.keys() |> Enum.sort() == Enum.sort(keys)
+    end)
+  end
+
+  test "rejects identity-bearing fields from every new aggregate" do
+    forbidden_fields = [
+      {:public_activity, :bluesky, "did"},
+      {:route_change, :ripe_ris, "prefix"},
+      {:route_change, :ripe_ris, "peer"},
+      {:slot, :solana, "account"},
+      {:slot, :solana, "wallet"},
+      {:randomness, :drand, "render_identity"}
+    ]
+
+    Enum.each(forbidden_fields, fn {kind, source, field} ->
+      payload = Map.put(valid_payload(source), field, "must-not-cross-the-boundary")
+
+      assert {:error, {:payload, :invalid_keys}} =
+               SourceEvent.new(valid_attributes(kind, source, %{payload: payload}))
+    end)
+  end
+
+  test "validates bounded window counters and pressure spans" do
+    assert {:ok, ordinary} =
+             SourceEvent.new(valid_attributes(:public_activity, :bluesky))
+
+    assert ordinary.payload["window_count"] == 1
+    assert ordinary.payload["window_span_seconds"] == 4
+
+    pressure_payload =
+      valid_payload(:ripe_ris)
+      |> Map.merge(%{
+        "window_count" => 3,
+        "window_span_seconds" => 12,
+        "announced" => 4_294_967_295,
+        "truncated" => true
+      })
+
+    assert {:ok, pressure} =
+             SourceEvent.new(
+               valid_attributes(:route_change, :ripe_ris, %{payload: pressure_payload})
+             )
+
+    assert pressure.payload["window_count"] == 3
+    assert pressure.payload["window_span_seconds"] == 12
+
+    invalid_payloads = [
+      Map.put(valid_payload(:bluesky), "window_count", 0),
+      Map.put(valid_payload(:bluesky), "window_span_seconds", 8),
+      Map.put(valid_payload(:bluesky), "total_actions", -1),
+      Map.put(valid_payload(:bluesky), "total_actions", 4_294_967_296),
+      Map.put(valid_payload(:bluesky), "replies", 1.0),
+      Map.put(valid_payload(:bluesky), "truncated", "false")
+    ]
+
+    Enum.each(invalid_payloads, fn payload ->
+      assert {:error, {:payload, :invalid_shape}} =
+               SourceEvent.new(valid_attributes(:public_activity, :bluesky, %{payload: payload}))
+    end)
+  end
+
+  test "requires complete new-source payloads" do
+    payload = Map.delete(valid_payload(:ripe_ris), "peer_count")
+
+    assert {:error, {:payload, :invalid_keys}} =
+             SourceEvent.new(valid_attributes(:route_change, :ripe_ris, %{payload: payload}))
+  end
+
+  test "validates ordered Solana slot bounds and bounded counters" do
+    assert {:ok, _event} = SourceEvent.new(valid_attributes(:slot, :solana))
+
+    invalid_payloads = [
+      Map.put(valid_payload(:solana), "first_slot", -1),
+      Map.merge(valid_payload(:solana), %{"first_slot" => 106, "last_slot" => 105}),
+      Map.put(valid_payload(:solana), "last_slot", 1.5),
+      Map.put(valid_payload(:solana), "slot_count", 4_294_967_296),
+      Map.put(valid_payload(:solana), "gap_count", -1)
+    ]
+
+    Enum.each(invalid_payloads, fn payload ->
+      assert {:error, {:payload, :invalid_shape}} =
+               SourceEvent.new(valid_attributes(:slot, :solana, %{payload: payload}))
+    end)
+  end
+
+  test "accepts a positive drand round with an ephemeral lowercase beacon identity" do
+    assert {:ok, event} = SourceEvent.new(valid_attributes(:randomness, :drand))
+
+    assert event.render_identity == @render_identity
+    refute Map.has_key?(event.payload, "render_identity")
+    refute Map.has_key?(event.payload, :render_identity)
+
+    invalid_attributes = [
+      %{render_identity: nil},
+      %{render_identity: String.duplicate("A", 64)},
+      %{render_identity: String.duplicate("a", 63)},
+      %{render_identity: String.duplicate("g", 64)},
+      %{payload: Map.put(valid_payload(:drand), "round", 0)},
+      %{payload: Map.put(valid_payload(:drand), "round", 1.0)}
+    ]
+
+    Enum.each(invalid_attributes, fn overrides ->
+      assert {:error, _reason} =
+               SourceEvent.new(valid_attributes(:randomness, :drand, overrides))
+    end)
+  end
+
+  test "forbids render identities for every source except drand" do
+    Enum.each(Enum.reject(@pairs, fn {_kind, source} -> source == :drand end), fn {kind, source} ->
+      assert {:error, {:render_identity, :forbidden}} =
+               SourceEvent.new(
+                 valid_attributes(kind, source, %{render_identity: @render_identity})
+               )
+    end)
+  end
+
+  test "rejects payloads that are not JSON-safe or exceed sixteen kibibytes" do
+    unsafe_payload = %{
+      "summary" => "A public signal entered the weave",
+      "languages" => self()
+    }
+
+    oversized_payload = %{
+      "summary" => "A public signal entered the weave",
+      "languages" => [String.duplicate("x", 16_384)]
+    }
+
+    assert {:error, {:payload, :invalid}} =
+             SourceEvent.new(valid_attributes(:wikimedia, :wikimedia, %{payload: unsafe_payload}))
+
+    assert {:error, {:payload, :invalid}} =
+             SourceEvent.new(
+               valid_attributes(:wikimedia, :wikimedia, %{payload: oversized_payload})
+             )
+  end
+
   test "requires concise textual summaries" do
     assert {:error, {:payload, :summary_required}} =
              SourceEvent.new(valid_attributes(:wikimedia, :wikimedia, %{payload: %{}}))
@@ -140,6 +297,8 @@ defmodule Worldloom.Loom.SourceEventTest do
   defp valid_attributes(kind, source, overrides \\ %{}) do
     external_id = if source == :visitor, do: nil, else: "external-41"
 
+    render_identity = if source == :drand, do: @render_identity, else: nil
+
     Map.merge(
       %{
         kind: kind,
@@ -148,9 +307,59 @@ defmodule Worldloom.Loom.SourceEventTest do
         occurred_at: ~U[2026-08-03 12:00:00.000000Z],
         lane: 0.4,
         intensity: 0.6,
-        payload: %{"summary" => "A public signal entered the weave"}
+        payload: valid_payload(source),
+        render_identity: render_identity
       },
       overrides
     )
   end
+
+  defp valid_payload(:bluesky) do
+    %{
+      "summary" => "Public conversation moved through the weave",
+      "window_count" => 1,
+      "window_span_seconds" => 4,
+      "total_actions" => 12,
+      "original_posts" => 4,
+      "replies" => 2,
+      "reposts" => 1,
+      "creates" => 8,
+      "updates" => 3,
+      "deletes" => 1,
+      "truncated" => false
+    }
+  end
+
+  defp valid_payload(:ripe_ris) do
+    %{
+      "summary" => "Public routes shifted through the weave",
+      "window_count" => 1,
+      "window_span_seconds" => 4,
+      "announced" => 31,
+      "withdrawn" => 4,
+      "ipv4" => 28,
+      "ipv6" => 7,
+      "collector_count" => 2,
+      "peer_count" => 18,
+      "truncated" => false
+    }
+  end
+
+  defp valid_payload(:solana) do
+    %{
+      "summary" => "Public computation advanced through the weave",
+      "window_count" => 1,
+      "window_span_seconds" => 4,
+      "slot_count" => 4,
+      "first_slot" => 101,
+      "last_slot" => 105,
+      "gap_count" => 1
+    }
+  end
+
+  defp valid_payload(:drand) do
+    %{"summary" => "drand Quicknet round 42", "round" => 42}
+  end
+
+  defp valid_payload(_source), do: %{"summary" => "A public signal entered the weave"}
 end

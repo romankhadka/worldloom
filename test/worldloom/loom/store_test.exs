@@ -6,7 +6,7 @@ defmodule Worldloom.Loom.StoreTest do
   alias Worldloom.Loom.SourceEvent
   alias Worldloom.Loom.Store
 
-  @live_source_count 3
+  @live_source_count 7
   @contextual_source_count 2
   @snapshot_metadata_select_count 3
   @live_snapshot_select_ceiling @live_source_count + @contextual_source_count +
@@ -144,6 +144,32 @@ defmodule Worldloom.Loom.StoreTest do
     assert event.payload["summary"] == "A visitor illuminated a thread"
     refute inspect(event.payload) =~ "secret-request-nonce"
     assert Repo.all(FeedCheckpoint) == []
+  end
+
+  test "drand render identity remains ephemeral when the event is persisted" do
+    render_identity = String.duplicate("a", 64)
+
+    drand =
+      SourceEvent.new!(%{
+        kind: :randomness,
+        source: :drand,
+        external_id: "drand-round:42",
+        occurred_at: ~U[2026-08-03 12:00:00.000000Z],
+        lane: 0.5,
+        intensity: 0.7,
+        payload: %{"summary" => "drand Quicknet round 42", "round" => 42},
+        render_identity: render_identity
+      })
+
+    assert {:ok, [stored]} =
+             Store.commit_external(
+               [drand],
+               checkpoint("42", %{source: "drand"})
+             )
+
+    refute Map.has_key?(stored.payload, "render_identity")
+    refute Map.has_key?(Map.from_struct(stored), :render_identity)
+    refute inspect(stored) =~ render_identity
   end
 
   test "latest history is ascending and cannot exceed six hundred rows" do
@@ -364,6 +390,11 @@ defmodule Worldloom.Loom.StoreTest do
     [_visitor] =
       insert_stored_events("visitor", [1], fn _index -> ~U[2026-08-08 12:00:50Z] end)
 
+    for source <- ~w(bluesky ripe_ris solana drand) do
+      [_event] =
+        insert_stored_events(source, [1], fn _index -> ~U[2026-08-08 12:00:55Z] end)
+    end
+
     [weather] =
       insert_stored_events("open_meteo", [1], fn _index -> ~U[2026-08-08 13:00:00Z] end)
 
@@ -375,6 +406,11 @@ defmodule Worldloom.Loom.StoreTest do
     assert Enum.count(snapshot.display_events, &(&1.source == "wikimedia")) == 240
     assert Enum.any?(snapshot.display_events, &(&1.source == "usgs"))
     assert Enum.any?(snapshot.display_events, &(&1.source == "visitor"))
+
+    for source <- ~w(bluesky ripe_ris solana drand) do
+      assert Enum.any?(snapshot.display_events, &(&1.source == source))
+    end
+
     assert List.last(stored_wikimedia) in snapshot.display_events
     assert snapshot.ambient.source == "open_meteo"
     refute weather in snapshot.display_events
@@ -626,6 +662,10 @@ defmodule Worldloom.Loom.StoreTest do
             "usgs" -> {"earthquake", stored_external_id("earthquake", index, storage_token)}
             "open_meteo" -> {"weather", stored_external_id("weather", index, storage_token)}
             "visitor" -> {"illuminate", nil}
+            "bluesky" -> {"public_activity", stored_external_id("bluesky", index, storage_token)}
+            "ripe_ris" -> {"route_change", stored_external_id("ripe", index, storage_token)}
+            "solana" -> {"slot", stored_external_id("solana", index, storage_token)}
+            "drand" -> {"randomness", stored_external_id("drand", index, storage_token)}
           end
 
         %{
@@ -636,7 +676,7 @@ defmodule Worldloom.Loom.StoreTest do
             event_occurred_at
             | microsecond: {elem(event_occurred_at.microsecond, 0), 6}
           },
-          render_version: 1,
+          render_version: if(source in ~w(bluesky ripe_ris solana drand), do: 2, else: 1),
           render_seed: index,
           lane: 0.5,
           intensity: 0.5,

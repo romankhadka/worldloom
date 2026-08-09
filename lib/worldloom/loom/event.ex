@@ -4,13 +4,17 @@ defmodule Worldloom.Loom.Event do
   import Ecto.Changeset
 
   @timestamps_opts [type: :utc_datetime_usec]
-  @kinds ~w(wikimedia earthquake weather tug knot illuminate)
-  @sources ~w(wikimedia usgs open_meteo visitor)
+  @kinds ~w(wikimedia earthquake weather tug knot illuminate public_activity route_change slot randomness)
+  @sources ~w(wikimedia usgs open_meteo visitor bluesky ripe_ris solana drand)
   @kind_by_source %{
     "wikimedia" => ["wikimedia"],
     "usgs" => ["earthquake"],
     "open_meteo" => ["weather"],
-    "visitor" => ~w(tug knot illuminate)
+    "visitor" => ~w(tug knot illuminate),
+    "bluesky" => ["public_activity"],
+    "ripe_ris" => ["route_change"],
+    "solana" => ["slot"],
+    "drand" => ["randomness"]
   }
 
   @type t :: %__MODULE__{}
@@ -87,7 +91,7 @@ defmodule Worldloom.Loom.Event do
       {"visitor", external_id} when is_binary(external_id) ->
         add_error(changeset, :external_id, "must be blank for visitor events")
 
-      {source, nil} when source in ["wikimedia", "usgs", "open_meteo"] ->
+      {source, nil} when source in @sources and source != "visitor" ->
         add_error(changeset, :external_id, "can't be blank")
 
       _other ->
