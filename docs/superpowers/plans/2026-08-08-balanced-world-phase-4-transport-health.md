@@ -416,12 +416,12 @@ rtk git commit -m "Track bounded recovery across existing feeds"
 
 ## Phase 4 completion gate
 
-- [ ] Each source process can crash without restarting a sibling; supervision remains `:one_for_one`.
-- [ ] Source-owned Mint WebSocket transports retain peer and hostname verification; untrusted WSS fails closed.
-- [ ] No raw frame, cursor, query, header, body, or detailed transport failure reaches Worldloom logs, telemetry, or health output.
-- [ ] Complete-frame, frames-per-message, process-heap, mailbox, replay, dedupe, distinct-set, counter, and queue bounds are tested.
-- [ ] Ping/pong, close acknowledgement, split upgrade, fragmentation, stale-reference rejection, and reconnect cleanup are tested.
-- [ ] Fair draining prevents one source from monopolizing persistence.
-- [ ] Scheduled pressure reducers are associative; drand never merges.
-- [ ] Health comes from ephemeral connection/contact/activity observations, not immediate checkpoint state.
-- [ ] New transports exist but production enablement remains false.
+- [x] Each source process can crash without restarting a sibling; supervision remains `:one_for_one`.
+- [x] Source-owned Mint WebSocket transports retain peer and hostname verification; untrusted WSS fails closed.
+- [x] No raw frame, cursor, query, header, body, or detailed transport failure reaches Worldloom logs, telemetry, or health output.
+- [x] Complete-frame, frames-per-message, process-heap, mailbox, replay, dedupe, distinct-set, counter, and queue bounds are tested.
+- [x] Ping/pong, close acknowledgement, split upgrade, fragmentation, stale-reference rejection, and reconnect cleanup are tested.
+- [x] Fair draining prevents one source from monopolizing persistence.
+- [x] Scheduled pressure reducers are associative; drand never merges.
+- [x] Health comes from ephemeral connection/contact/activity observations, not immediate checkpoint state.
+- [x] New transports exist but production enablement remains false.
