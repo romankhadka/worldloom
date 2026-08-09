@@ -148,26 +148,25 @@ Update `FeedHealth.project/2` and `HealthMonitor` to use this explicit input con
 FeedHealth.project(
   %{
     observations: %{
-      optional(:wikimedia | :bluesky | :ripe_ris | :solana | :drand) => %{
+      optional(:wikimedia | :bluesky | :ripe_ris | :solana | :drand | :usgs | :open_meteo) => %{
         connection: :connected | :disconnected,
         last_contact_at: DateTime.t() | nil,
         last_activity_at: DateTime.t() | nil
       }
-    },
-    checkpoints: [map()]
+    }
   },
   now
 )
 ```
 
-Registry counters and coarse reasons remain internal and are never part of `FeedHealth` input or public output. `HealthMonitor` loads both inputs, owns the public projection, and broadcasts `{:feed_health, projection}` only when that projection changes. Rules:
+Registry counters and coarse reasons remain internal and are never part of `FeedHealth` input or public output. `HealthMonitor` loads only sanitized observations, owns the public projection, and broadcasts `{:feed_health, projection}` only when that projection changes. Rules:
 
 - a closed socket is `:disconnected` immediately;
 - connected high-cadence feeds become `:quiet` after 20 seconds without valid activity;
 - drand becomes `:stale` after 12 seconds without a new valid round;
 - USGS and Open-Meteo retain their existing thresholds;
 - checkpoints remain durability/replay state only; and
-- public `observed_at` is the last activity time for high-cadence sources and the checkpoint success time for polling sources.
+- public `observed_at` is the last activity time for high-cadence sources and the last durably accepted runtime contact for polling sources.
 
 Wire the existing Wikimedia worker's connection, valid-frame contact, durable activity, retry, and disconnect transitions into `HealthRegistry` in this task. A started stream task is not proof of a connected transport: record `:connected` only when the worker receives a valid SSE event or heartbeat. Record activity only after a non-empty window is durably accepted by Buffer. This prevents today's active source from regressing to public `:disconnected` while Task 7 remains focused on replay and the two polling workers.
 
@@ -390,15 +389,15 @@ rtk git commit -m "Recover bounded drand rounds in order"
 
 ## Task 7: Bring Wikimedia and existing polling feeds into health/replay rules
 
-- [ ] **Step 1: Add recovery and health tests**
+- [x] **Step 1: Add recovery and health tests**
 
 Extend `wikimedia_worker_test.exs`, `earthquake_worker_test.exs`, and `weather_worker_test.exs`. Prove Wikimedia resumes with Last-Event-ID for at most sixty seconds, late recovery rows persist as history-only through the snapshot projection, and the polling workers record lifecycle health without putting checkpoint metadata into public health. Preserve the Wikimedia lifecycle observations introduced in Task 2.
 
-- [ ] **Step 2: Implement source-local backoff and observations**
+- [x] **Step 2: Implement source-local backoff and observations**
 
-Extend Wikimedia recovery observations and update the polling workers to record through `HealthRegistry`. Preserve their independent `Backoff` states. Do not change `/healthz` or turn feed degradation into application unready status.
+Extend Wikimedia recovery observations and update the polling workers to record through `HealthRegistry`. Preserve their independent `Backoff` states. Task 7 completes the health migration by projecting polling freshness from sanitized, durably accepted runtime contact rather than checkpoint contents. Do not change `/healthz` or turn feed degradation into application unready status.
 
-- [ ] **Step 3: Complete transport verification**
+- [x] **Step 3: Complete transport verification**
 
 ```bash
 rtk mix precommit
@@ -408,10 +407,10 @@ rtk git diff --check master...HEAD
 rtk mix hex.audit
 ```
 
-- [ ] **Step 4: Commit existing-feed integration**
+- [x] **Step 4: Commit existing-feed integration**
 
 ```bash
-rtk git add lib/worldloom/signals/wikimedia_worker.ex lib/worldloom/signals/earthquake_worker.ex lib/worldloom/signals/weather_worker.ex test/worldloom/signals/wikimedia_worker_test.exs test/worldloom/signals/earthquake_worker_test.exs test/worldloom/signals/weather_worker_test.exs
+rtk git add docs/data-sources.md docs/operations.md docs/superpowers/plans/2026-08-08-balanced-world-phase-4-transport-health.md lib/worldloom/signals/earthquake_worker.ex lib/worldloom/signals/feed_health.ex lib/worldloom/signals/health_monitor.ex lib/worldloom/signals/weather_worker.ex lib/worldloom/signals/wikimedia_bucket.ex lib/worldloom/signals/wikimedia_worker.ex test/worldloom/signals/earthquake_worker_test.exs test/worldloom/signals/feed_health_test.exs test/worldloom/signals/health_monitor_test.exs test/worldloom/signals/weather_worker_test.exs test/worldloom/signals/wikimedia_worker_test.exs
 rtk git commit -m "Track bounded recovery across existing feeds"
 ```
 

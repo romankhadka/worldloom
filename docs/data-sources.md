@@ -26,6 +26,13 @@ project codes before they enter aggregate state. Worldloom discards usernames, I
 addresses, page titles, comments, revision identifiers, page/server URLs, and the raw
 event before persistence.
 
+On restart, Worldloom sends the durable `Last-Event-ID` only when its completed
+window is no more than sixty seconds old. An older or invalid recovery position is
+discarded, a coarse replay gap is recorded, and the stream resumes at the live edge.
+A recovered window keeps its provider time: if it falls before the current live
+window, it advances durable history without displacing anything visitors currently
+see.
+
 Wikimedia project content has project-specific licensing. Worldloom does not
 reproduce edited page content; it displays an original aggregate derived from public
 activity. Wikimedia and its project names are marks of their respective owners, and
@@ -39,7 +46,10 @@ using the versioned all-earthquakes, past-hour GeoJSON summary feed.
 Each accepted event retains the public USGS identifier, occurrence time, bounded
 magnitude, place label, coordinates, and a generated summary. Source IDs provide
 idempotency when the rolling feed repeats an earthquake. The feed is polled once per
-minute and may revise previously published observations.
+minute and may revise previously published observations. Its ETag and feed metadata
+remain private checkpoint state. Transport, malformed-response, and persistence
+failures use source-local capped backoff; the ordinary one-minute cadence resumes
+only after Buffer durably accepts the contact.
 
 Credit: U.S. Geological Survey. USGS-authored data and information are generally in
 the U.S. public domain; USGS asks reusers to acknowledge it as the source. See the
@@ -56,6 +66,9 @@ Reykjavík, London, Lagos, Nairobi, Cape Town, Mumbai, Singapore, Tokyo, and Syd
 Worldloom combines the observations into one ambient event: UTC observation time,
 temperature range, precipitation coverage, mean wind, day/night ratio, and the fixed
 city labels. It does not store a visitor location or ask Open-Meteo about one.
+Transport, malformed-response, and persistence failures use source-local capped
+backoff; the ordinary ten-minute cadence resumes only after Buffer durably accepts
+the aggregate and checkpoint.
 
 Weather data by [Open-Meteo.com](https://open-meteo.com/), licensed under
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Worldloom transforms and

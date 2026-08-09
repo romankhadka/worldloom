@@ -2,6 +2,9 @@ defmodule Worldloom.Signals.WikimediaWorkerTest do
   use Worldloom.DataCase
 
   alias Worldloom.Loom.FeedCheckpoint
+  alias Worldloom.Loom.LiveProjection
+  alias Worldloom.Loom.SourceEvent
+  alias Worldloom.Loom.Store
   alias Worldloom.Signals.HealthMonitor
   alias Worldloom.Signals.HealthRegistry
   alias Worldloom.Signals.WikimediaWorker
@@ -21,7 +24,6 @@ defmodule Worldloom.Signals.WikimediaWorkerTest do
       HealthMonitor.start_link(
         name: monitor_name,
         registry: registry,
-        loader: fn -> [] end,
         broadcaster: fn health -> send(test_process, {:health, health}) end,
         clock: clock_reader,
         timer: fn _process, _message, _delay -> make_ref() end
@@ -125,6 +127,260 @@ defmodule Worldloom.Signals.WikimediaWorkerTest do
 
     assert is_integer(duration) and duration >= 0
     assert is_integer(attempt) and attempt >= 0
+  end
+
+  test "restores Last-Event-ID at the sixty-second replay boundary" do
+    insert_checkpoint(%{"last_event_at" => "2026-08-03T12:00:00Z"})
+    test_process = self()
+
+    stream = fn _url, cursor, _callback ->
+      send(test_process, {:replay_cursor, cursor})
+
+      receive do
+        :finish_replay_boundary -> {:error, :disconnected}
+      end
+    end
+
+    {_worker, _task_supervisor} =
+      start_worker(stream: stream, clock: fn -> ~U[2026-08-03 12:01:00Z] end)
+
+    assert_receive {:replay_cursor, "saved-cursor"}, 500
+  end
+
+  test "moves to the live edge and reports a replay gap beyond sixty seconds" do
+    marker = "private-replay-cursor"
+    insert_checkpoint(%{"last_event_at" => "2026-08-03T11:59:59Z"}, marker)
+    test_process = self()
+    now = ~U[2026-08-03 12:01:00Z]
+    registry = start_health_registry(fn -> now end)
+
+    stream = fn _url, cursor, _callback ->
+      send(test_process, {:live_edge_cursor, cursor})
+
+      receive do
+        :finish_stale_replay -> {:error, :disconnected}
+      end
+    end
+
+    {worker, _task_supervisor} =
+      start_worker(stream: stream, clock: fn -> now end, health_registry: registry)
+
+    assert_receive {:live_edge_cursor, nil}, 500
+    state = :sys.get_state(worker)
+    assert state.cursor == nil
+    assert state.latest_cursor == nil
+    refute inspect(state) =~ marker
+
+    observation = HealthRegistry.current(registry).wikimedia
+    assert observation.drops == 1
+    assert observation.last_reason == :replay
+  end
+
+  test "drops a cursor when a same-process reconnect crosses the replay horizon" do
+    insert_checkpoint(%{"last_event_at" => "2026-08-03T12:00:00Z"})
+    test_process = self()
+    clock = start_agent(fn -> ~U[2026-08-03 12:00:01Z] end)
+    connections = start_agent(fn -> 0 end)
+    registry = start_health_registry(fn -> Agent.get(clock, & &1) end)
+
+    stream = fn _url, cursor, _callback ->
+      connection = Agent.get_and_update(connections, fn count -> {count, count + 1} end)
+      send(test_process, {:reconnect_cursor, connection, cursor})
+
+      if connection == 0 do
+        {:error, :disconnected}
+      else
+        receive do
+          :finish_delayed_reconnect -> {:error, :disconnected}
+        end
+      end
+    end
+
+    {worker, _task_supervisor} =
+      start_worker(
+        stream: stream,
+        clock: fn -> Agent.get(clock, & &1) end,
+        health_registry: registry
+      )
+
+    assert_receive {:reconnect_cursor, 0, "saved-cursor"}, 500
+    assert_receive {:timer, ^worker, :connect, 1_000}, 500
+
+    Agent.update(clock, fn _time -> ~U[2026-08-03 12:01:01Z] end)
+    send(worker, :connect)
+
+    assert_receive {:reconnect_cursor, 1, nil}, 500
+    assert :sys.get_state(worker).cursor == nil
+
+    observation = HealthRegistry.current(registry).wikimedia
+    assert observation.drops == 1
+    assert observation.last_reason == :replay
+  end
+
+  test "consumes multiple bounded replay windows and counts only durable recovery" do
+    [first | _remaining] = read_frames()
+    now = ~U[2026-08-03 12:00:12Z]
+    clock = start_agent(fn -> now end)
+    registry = start_health_registry(fn -> Agent.get(clock, & &1) end)
+    test_process = self()
+    insert_checkpoint(%{"last_event_at" => "2026-08-03T12:00:00Z"}, "replay-cursor")
+
+    replay_frames =
+      for {second, index} <- Enum.with_index([0, 4, 8, 12], 1) do
+        occurred_at = DateTime.add(@window_start, second, :second)
+        frame("replay-#{index}", put_in(first, ["meta", "dt"], DateTime.to_iso8601(occurred_at)))
+      end
+
+    stream = fn _url, cursor, callback ->
+      send(test_process, {:multi_replay_started, cursor})
+      Enum.each(replay_frames, callback)
+      send(test_process, :multi_replay_finished)
+
+      receive do
+        :finish_multi_replay -> {:error, :disconnected}
+      end
+    end
+
+    buffer = fn events, checkpoint ->
+      send(test_process, {:replay_submission, events, checkpoint})
+      :ok
+    end
+
+    {worker, _task_supervisor} =
+      start_worker(
+        stream: stream,
+        buffer: buffer,
+        clock: fn -> Agent.get(clock, & &1) end,
+        health_registry: registry
+      )
+
+    assert_receive {:multi_replay_started, "replay-cursor"}, 500
+    assert_receive :multi_replay_finished, 500
+
+    Agent.update(clock, fn _time -> ~U[2026-08-03 12:00:17Z] end)
+    send(worker, :flush_bucket)
+
+    recovered_windows =
+      for _index <- 1..4 do
+        assert_receive {:replay_submission, [event], _checkpoint}, 500
+        event
+      end
+
+    assert Enum.map(recovered_windows, & &1.occurred_at) == [
+             ~U[2026-08-03 12:00:00.000000Z],
+             ~U[2026-08-03 12:00:04.000000Z],
+             ~U[2026-08-03 12:00:08.000000Z],
+             ~U[2026-08-03 12:00:12.000000Z]
+           ]
+
+    state = :sys.get_state(worker)
+    assert state.replay_pending == false
+
+    observation = HealthRegistry.current(registry).wikimedia
+    assert observation.recovered_windows == 3
+    assert observation.last_activity_at == ~U[2026-08-03 12:00:17Z]
+  end
+
+  test "persists a bounded late replay as history-only without moving the live window" do
+    [first | _remaining] = read_frames()
+    now = ~U[2026-08-03 12:01:03Z]
+    replay_time = ~U[2026-08-03 12:00:03Z]
+
+    anchor =
+      SourceEvent.new!(%{
+        kind: :earthquake,
+        source: :usgs,
+        external_id: "recovery-live-anchor",
+        occurred_at: now,
+        lane: 0.5,
+        intensity: 0.5,
+        payload: %{"summary" => "A current public anchor held the live window"}
+      })
+
+    assert {:ok, [_stored_anchor]} =
+             Store.commit_external(
+               [anchor],
+               %{
+                 source: "usgs",
+                 cursor: nil,
+                 etag: nil,
+                 last_successful_at: now,
+                 metadata: %{}
+               }
+             )
+
+    insert_checkpoint(%{"last_event_at" => DateTime.to_iso8601(replay_time)}, "replay-cursor")
+
+    stored_anchor = Store.latest() |> List.last()
+    initial_snapshot = LiveProjection.build([stored_anchor], nil, stored_anchor.id)
+
+    test_process = self()
+    clock = start_agent(fn -> now end)
+    registry = start_health_registry(fn -> Agent.get(clock, & &1) end)
+
+    replay_frame =
+      frame("recovered-cursor", put_in(first, ["meta", "dt"], DateTime.to_iso8601(replay_time)))
+
+    stream = fn _url, cursor, callback ->
+      send(test_process, {:history_replay_started, cursor})
+      callback.(replay_frame)
+      send(test_process, :history_replay_accepted)
+
+      receive do
+        :finish_history_replay -> {:error, :disconnected}
+      end
+    end
+
+    buffer = fn events, checkpoint ->
+      case Store.commit_external(events, checkpoint) do
+        {:ok, inserted} ->
+          send(test_process, {:history_replay_persisted, inserted})
+          :ok
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+
+    {worker, _task_supervisor} =
+      start_worker(
+        stream: stream,
+        buffer: buffer,
+        clock: fn -> Agent.get(clock, & &1) end,
+        health_registry: registry
+      )
+
+    assert_receive {:history_replay_started, "replay-cursor"}, 500
+    assert_receive :history_replay_accepted, 500
+    Agent.update(clock, fn _time -> ~U[2026-08-03 12:01:05Z] end)
+    send(worker, :flush_bucket)
+
+    assert_receive {:history_replay_persisted, [recovered]}, 500
+    :sys.get_state(worker)
+
+    observation = HealthRegistry.current(registry).wikimedia
+    assert observation.connection == :connected
+    assert observation.last_contact_at == ~U[2026-08-03 12:01:05Z]
+    assert observation.last_activity_at == ~U[2026-08-03 12:01:05Z]
+    assert observation.recovered_windows == 1
+
+    recovered_snapshot =
+      LiveProjection.build(
+        [stored_anchor, recovered],
+        nil,
+        recovered.id,
+        initial_snapshot.window_end
+      )
+
+    assert recovered.occurred_at == ~U[2026-08-03 12:00:00.000000Z]
+    assert recovered_snapshot.commit_watermark == recovered.id
+    assert recovered_snapshot.window_end == initial_snapshot.window_end
+
+    assert Enum.map(recovered_snapshot.display_events, & &1.id) ==
+             Enum.map(initial_snapshot.display_events, & &1.id)
+
+    refute recovered in recovered_snapshot.display_events
+    refute recovered in recovered_snapshot.memory_events
   end
 
   test "accepts out-of-order frames in the grace period and persists windows once in order" do
@@ -574,14 +830,17 @@ defmodule Worldloom.Signals.WikimediaWorkerTest do
     {worker, task_supervisor}
   end
 
-  defp insert_checkpoint do
+  defp insert_checkpoint(
+         metadata \\ %{"last_event_at" => "2026-08-03T12:00:00Z"},
+         cursor \\ "saved-cursor"
+       ) do
     %FeedCheckpoint{}
     |> FeedCheckpoint.changeset(%{
       source: "wikimedia",
-      cursor: "saved-cursor",
+      cursor: cursor,
       etag: nil,
       last_successful_at: ~U[2026-08-03 11:00:00Z],
-      metadata: %{}
+      metadata: metadata
     })
     |> Repo.insert!()
   end

@@ -7,12 +7,10 @@ defmodule Worldloom.Signals.HealthMonitorTest do
 
   test "caches safe health, broadcasts only changes, and refreshes transitions immediately" do
     test_process = self()
-    checkpoints = start_supervised!({Agent, fn -> [] end}, id: :checkpoints)
 
     observations =
       start_supervised!({Agent, fn -> empty_observations() end}, id: :observations)
 
-    loader = fn -> Agent.get(checkpoints, & &1) end
     observation_loader = fn -> Agent.get(observations, & &1) end
     broadcaster = fn health -> send(test_process, {:broadcast, health}) end
 
@@ -24,7 +22,6 @@ defmodule Worldloom.Signals.HealthMonitorTest do
     {:ok, monitor} =
       HealthMonitor.start_link(
         name: nil,
-        loader: loader,
         observation_loader: observation_loader,
         broadcaster: broadcaster,
         clock: fn -> @now end,
@@ -70,28 +67,19 @@ defmodule Worldloom.Signals.HealthMonitorTest do
     refute_receive {:timer, ^monitor, :refresh, 15_000}, 100
   end
 
-  test "combines polling checkpoints with registry observations" do
+  test "projects every source from sanitized observations rather than checkpoint liveness" do
     test_process = self()
 
     observations =
       empty_observations()
       |> put_in([:drand, :last_activity_at], DateTime.add(@now, -12, :second))
       |> put_in([:drand, :last_contact_at], DateTime.add(@now, -12, :second))
-
-    checkpoints = [
-      %{
-        source: "open_meteo",
-        last_successful_at: @now,
-        metadata: %{},
-        cursor: nil,
-        etag: nil
-      }
-    ]
+      |> put_in([:usgs, :last_contact_at], @now)
+      |> put_in([:open_meteo, :last_contact_at], DateTime.add(@now, -1_801, :second))
 
     {:ok, monitor} =
       HealthMonitor.start_link(
         name: nil,
-        loader: fn -> checkpoints end,
         observation_loader: fn -> observations end,
         broadcaster: fn health -> send(test_process, {:broadcast, health}) end,
         clock: fn -> @now end,
@@ -100,7 +88,13 @@ defmodule Worldloom.Signals.HealthMonitorTest do
 
     assert_receive {:broadcast, health}, 500
     assert health.drand == %{state: :live, observed_at: DateTime.add(@now, -12, :second)}
-    assert health.open_meteo == %{state: :live, observed_at: @now}
+    assert health.usgs == %{state: :live, observed_at: @now}
+
+    assert health.open_meteo == %{
+             state: :stale,
+             observed_at: DateTime.add(@now, -1_801, :second)
+           }
+
     assert HealthMonitor.current(monitor) == health
   end
 
@@ -127,7 +121,6 @@ defmodule Worldloom.Signals.HealthMonitorTest do
     {:ok, _monitor} =
       HealthMonitor.start_link(
         name: nil,
-        loader: fn -> [] end,
         observation_loader: fn -> observations end,
         broadcaster: fn _health -> :ok end,
         clock: fn -> @now end,

@@ -46,9 +46,16 @@ queue contents, process identifiers, or detailed errors.
 
 Feed health is a degraded-mode signal, not an application-health failure:
 
-- Wikimedia is `quiet` after 60 seconds without accepted activity.
+- Wikimedia and any enabled high-cadence WebSocket source are `quiet` after 20
+  seconds without durably accepted activity while connected.
+- A closed streaming transport becomes `disconnected` immediately.
+- An enabled drand feed is `stale` after 12 seconds without a durably accepted round.
 - USGS is `quiet` after three minutes without successful contact.
 - Open-Meteo is `stale` after 30 minutes and the last ambient state remains visible.
+
+These public states use only sanitized runtime connection, contact, and committed-
+activity times. Database checkpoints remain private recovery positions and do not
+make a currently unobserved source appear live.
 
 One source can be unavailable while the other sources, visitor gestures, archive, and
 health endpoint continue.
@@ -94,9 +101,11 @@ successful-contact timestamp before closing the incident.
 
 ### Queue pressure
 
-The external buffer is capped at 16 entries and merges compatible source events under
-pressure. Check commit latency and database-pool telemetry before changing that bound.
-Never solve pressure by making the queue unbounded.
+The external buffer is capped at 64 entries globally, 16 entries per ordinary
+source, and 20 ordered entries for drand. It drains ready source partitions fairly
+and merges compatible summaries only within one source under pressure. Check commit
+latency and database-pool telemetry before changing those bounds. Never solve
+pressure by making a queue unbounded.
 
 ## Database review and backups
 

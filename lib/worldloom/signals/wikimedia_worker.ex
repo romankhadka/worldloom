@@ -13,6 +13,8 @@ defmodule Worldloom.Signals.WikimediaWorker do
 
   @source "wikimedia"
   @flush_interval 1_000
+  @bucket_seconds 4
+  @maximum_replay_seconds 60
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(options \\ []) do
@@ -25,14 +27,19 @@ defmodule Worldloom.Signals.WikimediaWorker do
     now = Keyword.get(options, :clock, &DateTime.utc_now/0).()
     checkpoint = Repo.get(FeedCheckpoint, @source)
 
+    {cursor, bucket_time, last_event_at, cursor_observed_at, replay_gap?} =
+      recovery_state(checkpoint, now)
+
     state = %{
       url: Keyword.fetch!(options, :url),
-      cursor: checkpoint && checkpoint.cursor,
-      bucket: WikimediaBucket.new(DateTime.add(now, -1, :second)),
+      cursor: cursor,
+      bucket: WikimediaBucket.new(bucket_time),
       next_bucket: nil,
-      latest_cursor: checkpoint && checkpoint.cursor,
+      latest_cursor: cursor,
       cursor_before_lookahead: nil,
-      last_event_at: checkpoint && checkpoint.metadata["last_event_at"],
+      last_event_at: last_event_at,
+      cursor_observed_at: cursor_observed_at,
+      replay_pending: cursor != nil,
       attempt: 0,
       stream_pid: nil,
       stream_monitor: nil,
@@ -45,6 +52,8 @@ defmodule Worldloom.Signals.WikimediaWorker do
       timer: Keyword.get(options, :timer, &Process.send_after/3)
     }
 
+    state = if replay_gap?, do: record_health(state, {:drop, :replay}), else: state
+
     state.timer.(self(), :flush_bucket, @flush_interval)
     send(self(), :connect)
     {:ok, state}
@@ -53,10 +62,11 @@ defmodule Worldloom.Signals.WikimediaWorker do
   @impl true
   def handle_info(:connect, %{stream_pid: nil} = state) do
     worker = self()
+    {state, replay_cursor} = prepare_replay(state, state.clock.())
 
     case Task.Supervisor.start_child(state.task_supervisor, fn ->
            stream_result =
-             state.stream.(state.url, state.cursor, fn frame ->
+             state.stream.(state.url, replay_cursor, fn frame ->
                case GenServer.call(worker, {:frame, frame}, :infinity) do
                  :ok -> :ok
                  {:error, reason} -> exit({:durability_failure, reason})
@@ -96,7 +106,7 @@ defmodule Worldloom.Signals.WikimediaWorker do
     now = state.clock.()
 
     updated_state =
-      case close_elapsed_buckets(state, now) do
+      case close_buckets(state, now) do
         {:ok, closed_state, progress?} -> maybe_reset_attempt(closed_state, progress?)
         {:error, _reason, failed_state, progress?} -> maybe_reset_attempt(failed_state, progress?)
       end
@@ -106,6 +116,17 @@ defmodule Worldloom.Signals.WikimediaWorker do
   end
 
   @impl true
+  def handle_call({:frame, frame}, _from, %{replay_pending: true} = state) do
+    case accept_frame(state, frame) do
+      {:accepted, accepted_state} ->
+        replay_state = maybe_finish_replay(accepted_state, accepted_state.clock.())
+        reply_to_frame({:accepted, replay_state}, false)
+
+      frame_outcome ->
+        reply_to_frame(frame_outcome, false)
+    end
+  end
+
   def handle_call({:frame, frame}, _from, state) do
     case close_elapsed_buckets(state, state.clock.()) do
       {:ok, closed_state, progress?} ->
@@ -138,12 +159,15 @@ defmodule Worldloom.Signals.WikimediaWorker do
   defp accept_for_target(state, target, frame) do
     case WikimediaBucket.add(target, frame) do
       {:ok, bucket} ->
+        bucket = maybe_mark_recovered(bucket, state, frame)
         {:accepted, put_target_bucket(state, target, bucket) |> observe_cursor(frame[:id])}
 
       {:heartbeat, bucket} ->
         {:accepted, put_target_bucket(state, target, bucket) |> observe_cursor(frame[:id])}
 
       {:future, current_bucket, future_bucket} ->
+        future_bucket = maybe_mark_recovered(future_bucket, state, frame)
+
         if target == state.bucket and state.next_bucket do
           accept_for_target(state, state.next_bucket, frame)
         else
@@ -209,6 +233,58 @@ defmodule Worldloom.Signals.WikimediaWorker do
 
   defp observe_cursor(state, _cursor), do: state
 
+  defp maybe_mark_recovered(bucket, %{replay_pending: true}, %{data: data})
+       when is_binary(data) and data != "",
+       do: %{bucket | recovered: true}
+
+  defp maybe_mark_recovered(bucket, _state, _frame), do: bucket
+
+  defp close_buckets(%{replay_pending: true} = state, now),
+    do: close_replay_bucket(state, now)
+
+  defp close_buckets(state, now), do: close_elapsed_buckets(state, now)
+
+  defp close_replay_bucket(state, now) do
+    if WikimediaBucket.elapsed?(state.bucket, now) do
+      closed_bucket = state.bucket
+
+      case persist_bucket(state, closed_bucket) do
+        {:ok, persisted_state, progress?} ->
+          {:ok, advance_replay_bucket(persisted_state, closed_bucket, now), progress?}
+
+        {:error, reason} ->
+          {:error, reason, state, false}
+      end
+    else
+      {:ok, %{state | replay_pending: false}, false}
+    end
+  end
+
+  defp advance_replay_bucket(%{next_bucket: nil} = state, closed_bucket, now) do
+    next_window = DateTime.add(closed_bucket.window_start, @bucket_seconds, :second)
+
+    state
+    |> Map.put(:bucket, WikimediaBucket.new(next_window))
+    |> Map.put(:cursor_before_lookahead, nil)
+    |> maybe_finish_replay(now)
+  end
+
+  defp advance_replay_bucket(%{next_bucket: next_bucket} = state, _closed_bucket, now) do
+    state
+    |> Map.put(:bucket, next_bucket)
+    |> Map.put(:next_bucket, nil)
+    |> Map.put(:cursor_before_lookahead, nil)
+    |> maybe_finish_replay(now)
+  end
+
+  defp maybe_finish_replay(state, now) do
+    newest_bucket = state.next_bucket || state.bucket
+
+    if WikimediaBucket.elapsed?(newest_bucket, now),
+      do: state,
+      else: %{state | replay_pending: false}
+  end
+
   defp close_elapsed_buckets(state, now) do
     if WikimediaBucket.elapsed?(state.bucket, now) do
       case persist_bucket(state, state.bucket) do
@@ -268,7 +344,12 @@ defmodule Worldloom.Signals.WikimediaWorker do
             do: record_health(persisted_state, {:activity, count}),
             else: persisted_state
 
-        {:ok, active_state, true}
+        recovery_state =
+          if count > 0 and bucket.recovered,
+            do: record_health(active_state, {:recovery, 1}),
+            else: active_state
+
+        {:ok, recovery_state, true}
 
       {:error, _reason} = failure ->
         record_feed(:failure, System.monotonic_time() - started_at, 0, state.attempt)
@@ -292,7 +373,9 @@ defmodule Worldloom.Signals.WikimediaWorker do
            %{
              state
              | cursor: checkpoint_cursor,
-               last_event_at: last_event_at
+               last_event_at: last_event_at,
+               cursor_observed_at:
+                 next_cursor_observed_at(state, checkpoint_cursor, bucket.window_start)
            }, 1}
         end
 
@@ -316,7 +399,8 @@ defmodule Worldloom.Signals.WikimediaWorker do
         {:ok,
          %{
            state
-           | cursor: checkpoint_cursor
+           | cursor: checkpoint_cursor,
+             cursor_observed_at: next_cursor_observed_at(state, checkpoint_cursor, successful_at)
          }, 0}
 
       {:error, reason} ->
@@ -328,6 +412,12 @@ defmodule Worldloom.Signals.WikimediaWorker do
     do: state.latest_cursor || state.cursor
 
   defp durable_cursor(state), do: state.cursor_before_lookahead || state.cursor
+
+  defp next_cursor_observed_at(state, cursor, observed_at)
+       when is_binary(cursor) and cursor != "" and cursor != state.cursor,
+       do: observed_at
+
+  defp next_cursor_observed_at(state, _cursor, _observed_at), do: state.cursor_observed_at
 
   defp maybe_reset_attempt(state, true), do: %{state | attempt: 0}
   defp maybe_reset_attempt(state, false), do: state
@@ -341,6 +431,63 @@ defmodule Worldloom.Signals.WikimediaWorker do
       metadata: %{"last_event_at" => last_event_at}
     }
   end
+
+  defp recovery_state(nil, now), do: {nil, DateTime.add(now, -1, :second), nil, nil, false}
+
+  defp recovery_state(%FeedCheckpoint{} = checkpoint, now) do
+    encoded_last_event_at = checkpoint.metadata["last_event_at"]
+
+    with cursor when is_binary(cursor) and cursor != "" <- checkpoint.cursor,
+         {:ok, last_event_at, _offset} when is_binary(encoded_last_event_at) <-
+           DateTime.from_iso8601(encoded_last_event_at),
+         {:ok, utc_last_event_at} <- DateTime.shift_zone(last_event_at, "Etc/UTC"),
+         true <- within_replay_horizon?(utc_last_event_at, now) do
+      {cursor, utc_last_event_at, DateTime.to_iso8601(utc_last_event_at), utc_last_event_at,
+       false}
+    else
+      _invalid ->
+        replay_gap? = is_binary(checkpoint.cursor) and checkpoint.cursor != ""
+        {nil, DateTime.add(now, -1, :second), nil, nil, replay_gap?}
+    end
+  end
+
+  defp within_replay_horizon?(%DateTime{} = last_event_at, now) do
+    horizon_start = DateTime.add(now, -@maximum_replay_seconds, :second)
+
+    DateTime.compare(last_event_at, now) in [:lt, :eq] and
+      DateTime.compare(last_event_at, horizon_start) in [:gt, :eq]
+  end
+
+  defp within_replay_horizon?(_last_event_at, _now), do: false
+
+  defp prepare_replay(%{cursor: cursor} = state, now)
+       when is_binary(cursor) and cursor != "" do
+    if within_replay_horizon?(state.cursor_observed_at, now) do
+      replay_state = %{
+        state
+        | bucket: WikimediaBucket.new(state.cursor_observed_at),
+          next_bucket: nil,
+          latest_cursor: cursor,
+          cursor_before_lookahead: nil,
+          replay_pending: true
+      }
+
+      {replay_state, cursor}
+    else
+      discarded_state =
+        state
+        |> Map.put(:cursor, nil)
+        |> Map.put(:latest_cursor, nil)
+        |> Map.put(:cursor_before_lookahead, nil)
+        |> Map.put(:cursor_observed_at, nil)
+        |> Map.put(:replay_pending, false)
+        |> record_health({:drop, :replay})
+
+      {discarded_state, nil}
+    end
+  end
+
+  defp prepare_replay(state, _now), do: {%{state | replay_pending: false}, nil}
 
   defp schedule_reconnect(state) do
     delay = Backoff.delay(state.attempt, state.random.())

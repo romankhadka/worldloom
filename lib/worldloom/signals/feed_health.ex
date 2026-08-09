@@ -11,10 +11,10 @@ defmodule Worldloom.Signals.FeedHealth do
           optional(:last_contact_at) => DateTime.t() | nil,
           optional(:last_activity_at) => DateTime.t() | nil
         }
-  @type observed_source :: :wikimedia | :bluesky | :ripe_ris | :solana | :drand
+  @type observed_source ::
+          :wikimedia | :bluesky | :ripe_ris | :solana | :drand | :usgs | :open_meteo
   @type inputs :: %{
-          observations: %{optional(observed_source()) => observation()},
-          checkpoints: [map()]
+          observations: %{optional(observed_source()) => observation()}
         }
   @type projection :: %{
           wikimedia: source_health(),
@@ -27,25 +27,15 @@ defmodule Worldloom.Signals.FeedHealth do
         }
 
   @spec project(inputs(), DateTime.t()) :: projection()
-  def project(%{observations: observations, checkpoints: checkpoints}, %DateTime{} = now)
-      when is_map(observations) and is_list(checkpoints) do
-    checkpoints_by_source =
-      Map.new(checkpoints, fn checkpoint -> {field(checkpoint, :source), checkpoint} end)
-
-    usgs_observed_at =
-      checkpoints_by_source |> Map.get("usgs") |> field(:last_successful_at)
-
-    weather_observed_at =
-      checkpoints_by_source |> Map.get("open_meteo") |> field(:last_successful_at)
-
+  def project(%{observations: observations}, %DateTime{} = now) when is_map(observations) do
     %{
       wikimedia: stream_health(observations, :wikimedia, now),
       bluesky: stream_health(observations, :bluesky, now),
       ripe_ris: stream_health(observations, :ripe_ris, now),
       solana: stream_health(observations, :solana, now),
       drand: drand_health(observations, now),
-      usgs: freshness(usgs_observed_at, now, @usgs_live_seconds, :live, :quiet),
-      open_meteo: freshness(weather_observed_at, now, @weather_live_seconds, :live, :stale)
+      usgs: polling_health(observations, :usgs, now, @usgs_live_seconds, :quiet),
+      open_meteo: polling_health(observations, :open_meteo, now, @weather_live_seconds, :stale)
     }
   end
 
@@ -63,6 +53,11 @@ defmodule Worldloom.Signals.FeedHealth do
   defp drand_health(observations, now) do
     activity_at = observations |> Map.get(:drand, %{}) |> field(:last_activity_at)
     freshness(activity_at, now, @drand_live_seconds, :live, :stale)
+  end
+
+  defp polling_health(observations, source, now, threshold, expired_state) do
+    contact_at = observations |> Map.get(source, %{}) |> field(:last_contact_at)
+    freshness(contact_at, now, threshold, :live, expired_state)
   end
 
   defp freshness(%DateTime{} = observed_at, now, threshold, fresh_state, expired_state) do

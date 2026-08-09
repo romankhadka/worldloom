@@ -1,6 +1,8 @@
 defmodule Worldloom.Signals.WeatherWorkerTest do
   use Worldloom.DataCase
 
+  alias Worldloom.Signals.FeedHealth
+  alias Worldloom.Signals.HealthRegistry
   alias Worldloom.Signals.WeatherWorker
 
   @fixture "test/support/fixtures/feeds/open_meteo.json"
@@ -11,6 +13,7 @@ defmodule Worldloom.Signals.WeatherWorkerTest do
     test_process = self()
     body = @fixture |> File.read!() |> Jason.decode!()
     twelve_responses = Stream.cycle(body) |> Enum.take(12)
+    registry = start_health_registry()
 
     client = fn url, options ->
       send(test_process, {:request, url, options})
@@ -22,7 +25,7 @@ defmodule Worldloom.Signals.WeatherWorkerTest do
       :ok
     end
 
-    worker = start_worker(client: client, buffer: buffer)
+    worker = start_worker(client: client, buffer: buffer, health_registry: registry)
 
     assert_receive {:request, "https://example.test/weather", options}, 500
     assert options[:params][:timezone] == "UTC"
@@ -58,6 +61,32 @@ defmodule Worldloom.Signals.WeatherWorkerTest do
                    500
 
     assert is_integer(duration) and duration >= 0
+
+    observation = HealthRegistry.current(registry).open_meteo
+    assert observation.connection == :connected
+    assert observation.last_contact_at == @now
+    assert observation.last_activity_at == @now
+
+    marker = "private-weather-checkpoint-marker"
+
+    projection =
+      FeedHealth.project(
+        %{
+          observations: HealthRegistry.current(registry),
+          checkpoints: [
+            %{
+              checkpoint
+              | cursor: marker,
+                last_successful_at: DateTime.add(@now, -60, :minute),
+                metadata: %{"private" => marker}
+            }
+          ]
+        },
+        @now
+      )
+
+    assert projection.open_meteo == %{state: :live, observed_at: @now}
+    refute inspect(projection) =~ marker
   end
 
   test "malformed weather never reaches the buffer" do
@@ -68,13 +97,78 @@ defmodule Worldloom.Signals.WeatherWorkerTest do
     worker = start_worker(client: client, buffer: buffer)
 
     refute_receive :unexpected_submission, 100
-    assert_receive {:timer, ^worker, :poll, 600_000}, 500
+    assert_receive {:timer, ^worker, :poll, 1_000}, 500
 
     assert_receive {:feed_telemetry, %{count: 0, duration: duration},
                     %{source: :open_meteo, status: :failure, attempt: 0}},
                    500
 
     assert is_integer(duration) and duration >= 0
+  end
+
+  test "uses independent capped backoff and returns to the configured cadence after durability" do
+    test_process = self()
+    attempts = start_agent(fn -> 0 end)
+    submissions = start_agent(fn -> 0 end)
+    registry = start_health_registry()
+    body = @fixture |> File.read!() |> Jason.decode!()
+    twelve_responses = Stream.cycle(body) |> Enum.take(12)
+    sibling = start_supervised!({Task, fn -> Process.sleep(:infinity) end})
+
+    client = fn _url, _options ->
+      attempt = Agent.get_and_update(attempts, fn count -> {count, count + 1} end)
+
+      if attempt < 2 do
+        {:error, :unavailable}
+      else
+        {:ok, %{status: 200, body: twelve_responses, etag: nil}}
+      end
+    end
+
+    buffer = fn events, checkpoint ->
+      submission = Agent.get_and_update(submissions, fn count -> {count, count + 1} end)
+      send(test_process, {:weather_attempt, submission, events, checkpoint})
+      if submission == 0, do: {:error, :database_down}, else: :ok
+    end
+
+    worker =
+      start_worker(
+        client: client,
+        buffer: buffer,
+        health_registry: registry,
+        random: fn -> 0.5 end
+      )
+
+    assert_receive {:timer, ^worker, :poll, 1_000}, 500
+    send(worker, :poll)
+    assert_receive {:timer, ^worker, :poll, 2_000}, 500
+    send(worker, :poll)
+
+    assert_receive {:weather_attempt, 0, [_failed_event], failed_checkpoint}, 500
+    assert failed_checkpoint.source == "open_meteo"
+    assert_receive {:timer, ^worker, :poll, 4_000}, 500
+
+    failed_observation = HealthRegistry.current(registry).open_meteo
+    assert failed_observation.retries == 3
+    assert failed_observation.last_reason == :persistence
+    assert failed_observation.last_contact_at == nil
+    assert failed_observation.last_activity_at == nil
+
+    send(worker, :poll)
+    assert_receive {:weather_attempt, 1, [event], checkpoint}, 500
+    assert event.source == :open_meteo
+    assert checkpoint.source == "open_meteo"
+    assert_receive {:timer, ^worker, :poll, 600_000}, 500
+
+    assert :sys.get_state(worker).attempt == 0
+    assert Process.alive?(sibling)
+
+    observation = HealthRegistry.current(registry).open_meteo
+    assert observation.retries == 3
+    assert observation.last_reason == :persistence
+    assert observation.connection == :connected
+    assert observation.last_contact_at == @now
+    assert observation.last_activity_at == @now
   end
 
   defp attach_feed_telemetry do
@@ -108,13 +202,28 @@ defmodule Worldloom.Signals.WeatherWorkerTest do
           url: "https://example.test/weather",
           interval_ms: 600_000,
           clock: fn -> @now end,
+          random: fn -> 0.5 end,
           timer: timer
         ],
         overrides
       )
 
+    options =
+      Keyword.put_new_lazy(options, :health_registry, fn -> start_health_registry() end)
+
     {:ok, worker} = WeatherWorker.start_link(options)
     on_exit(fn -> if Process.alive?(worker), do: GenServer.stop(worker) end)
     worker
+  end
+
+  defp start_agent(initializer) do
+    start_supervised!(%{id: make_ref(), start: {Agent, :start_link, [initializer]}})
+  end
+
+  defp start_health_registry do
+    start_supervised!(%{
+      id: make_ref(),
+      start: {HealthRegistry, :start_link, [[name: nil, monitor: nil, clock: fn -> @now end]]}
+    })
   end
 end

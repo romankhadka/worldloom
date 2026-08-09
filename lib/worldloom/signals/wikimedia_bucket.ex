@@ -11,7 +11,8 @@ defmodule Worldloom.Signals.WikimediaBucket do
             total_absolute_byte_delta: 0,
             language_buckets: @empty_language_buckets,
             edit_types: @empty_edit_types,
-            truncated: false
+            truncated: false,
+            recovered: false
 
   @type t :: %__MODULE__{
           window_start: DateTime.t(),
@@ -20,7 +21,8 @@ defmodule Worldloom.Signals.WikimediaBucket do
           total_absolute_byte_delta: non_neg_integer(),
           language_buckets: %{String.t() => non_neg_integer()},
           edit_types: %{String.t() => non_neg_integer()},
-          truncated: boolean()
+          truncated: boolean(),
+          recovered: boolean()
         }
 
   @window_seconds 4

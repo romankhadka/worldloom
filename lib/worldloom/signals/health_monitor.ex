@@ -1,12 +1,10 @@
 defmodule Worldloom.Signals.HealthMonitor do
   use GenServer
 
-  alias Worldloom.Loom.FeedCheckpoint
-  alias Worldloom.Repo
   alias Worldloom.Signals.FeedHealth
   alias Worldloom.Signals.HealthRegistry
 
-  @observed_sources [:wikimedia, :bluesky, :ripe_ris, :solana, :drand]
+  @observed_sources [:wikimedia, :bluesky, :ripe_ris, :solana, :drand, :usgs, :open_meteo]
   @refresh_interval 15_000
   @topic "signals:health"
 
@@ -34,7 +32,6 @@ defmodule Worldloom.Signals.HealthMonitor do
       enabled: Keyword.get(options, :enabled, true),
       health: initial_health(observation_loader, clock),
       broadcasted?: false,
-      loader: Keyword.get(options, :loader, &load_checkpoints/0),
       observation_loader: observation_loader,
       broadcaster: Keyword.get(options, :broadcaster, &broadcast/1),
       clock: clock,
@@ -61,8 +58,7 @@ defmodule Worldloom.Signals.HealthMonitor do
     health =
       FeedHealth.project(
         %{
-          observations: state.observation_loader.() |> public_observations(),
-          checkpoints: state.loader.()
+          observations: state.observation_loader.() |> public_observations()
         },
         state.clock.()
       )
@@ -79,7 +75,7 @@ defmodule Worldloom.Signals.HealthMonitor do
 
   defp initial_health(observation_loader, clock) do
     FeedHealth.project(
-      %{observations: observation_loader.() |> public_observations(), checkpoints: []},
+      %{observations: observation_loader.() |> public_observations()},
       clock.()
     )
   end
@@ -105,8 +101,6 @@ defmodule Worldloom.Signals.HealthMonitor do
     state.broadcaster.(health)
     true
   end
-
-  defp load_checkpoints, do: Repo.all(FeedCheckpoint)
 
   defp broadcast(health) do
     Phoenix.PubSub.broadcast(Worldloom.PubSub, @topic, {:feed_health, health})

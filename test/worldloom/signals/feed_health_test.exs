@@ -12,7 +12,9 @@ defmodule Worldloom.Signals.FeedHealthTest do
         bluesky: observation(:connected, 20),
         ripe_ris: observation(:connected, 20),
         solana: observation(:connected, 20),
-        drand: observation(:disconnected, 12)
+        drand: observation(:disconnected, 12),
+        usgs: observation(:connected, 3 * 60),
+        open_meteo: observation(:connected, 30 * 60)
       },
       checkpoints: [
         checkpoint("usgs", DateTime.add(@now, -3, :minute), ~s("private-etag")),
@@ -38,7 +40,9 @@ defmodule Worldloom.Signals.FeedHealthTest do
         bluesky: observation(:disconnected, 0),
         ripe_ris: observation(:connected, nil),
         solana: observation(:connected, 21),
-        drand: observation(:connected, 13)
+        drand: observation(:connected, 13),
+        usgs: observation(:disconnected, 181),
+        open_meteo: observation(:disconnected, 1_801)
       },
       checkpoints: [
         checkpoint("usgs", DateTime.add(@now, -181, :second)),
@@ -55,6 +59,31 @@ defmodule Worldloom.Signals.FeedHealthTest do
     assert projection.drand.state == :stale
     assert projection.usgs.state == :quiet
     assert projection.open_meteo.state == :stale
+  end
+
+  test "polling freshness follows runtime contact while ignoring private checkpoint state" do
+    inputs = %{
+      observations: %{
+        usgs: observation(:connected, 0),
+        open_meteo: observation(:connected, 1_801)
+      },
+      checkpoints: [
+        checkpoint("usgs", DateTime.add(@now, -10, :minute), "private-stale-etag"),
+        checkpoint("open_meteo", @now, "private-fresh-etag")
+      ]
+    }
+
+    projection = FeedHealth.project(inputs, @now)
+
+    assert projection.usgs == %{state: :live, observed_at: @now}
+
+    assert projection.open_meteo == %{
+             state: :stale,
+             observed_at: DateTime.add(@now, -1_801, :second)
+           }
+
+    refute inspect(projection) =~ "private-stale-etag"
+    refute inspect(projection) =~ "private-fresh-etag"
   end
 
   test "missing or malformed inputs use fixed safe states without exposing private fields" do

@@ -1,8 +1,10 @@
 defmodule Worldloom.Signals.WeatherWorker do
   use GenServer
 
+  alias Worldloom.Signals.Backoff
   alias Worldloom.Signals.Buffer
   alias Worldloom.Signals.Client
+  alias Worldloom.Signals.HealthRegistry
   alias Worldloom.Signals.Normalizer
   alias WorldloomWeb.Telemetry
 
@@ -39,8 +41,11 @@ defmodule Worldloom.Signals.WeatherWorker do
       interval_ms: Keyword.fetch!(options, :interval_ms),
       client: Keyword.get(options, :client, &Client.get_json/2),
       buffer: Keyword.get(options, :buffer, &Buffer.submit/2),
+      health_registry: Keyword.get(options, :health_registry, HealthRegistry),
       clock: Keyword.get(options, :clock, &DateTime.utc_now/0),
-      timer: Keyword.get(options, :timer, &Process.send_after/3)
+      random: Keyword.get(options, :random, &:rand.uniform/0),
+      timer: Keyword.get(options, :timer, &Process.send_after/3),
+      attempt: 0
     }
 
     send(self(), :poll)
@@ -50,26 +55,69 @@ defmodule Worldloom.Signals.WeatherWorker do
   @impl true
   def handle_info(:poll, state) do
     started_at = System.monotonic_time()
-    {status, count} = poll(state)
 
-    Telemetry.record_feed(:open_meteo, status,
-      duration: System.monotonic_time() - started_at,
-      count: count,
-      attempt: 0
-    )
+    case poll(state) do
+      {:ok, updated_state, count} ->
+        Telemetry.record_feed(:open_meteo, :success,
+          duration: System.monotonic_time() - started_at,
+          count: count,
+          attempt: state.attempt
+        )
 
-    state.timer.(self(), :poll, state.interval_ms)
-    {:noreply, state}
+        updated_state.timer.(self(), :poll, updated_state.interval_ms)
+        {:noreply, %{updated_state | attempt: 0}}
+
+      {:error, failed_state, operation, drop_reason} ->
+        Telemetry.record_feed(:open_meteo, :failure,
+          duration: System.monotonic_time() - started_at,
+          count: 0,
+          attempt: state.attempt
+        )
+
+        {:noreply, schedule_retry(failed_state, operation, drop_reason)}
+    end
   end
 
   defp poll(state) do
-    with {:ok, %{status: 200, body: body}} <- state.client.(state.url, params: params()),
-         {:ok, event} <- Normalizer.weather(List.wrap(body), @anchors),
-         :ok <- state.buffer.([event], checkpoint(state, event)) do
-      {:success, 1}
-    else
-      _failure -> {:failure, 0}
+    case state.client.(state.url, params: params()) do
+      {:ok, %{status: 200, body: body}} -> submit_event(state, body)
+      _failure -> {:error, record_health(state, :disconnected), :connection, :transport}
     end
+  end
+
+  defp submit_event(state, body) do
+    case Normalizer.weather(List.wrap(body), @anchors) do
+      {:ok, event} ->
+        connected = record_health(state, :connected)
+
+        case state.buffer.([event], checkpoint(state, event)) do
+          :ok -> {:ok, record_health(connected, {:activity, 1}), 1}
+          {:error, _reason} -> {:error, connected, :persistence, :persistence}
+        end
+
+      {:error, _reason} ->
+        {:error, record_health(state, :connected), :connection, :malformed}
+    end
+  end
+
+  defp schedule_retry(state, operation, drop_reason) do
+    delay = Backoff.delay(state.attempt, state.random.())
+    attempt = state.attempt + 1
+
+    Telemetry.record_retry(:open_meteo, operation, attempt: attempt, delay: delay)
+
+    state =
+      state
+      |> record_health({:drop, drop_reason})
+      |> record_health({:retry, 1})
+
+    state.timer.(self(), :poll, delay)
+    %{state | attempt: attempt}
+  end
+
+  defp record_health(state, observation) do
+    :ok = HealthRegistry.record(state.health_registry, :open_meteo, observation)
+    state
   end
 
   defp params do
