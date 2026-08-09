@@ -179,7 +179,7 @@ assert InstructionMetrics.from_payload("ripe_ris", payload) == %{
        }
 ```
 
-Assert unknown fields are discarded and values outside `0..4_294_967_295`, non-finite floats, oversized collections, or wrong types return `:error`.
+Assert unknown fields are discarded and bounded counters outside `0..4_294_967_295`, Solana slot positions outside `0..9_007_199_254_740_991`, non-finite floats, oversized collections, or wrong types return `:error`. Require Solana's projected `truncated` boolean alongside its counters and slot positions.
 
 Add `Instruction` tests proving v1 has no `metrics` key and v2 includes it.
 
