@@ -10,8 +10,8 @@ import {
   eventTimeToX,
   laneToY,
   sequenceToX,
-  signalPalette,
 } from "../js/worldloom/geometry.js"
+import {signalPalette} from "../js/worldloom/palette.js"
 import {balanced} from "./fixtures/balanced_snapshots.js"
 
 const contract = JSON.parse(

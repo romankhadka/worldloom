@@ -1,16 +1,6 @@
+import {signalPalette} from "./palette.js"
 import {xorshift32} from "./random.js"
 import {buildTopology} from "./topology.js"
-
-export const signalPalette = Object.freeze({
-  wikimedia: {family: "cyan-verdigris", stroke: "#63d7d1", glow: "#b6fff8"},
-  bluesky: {family: "violet", stroke: "#a991ff", glow: "#dcd2ff"},
-  ripe_ris: {family: "electric", stroke: "#55b9ef", glow: "#bdeaff"},
-  solana: {family: "amber", stroke: "#e4a746", glow: "#ffe0a1"},
-  drand: {family: "crystalline", stroke: "#c4e6eb", glow: "#f1fdff"},
-  usgs: {family: "ember", stroke: "#ec8d55", glow: "#ffc08e"},
-  open_meteo: {family: "moss-gold", stroke: "#8ba66d", glow: "#d3bb70"},
-  visitor: {family: "ivory", stroke: "#f3ead4", glow: "#fff9e9"},
-})
 
 const supportedRenderVersion = 1
 const liveWindowMilliseconds = 60_000

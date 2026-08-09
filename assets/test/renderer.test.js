@@ -2,7 +2,8 @@ import assert from "node:assert/strict"
 import {readFileSync} from "node:fs"
 import test from "node:test"
 
-import {commandsForScene, eventTimeToX, signalPalette} from "../js/worldloom/geometry.js"
+import {commandsForScene, eventTimeToX} from "../js/worldloom/geometry.js"
+import {signalPalette} from "../js/worldloom/palette.js"
 import {Renderer} from "../js/worldloom/renderer.js"
 import {balanced} from "./fixtures/balanced_snapshots.js"
 
@@ -1064,14 +1065,14 @@ test("paints each fiber as glow, body, and luminous core", () => {
 
 test("assigns every world signal its restrained source palette family", () => {
   const expectedFamilies = {
-    wikimedia: "cyan-verdigris",
-    bluesky: "violet",
-    ripe_ris: "electric",
-    solana: "amber",
-    drand: "crystalline",
-    usgs: "ember",
-    open_meteo: "moss-gold",
-    visitor: "ivory",
+    wikimedia: "aged-jade",
+    bluesky: "smoky-periwinkle",
+    ripe_ris: "mineral-blue",
+    solana: "marigold",
+    drand: "moonstone",
+    usgs: "copper",
+    open_meteo: "olive-jade",
+    visitor: "bright-bone",
   }
 
   assert.deepEqual(

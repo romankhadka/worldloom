@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import {signalPalette} from "../js/worldloom/geometry.js"
+import {signalPalette} from "../js/worldloom/palette.js"
 import {laneFromClientY, withinLiveEdgeTarget} from "../js/worldloom/placement.js"
 
 const fixtureModuleUrl = new URL("./fixtures/balanced_snapshots.js", import.meta.url)

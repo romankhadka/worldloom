@@ -1,4 +1,5 @@
 import {commandsForScene, cubicPrefix, laneToY} from "./geometry.js"
+import {canvasPalette} from "./palette.js"
 
 const maximumEvents = 600
 const maximumMemoryEvents = 4
@@ -830,8 +831,8 @@ function drawCommand(context, command, width, height) {
     return
   }
 
-  context.strokeStyle = command.stroke ?? "#f3ead4"
-  context.fillStyle = command.glow ?? command.stroke ?? "#f3ead4"
+  context.strokeStyle = command.stroke ?? canvasPalette.fallback
+  context.fillStyle = command.glow ?? command.stroke ?? canvasPalette.fallback
   context.lineWidth = 1 + (command.intensity ?? 0.2) * 2
   context.globalAlpha = 0.3 + (command.intensity ?? 0.2) * 0.6
   context.beginPath()
@@ -1167,7 +1168,7 @@ function drawTargetSeed(context, lane, viewport, atLiveEdge) {
   if (!atLiveEdge) return
 
   context.save()
-  context.fillStyle = "#f5ecd8"
+  context.fillStyle = canvasPalette.targetSeed
   context.globalAlpha = 0.92
   context.beginPath()
   context.arc(viewport.width - 14, laneToY(lane, viewport), 3.5, 0, Math.PI * 2)
@@ -1182,7 +1183,7 @@ function drawSelectionHalo(context, commands, selectedSequence) {
 
   const {hit} = command
   context.save()
-  context.strokeStyle = "#f5ecd8"
+  context.strokeStyle = canvasPalette.selectionHalo
   context.globalAlpha = 0.54
   context.lineWidth = 1
   context.beginPath()
@@ -1208,7 +1209,7 @@ function drawViewerPulses(context, count, width, height, animationTime) {
     const radius = 2.5 + (Math.sin(phase) + 1) * 1.5
     context.save()
     context.globalAlpha = 0.16
-    context.fillStyle = "#f3ead4"
+    context.fillStyle = canvasPalette.viewerPulse
     context.beginPath()
     context.arc(width - 14, y, radius, 0, Math.PI * 2)
     context.fill()
