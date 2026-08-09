@@ -2,10 +2,14 @@ import {xorshift32} from "./random.js"
 import {buildTopology} from "./topology.js"
 
 export const signalPalette = Object.freeze({
-  wikimedia: {stroke: "#63d7d1", glow: "#b6fff8"},
-  usgs: {stroke: "#ec8d55", glow: "#ffc08e"},
-  open_meteo: {stroke: "#8ba66d", glow: "#d3bb70"},
-  visitor: {stroke: "#f3ead4", glow: "#fff9e9"},
+  wikimedia: {family: "cyan-verdigris", stroke: "#63d7d1", glow: "#b6fff8"},
+  bluesky: {family: "violet", stroke: "#a991ff", glow: "#dcd2ff"},
+  ripe_ris: {family: "electric", stroke: "#55b9ef", glow: "#bdeaff"},
+  solana: {family: "amber", stroke: "#e4a746", glow: "#ffe0a1"},
+  drand: {family: "crystalline", stroke: "#c4e6eb", glow: "#f1fdff"},
+  usgs: {family: "ember", stroke: "#ec8d55", glow: "#ffc08e"},
+  open_meteo: {family: "moss-gold", stroke: "#8ba66d", glow: "#d3bb70"},
+  visitor: {family: "ivory", stroke: "#f3ead4", glow: "#fff9e9"},
 })
 
 const supportedRenderVersion = 1
@@ -14,6 +18,24 @@ const defaultSpacing = 28
 const maximumVisitorBandSpan = 8
 const maximumDurableDisplayStep = 8
 const visitorBandViewportDivisor = 3
+const palettePairs = new Set([
+  "wikimedia\0wikimedia",
+  "bluesky\0public_activity",
+  "ripe_ris\0route_change",
+  "solana\0slot",
+  "drand\0randomness",
+  "usgs\0earthquake",
+  "open_meteo\0weather",
+  "visitor\0tug",
+  "visitor\0knot",
+  "visitor\0illuminate",
+])
+const sourceMaterialRoles = new Set([
+  "conversation-fan",
+  "route-fork",
+  "slot-braid",
+  "public-pulse",
+])
 
 export function sequenceToX(sequence, viewport) {
   const panOffset = viewport.panOffset ?? 0
@@ -55,7 +77,7 @@ export function laneToY(lane, viewport) {
 export function commandsForEvent(instruction, viewport) {
   const x = sequenceToX(instruction.sequence, viewport)
   const y = laneToY(instruction.lane, viewport)
-  const palette = paletteFor(instruction.source)
+  const palette = paletteForInstruction(instruction)
   const intensity = boundedNumber(instruction.intensity, 0.5)
   const visual = visualParameters(instruction)
   const hitSize = Math.max(20, 22 + intensity * 30)
@@ -65,6 +87,8 @@ export function commandsForEvent(instruction, viewport) {
     x,
     y,
     intensity,
+    source: instruction.source,
+    paletteFamily: palette.family,
     stroke: palette.stroke,
     glow: palette.glow,
     visual,
@@ -177,7 +201,7 @@ export function commandsForScene(
 }
 
 function contextualMemoryCommands(instructions, viewport) {
-  const ordered = uniqueInstructions(instructions).slice(-4)
+  const ordered = uniqueInstructionsInInputOrder(instructions, 4)
   if (ordered.length === 0) return []
 
   const padding = viewport.padding ?? 40
@@ -189,7 +213,7 @@ function contextualMemoryCommands(instructions, viewport) {
     const x = padding + usableWidth * ((index + 1) / (ordered.length + 1))
     const y = bandTop + bandHeight / 2
     const intensity = boundedNumber(instruction.intensity, 0.5)
-    const palette = paletteFor(instruction.source)
+    const palette = paletteForInstruction(instruction)
     const hitSize = Math.max(20, 22 + intensity * 18)
 
     return {
@@ -200,6 +224,8 @@ function contextualMemoryCommands(instructions, viewport) {
       x,
       y,
       intensity,
+      source: instruction.source,
+      paletteFamily: palette.family,
       stroke: palette.stroke,
       glow: palette.glow,
       visual: visualParameters(instruction),
@@ -314,6 +340,8 @@ function spineCommands(topology, viewport) {
     segments,
     stroke: signalPalette.wikimedia.stroke,
     glow: signalPalette.wikimedia.glow,
+    source: "wikimedia",
+    paletteFamily: signalPalette.wikimedia.family,
     intensity,
     material: materialFor("spine", intensity),
   }]
@@ -351,6 +379,8 @@ function capillaryCommands(topology, viewport) {
       segments: [segment],
       stroke: signalPalette.wikimedia.stroke,
       glow: signalPalette.wikimedia.glow,
+      source: "wikimedia",
+      paletteFamily: signalPalette.wikimedia.family,
       intensity,
       material: materialFor("capillary", intensity),
     }]
@@ -402,6 +432,8 @@ function fiberCommands(topology, viewport) {
         width: pathWidth(chunk),
         stroke: palette.stroke,
         glow: palette.glow,
+        source: target.source,
+        paletteFamily: palette.family,
         intensity,
         material: materialFor("fiber", intensity),
       })
@@ -451,6 +483,8 @@ function connectorCommands(topology, anchorsById, viewport) {
         width: pathWidth([segment]),
         stroke: palette.stroke,
         glow: palette.glow,
+        source: target?.source ?? "wikimedia",
+        paletteFamily: palette.family,
         intensity: segment.intensity,
         material: materialFor(edge.role, segment.intensity),
       }
@@ -459,6 +493,7 @@ function connectorCommands(topology, anchorsById, viewport) {
 
 function formationCommands(topology, viewport) {
   const anchorsById = new Map(topology.anchors.map(anchor => [anchor.id, anchor]))
+  const spineById = new Map(topology.spine.map(point => [point.id, point]))
   const edgesById = new Map(topology.edges.map(edge => [edge.id, edge]))
 
   return topology.formations.flatMap(formation => {
@@ -470,10 +505,17 @@ function formationCommands(topology, viewport) {
       sequence: formation.sequence,
       transitionSequence: formation.sequence,
       occurredAt: formation.occurredAt,
+      source: formation.source,
+      role: formation.role,
       intensity,
       visual,
+      paletteFamily: palette.family,
       stroke: palette.stroke,
       glow: palette.glow,
+    }
+
+    if (sourceMaterialRoles.has(formation.role)) {
+      return [sourceMaterialCommand(common, formation, anchorsById, spineById, viewport)]
     }
 
     switch (formation.kind) {
@@ -504,6 +546,178 @@ function formationCommands(topology, viewport) {
         return []
     }
   })
+}
+
+function sourceMaterialCommand(common, formation, anchorsById, spineById, viewport) {
+  const anchor = anchorsById.get(formation.anchorId)
+  const attachment = spineById.get(formation.attachmentSpineId)
+  const x = sequenceToX(formation.sequence, viewport)
+  const y = sourceRoleY(formation.role, anchor?.lane ?? formation.lane, viewport)
+  const width = boundedRange(formation.grammar.width, 0.5, 8, 1)
+  const structural = {
+    ...common,
+    type: formation.role,
+    x,
+    y,
+    attachment: attachment ? projectAnchor(attachment, viewport) : null,
+    pathStyle: formation.grammar.pathStyle,
+    markerStyle: formation.grammar.markerStyle,
+    rhythm: formation.grammar.rhythm,
+    width,
+    material: sourceMaterialFor(width, common.intensity),
+  }
+
+  switch (formation.role) {
+    case "conversation-fan":
+      return conversationFanCommand(structural, formation, viewport)
+    case "route-fork":
+      return routeForkCommand(structural, formation, viewport)
+    case "slot-braid":
+      return slotBraidCommand(structural, formation, viewport)
+    default:
+      return publicPulseCommand(structural, formation, viewport)
+  }
+}
+
+function conversationFanCommand(common, formation, viewport) {
+  const branchSpan = 14 + common.intensity * 20
+  const branches = formation.branches.slice(0, 8).map((branch, index) => {
+    const branchY = sourceRoleY("conversation-fan", branch.lane, viewport)
+    const direction = index % 2 === 0 ? 1 : -1
+    const end = materialPoint(common.x + branchSpan, branchY, common, viewport)
+    const curve = {
+      from: materialPoint(common.x, common.y, common, viewport),
+      control1: materialPoint(
+        common.x + branchSpan * 0.3,
+        common.y + direction * (4 + common.visual.spread * 8),
+        common,
+        viewport,
+      ),
+      control2: materialPoint(
+        common.x + branchSpan * 0.68,
+        branchY - direction * (3 + common.visual.pulse * 5),
+        common,
+        viewport,
+      ),
+      to: end,
+    }
+
+    return {
+      id: branch.id,
+      order: branch.order,
+      returns: Boolean(branch.returns),
+      curve,
+      returnPoint: branch.returns
+        ? materialPoint(common.x + branchSpan * 0.46, common.y, common, viewport)
+        : null,
+    }
+  })
+
+  return {...common, branches}
+}
+
+function routeForkCommand(common, formation, viewport) {
+  const forkSpan = 13 + common.intensity * 21
+  const segments = formation.segments.slice(0, 6).map(segment => {
+    const angularOffset = segment.angle * (18 + common.visual.spread * 12)
+    const extendedY = common.y + angularOffset
+    const pinch = boundedRange(segment.withdrawalControl?.amount, 0, 1, 0)
+    const pinchedY = extendedY + (common.y - extendedY) * pinch * 0.72
+
+    return {
+      id: segment.id,
+      order: segment.order,
+      withdrawal: "inward",
+      points: [
+        materialPoint(common.x, common.y, common, viewport),
+        materialPoint(common.x + forkSpan * 0.48, extendedY, common, viewport),
+        materialPoint(common.x + forkSpan, pinchedY, common, viewport),
+      ],
+    }
+  })
+
+  return {...common, segments}
+}
+
+function slotBraidCommand(common, formation, viewport) {
+  const beads = formation.beads.slice(0, 12)
+  const halfSpan = 10 + common.intensity * 13
+  const projectedBeads = beads.map(bead => {
+    const x = common.x - halfSpan + bead.position * halfSpan * 2
+    const y = common.y + (bead.slotOrder % 2 === 0 ? -4 : 4)
+    return {
+      id: bead.id,
+      slotOrder: bead.slotOrder,
+      ...materialPoint(x, y, common, viewport),
+      radius: 1.8 + common.intensity * 1.5,
+    }
+  })
+  const gapMarkers = formation.gapMarkers.slice(0, 11).map(marker => {
+    const left = projectedBeads[marker.afterSlotOrder]
+    const right = projectedBeads[marker.afterSlotOrder + 1]
+    return {
+      id: marker.id,
+      afterSlotOrder: marker.afterSlotOrder,
+      ...materialPoint(
+        ((left?.x ?? common.x) + (right?.x ?? common.x)) / 2,
+        common.y,
+        common,
+        viewport,
+      ),
+      size: 3 + common.intensity * 2,
+    }
+  })
+  const strands = [0, 1].map(strand => projectedBeads.map(bead => ({
+    x: bead.x,
+    y: boundedCanvasY(bead.y + (strand === 0 ? -2.5 : 2.5), viewport),
+  })))
+
+  return {...common, beads: projectedBeads, gapMarkers, strands}
+}
+
+function publicPulseCommand(common, formation, viewport) {
+  const crystals = formation.pulses.slice(0, 1).map(pulse => {
+    const radius = 8 + common.intensity * 8
+    const points = [
+      [0, -radius],
+      [radius * 0.72, 0],
+      [0, radius],
+      [-radius * 0.72, 0],
+      [0, -radius],
+    ].map(([xOffset, yOffset]) =>
+      materialPoint(common.x + xOffset, common.y + yOffset, common, viewport)
+    )
+
+    return {id: pulse.id, order: pulse.order, round: pulse.round, points}
+  })
+
+  return {...common, crystals}
+}
+
+function sourceRoleY(role, lane, viewport) {
+  const laneOffset = {
+    "conversation-fan": -0.12,
+    "route-fork": -0.04,
+    "slot-braid": 0.06,
+    "public-pulse": 0.14,
+  }[role] ?? 0
+  return laneToY(boundedRange(lane + laneOffset, 0, 1, 0.5), viewport)
+}
+
+function materialPoint(x, y, command, viewport) {
+  const padding = viewport.padding ?? 40
+  const liveColumn = command.x >= padding && command.x <= viewport.width - padding
+  return {
+    x: liveColumn
+      ? Math.min(viewport.width - padding, Math.max(padding, x))
+      : x,
+    y: boundedCanvasY(y, viewport),
+  }
+}
+
+function boundedCanvasY(y, viewport) {
+  const padding = viewport.padding ?? 40
+  return Math.min(viewport.height - padding, Math.max(padding, y))
 }
 
 function tugCommand(common, formation, anchorsById, viewport) {
@@ -592,6 +806,8 @@ function fallbackCommand(fallback, viewport) {
     sequence: fallback.sequence,
     x,
     y,
+    source: fallback.source,
+    paletteFamily: palette.family,
     intensity: boundedNumber(fallback.intensity, 0.5),
     visual: boundedVisualParameters(fallback.visual),
     stroke: palette.stroke,
@@ -765,6 +981,16 @@ function materialFor(role, intensity) {
   }
 }
 
+function sourceMaterialFor(width, intensity) {
+  const strength = Math.min(1, Math.max(0, intensity))
+
+  return {
+    glow: {width: width * (3.4 + strength * 1.2), alpha: 0.08 + strength * 0.08},
+    body: {width: width * (1.55 + strength * 0.35), alpha: 0.28 + strength * 0.22},
+    core: {width, alpha: 0.72 + strength * 0.2},
+  }
+}
+
 function visualParameters(instruction) {
   if (validVisual(instruction.visual)) return boundedVisualParameters(instruction.visual)
 
@@ -792,6 +1018,20 @@ function uniqueInstructions(instructions) {
   const bySequence = new Map()
   for (const instruction of instructions) bySequence.set(instruction.sequence, instruction)
   return [...bySequence.values()].sort((left, right) => left.sequence - right.sequence)
+}
+
+function uniqueInstructionsInInputOrder(instructions, limit) {
+  const seenSequences = new Set()
+  const unique = []
+
+  for (const instruction of instructions) {
+    if (seenSequences.has(instruction.sequence)) continue
+    seenSequences.add(instruction.sequence)
+    unique.push(instruction)
+    if (unique.length === limit) break
+  }
+
+  return unique
 }
 
 function displayPositionsFor(instructions, viewport) {
@@ -863,6 +1103,10 @@ function boundedNumber(number, fallback) {
   return Number.isFinite(number) ? Math.min(1, Math.max(0, number)) : fallback
 }
 
+function boundedRange(number, minimum, maximum, fallback) {
+  return Number.isFinite(number) ? Math.min(maximum, Math.max(minimum, number)) : fallback
+}
+
 function boundedSignedNumber(number, fallback) {
   return Number.isFinite(number) ? Math.min(1, Math.max(-1, number)) : fallback
 }
@@ -870,6 +1114,15 @@ function boundedSignedNumber(number, fallback) {
 function paletteFor(source, fallback = signalPalette.visitor) {
   if (typeof source !== "string" || !Object.hasOwn(signalPalette, source)) return fallback
   return signalPalette[source]
+}
+
+function paletteForInstruction(instruction, fallback = signalPalette.visitor) {
+  if (typeof instruction?.source !== "string" || typeof instruction?.kind !== "string") {
+    return fallback
+  }
+  return palettePairs.has(`${instruction.source}\0${instruction.kind}`)
+    ? paletteFor(instruction.source, fallback)
+    : fallback
 }
 
 function roundSix(number) {

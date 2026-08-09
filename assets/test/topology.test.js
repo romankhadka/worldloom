@@ -3,6 +3,13 @@ import {readFileSync} from "node:fs"
 import test from "node:test"
 
 import {buildTopology} from "../js/worldloom/topology.js"
+import {
+  balanced,
+  delayedRecovery,
+  memoryExpiry,
+  totalOutage,
+  wikimediaSurge,
+} from "./fixtures/balanced_snapshots.js"
 
 const versionTwoContract = JSON.parse(
   readFileSync(
@@ -10,6 +17,13 @@ const versionTwoContract = JSON.parse(
     "utf8",
   ),
 )
+const namedSnapshots = {
+  balanced,
+  wikimediaSurge,
+  delayedRecovery,
+  totalOutage,
+  memoryExpiry,
+}
 
 const assertFiniteTopology = topology => {
   const visit = current => {
@@ -25,6 +39,7 @@ const assertFiniteTopology = topology => {
     topology.edges,
     topology.formations,
     topology.fallbacks,
+    topology.memory ?? [],
   ]) {
     assert.ok(collection.length <= 600)
   }
@@ -202,18 +217,209 @@ test("preserves the legacy finite visual and intensity contract for version one"
   assertFiniteTopology(topology)
 })
 
-test("renders every version two contract instruction as a deterministic neutral fiber fallback", () => {
-  for (const contractInstruction of versionTwoContract) {
+test("renders every valid version two contract instruction through its source grammar", () => {
+  const expectedRoles = ["conversation-fan", "route-fork", "slot-braid", "public-pulse"]
+
+  for (const [index, contractInstruction] of versionTwoContract.entries()) {
     const first = buildTopology([contractInstruction])
     const second = buildTopology([structuredClone(contractInstruction)])
 
     assert.deepEqual(second, first)
-    assert.equal(first.fallbacks.length, 1)
-    assert.equal(first.fallbacks[0].kind, contractInstruction.kind)
-    assert.equal(first.fallbacks[0].source, contractInstruction.source)
-    assertBoundedFallback(first.fallbacks[0])
+    assert.equal(first.fallbacks.length, 0)
+    assert.equal(first.formations.length, 1)
+    assert.equal(first.formations[0].role, expectedRoles[index])
+    assert.equal(first.formations[0].grammar.role, expectedRoles[index])
     assertFiniteTopology(first)
   }
+})
+
+test("keeps the Wikimedia spine while every named fixture retains non-spine anchors", () => {
+  for (const [name, snapshot] of Object.entries(namedSnapshots)) {
+    const topology = topologyFor(snapshot)
+    const wikimediaSequences = snapshot.display_events
+      .filter(item => item.source === "wikimedia")
+      .map(item => item.sequence)
+
+    assert.deepEqual(
+      topology.spine.map(point => point.sequence),
+      wikimediaSequences,
+      `${name} must retain the server-selected Wikimedia spine`,
+    )
+    assert.ok(
+      topology.anchors.some(anchor => anchor.source !== "wikimedia"),
+      `${name} must retain source anchors outside the spine`,
+    )
+    assert.ok(topology.spine.every(point => point.grammar.role === "backbone"))
+    assert.equal(topology.fallbacks.length, 0)
+    assertFiniteTopology(topology)
+  }
+})
+
+test("attaches bounded Bluesky fans without displacing or fabricating the spine", () => {
+  const topology = topologyFor(balanced)
+  const fans = topology.formations.filter(formation => formation.role === "conversation-fan")
+  const blueskyInstructions = balanced.display_events.filter(item => item.source === "bluesky")
+
+  assert.equal(fans.length, blueskyInstructions.length)
+  assert.deepEqual(fans.map(fan => fan.sequence), blueskyInstructions.map(item => item.sequence))
+  assert.ok(fans.every(fan => fan.attachmentSpineId?.startsWith("spine:")))
+  assert.ok(fans.every(fan => fan.branches.length === fan.grammar.branchCount))
+  assert.ok(fans.every(fan => fan.branches.length >= 1 && fan.branches.length <= 8))
+  assert.ok(fans.every(fan => fan.branches.every((branch, index) => branch.order === index)))
+
+  const isolated = buildTopology([structuredClone(blueskyInstructions[0])])
+  assert.equal(isolated.spine.length, 0)
+  assert.equal(isolated.anchors.length, 1)
+  assert.equal(isolated.formations[0].attachmentSpineId, null)
+})
+
+test("never promotes a source attachment into the Wikimedia fiber chain", () => {
+  const bluesky = {
+    ...structuredClone(versionTwoContract[0]),
+    sequence: 2,
+    lane: 0.5,
+  }
+  const topology = buildTopology([
+    instruction(1, "wikimedia", {lane: 0.9}),
+    bluesky,
+    instruction(3, "wikimedia", {lane: 0.5}),
+  ])
+  const finalFiber = topology.edges.find(edge => edge.role === "fiber" && edge.sequence === 3)
+
+  assert.equal(finalFiber.from, "anchor:1")
+  assert.equal(finalFiber.to, "anchor:3")
+  assert.ok(topology.anchors.find(anchor => anchor.id === finalFiber.from).source === "wikimedia")
+})
+
+test("builds RIPE angular forks with explicit inward withdrawal controls", () => {
+  const topology = topologyFor(balanced)
+  const forks = topology.formations.filter(formation => formation.role === "route-fork")
+  const ripeInstructions = balanced.display_events.filter(item => item.source === "ripe_ris")
+
+  assert.equal(forks.length, ripeInstructions.length)
+  assert.deepEqual(forks.map(fork => fork.sequence), ripeInstructions.map(item => item.sequence))
+  assert.ok(forks.every(fork => fork.segments.length === fork.grammar.forkCount))
+  assert.ok(forks.every(fork => fork.segments.length >= 1 && fork.segments.length <= 6))
+  assert.ok(forks.every(fork => fork.segments.every(segment =>
+    segment.pathStyle === "angular-fork" &&
+      segment.withdrawalControl.direction === "inward" &&
+      segment.withdrawalControl.amount === fork.grammar.pinch
+  )))
+})
+
+test("centers singular fans and forks without inventing lateral direction", () => {
+  const [bluesky, ripeRis] = versionTwoContract
+  const quietBluesky = {
+    ...structuredClone(bluesky),
+    metrics: {...bluesky.metrics, total_actions: 1},
+  }
+  const quietRipe = {
+    ...structuredClone(ripeRis),
+    metrics: {...ripeRis.metrics, announced: 1, withdrawn: 0},
+  }
+  const topology = buildTopology([quietBluesky, quietRipe])
+  const fan = topology.formations.find(formation => formation.role === "conversation-fan")
+  const fork = topology.formations.find(formation => formation.role === "route-fork")
+
+  assert.equal(fan.branches.length, 1)
+  assert.equal(fan.branches[0].lane, quietBluesky.lane)
+  assert.equal(fork.segments.length, 1)
+  assert.equal(fork.segments[0].angle, 0)
+})
+
+test("keeps Solana beads and explicit gap markers in bounded slot order", () => {
+  const topology = topologyFor(balanced)
+  const braids = topology.formations.filter(formation => formation.role === "slot-braid")
+  const solanaInstructions = balanced.display_events.filter(item => item.source === "solana")
+
+  assert.equal(braids.length, solanaInstructions.length)
+  assert.deepEqual(braids.map(braid => braid.sequence), solanaInstructions.map(item => item.sequence))
+  for (const [index, braid] of braids.entries()) {
+    const metrics = solanaInstructions[index].metrics
+    assert.deepEqual(braid.slotRange, {first: metrics.first_slot, last: metrics.last_slot})
+    assert.deepEqual(braid.beads.map(bead => bead.slotOrder),
+      Array.from({length: braid.grammar.beadCount}, (_item, order) => order))
+    assert.deepEqual(
+      braid.gapMarkers.map(marker => marker.afterSlotOrder),
+      [...braid.gapMarkers]
+        .map(marker => marker.afterSlotOrder)
+        .sort((left, right) => left - right),
+    )
+    assert.equal(braid.gapMarkers.length, braid.grammar.gapBreakCount)
+  }
+})
+
+test("emits exactly one public pulse for each genuine drand round", () => {
+  const topology = topologyFor(balanced)
+  const pulseFormations = topology.formations.filter(formation => formation.role === "public-pulse")
+  const drandInstructions = balanced.display_events.filter(item => item.source === "drand")
+
+  assert.equal(pulseFormations.length, drandInstructions.length)
+  assert.deepEqual(pulseFormations.map(formation => formation.sequence),
+    drandInstructions.map(item => item.sequence))
+  assert.deepEqual(pulseFormations.flatMap(formation => formation.pulses.map(pulse => pulse.round)),
+    drandInstructions.map(item => item.metrics.round))
+  assert.ok(pulseFormations.every(formation => formation.pulses.length === 1))
+})
+
+test("keeps earthquake and visitor memory in a separate quiet contextual band", () => {
+  for (const [name, snapshot] of Object.entries(namedSnapshots)) {
+    const primary = buildTopology(snapshot.display_events)
+    const withMemory = topologyFor(snapshot)
+
+    assert.deepEqual(withMemory.spine, primary.spine, `${name} memory must not bend the spine`)
+    assert.deepEqual(withMemory.anchors, primary.anchors, `${name} memory must not add anchors`)
+    assert.deepEqual(withMemory.edges, primary.edges, `${name} memory must not add edges`)
+    assert.deepEqual(withMemory.memory.map(trace => trace.sequence),
+      snapshot.memory_events.map(item => item.sequence))
+    assert.ok(withMemory.memory.every(trace => trace.band === "quiet-context"))
+    assert.ok(withMemory.memory.every(trace => trace.anchorId === null))
+    assert.ok(withMemory.memory.every(trace =>
+      trace.role === "rupture" || trace.role === "intervention"
+    ))
+  }
+})
+
+test("keeps named-fixture topology deterministic across copies and reload order", () => {
+  for (const snapshot of Object.values(namedSnapshots)) {
+    const first = topologyFor(snapshot)
+    const copy = topologyFor(structuredClone(snapshot))
+    const reloaded = buildTopology([...structuredClone(snapshot.display_events)].reverse(), {
+      memoryInstructions: [...structuredClone(snapshot.memory_events)].reverse(),
+    })
+
+    assert.deepEqual(copy, first)
+    assert.deepEqual(reloaded, first)
+  }
+})
+
+test("honors server source selection, sequence identity, and the six-hundred display limit", () => {
+  const repeatedSelection = Array.from({length: 604}, (_item, index) => ({
+    ...structuredClone(balanced.display_events[index % balanced.display_events.length]),
+    sequence: 10_000 + index,
+  }))
+  const topology = buildTopology(repeatedSelection, {
+    memoryInstructions: structuredClone(balanced.memory_events),
+  })
+  const selected = repeatedSelection.slice(-600)
+  const selectedSequences = new Set(selected.map(item => item.sequence))
+  const topologySequences = new Set([
+    ...topology.spine,
+    ...topology.anchors,
+    ...topology.formations,
+    ...topology.fallbacks,
+  ].map(item => item.sequence))
+
+  assert.deepEqual([...topologySequences].sort((left, right) => left - right),
+    [...selectedSequences].sort((left, right) => left - right))
+  assert.deepEqual(topology.anchors.map(anchor => anchor.sequence),
+    selected
+      .filter(item => item.source !== "drand")
+      .map(item => item.sequence))
+  assert.equal(topology.memory.length, 4)
+  assert.equal(topology.spine[0].sequence,
+    selected.find(item => item.source === "wikimedia").sequence)
+  assertFiniteTopology(topology)
 })
 
 test("preserves JSON-safe Solana positions beyond the uint32 counter range", () => {
@@ -229,9 +435,12 @@ test("preserves JSON-safe Solana positions beyond the uint32 counter range", () 
 
   const topology = buildTopology([solana])
 
-  assert.equal(topology.fallbacks.length, 1)
-  assert.equal(topology.fallbacks[0].kind, "slot")
-  assert.equal(topology.fallbacks[0].source, "solana")
+  assert.equal(topology.fallbacks.length, 0)
+  assert.equal(topology.formations[0].role, "slot-braid")
+  assert.deepEqual(topology.formations[0].slotRange, {
+    first: Number.MAX_SAFE_INTEGER,
+    last: Number.MAX_SAFE_INTEGER,
+  })
 })
 
 test("preserves JSON-safe drand rounds beyond the uint32 counter range", () => {
@@ -240,9 +449,9 @@ test("preserves JSON-safe drand rounds beyond the uint32 counter range", () => {
 
   const topology = buildTopology([drand])
 
-  assert.equal(topology.fallbacks.length, 1)
-  assert.equal(topology.fallbacks[0].kind, "randomness")
-  assert.equal(topology.fallbacks[0].source, "drand")
+  assert.equal(topology.fallbacks.length, 0)
+  assert.equal(topology.formations[0].role, "public-pulse")
+  assert.equal(topology.formations[0].pulses[0].round, Number.MAX_SAFE_INTEGER)
 })
 
 test("requires one Solana slot exactly when both endpoints are equal", () => {
@@ -273,8 +482,8 @@ test("requires one Solana slot exactly when both endpoints are equal", () => {
   const multiSlotTopology = buildTopology([solana])
   const malformedTopology = buildTopology([malformedOneSlot])
 
-  assert.equal(oneSlotTopology.fallbacks[0].kind, "slot")
-  assert.equal(multiSlotTopology.fallbacks[0].kind, "slot")
+  assert.equal(oneSlotTopology.formations[0].role, "slot-braid")
+  assert.equal(multiSlotTopology.formations[0].role, "slot-braid")
   assert.equal(malformedTopology.fallbacks[0].kind, "fallback")
   assert.equal(malformedTopology.fallbacks[0].source, "visitor")
 })
@@ -299,8 +508,8 @@ test("accepts Solana window-cap truncation without accepting impossible endpoint
   const validTopology = buildTopology([windowCapped])
   const invalidTopology = buildTopology([impossible])
 
-  assert.equal(validTopology.fallbacks[0].kind, "slot")
-  assert.equal(validTopology.fallbacks[0].source, "solana")
+  assert.equal(validTopology.formations[0].role, "slot-braid")
+  assert.equal(validTopology.formations[0].source, "solana")
   assert.equal(invalidTopology.fallbacks[0].kind, "fallback")
   assert.equal(invalidTopology.fallbacks[0].source, "visitor")
 })
@@ -388,6 +597,55 @@ test("rejects JSON object and array source-kind values without coercion or throw
   assertFiniteTopology(topology)
 })
 
+test("contains inherited fields, accessors, and revoked proxies at the topology boundary", () => {
+  const inherited = Object.create(instruction(500))
+  const sourceAccessor = instruction(501)
+  Object.defineProperty(sourceAccessor, "source", {
+    enumerable: true,
+    get() {
+      throw new Error("source getter must not run")
+    },
+  })
+  const revokedInstruction = Proxy.revocable(instruction(502), {})
+  revokedInstruction.revoke()
+  const revokedMetrics = Proxy.revocable({}, {})
+  revokedMetrics.revoke()
+  const invalidMetrics = {
+    ...structuredClone(versionTwoContract[0]),
+    sequence: 503,
+    metrics: revokedMetrics.proxy,
+  }
+  const hostileOptions = {}
+  Object.defineProperty(hostileOptions, "memoryInstructions", {
+    enumerable: true,
+    get() {
+      throw new Error("options getter must not run")
+    },
+  })
+  const hostileMemoryTimestamp = instruction(504, "illuminate", {
+    occurred_at: {
+      toString() {
+        throw new Error("timestamp coercion must not run")
+      },
+    },
+  })
+  let topology
+
+  assert.doesNotThrow(() => {
+    topology = buildTopology(
+      [inherited, sourceAccessor, revokedInstruction.proxy, invalidMetrics],
+      hostileOptions,
+    )
+  })
+  assert.deepEqual(topology.fallbacks.map(fallback => fallback.sequence), [501, 503])
+  assert.ok(topology.fallbacks.every(fallback => fallback.kind === "fallback"))
+  assert.equal(topology.memory.length, 0)
+  assertFiniteTopology(topology)
+  assert.doesNotThrow(() =>
+    buildTopology([], {memoryInstructions: [hostileMemoryTimestamp]})
+  )
+})
+
 test("keeps unsupported positive render versions as finite semantic fallbacks", () => {
   const futureInstruction = {
     ...structuredClone(versionTwoContract[0]),
@@ -445,3 +703,9 @@ test("illuminates the nearest junction instead of the newest junction", () => {
   const illuminate = topology.formations.find(item => item.kind === "illuminate")
   assert.equal(illuminate.anchorId, "anchor:7")
 })
+
+function topologyFor(snapshot) {
+  return buildTopology(snapshot.display_events, {
+    memoryInstructions: snapshot.memory_events,
+  })
+}

@@ -12,6 +12,7 @@ import {
   sequenceToX,
   signalPalette,
 } from "../js/worldloom/geometry.js"
+import {balanced} from "./fixtures/balanced_snapshots.js"
 
 const contract = JSON.parse(
   await readFile(new URL("../../test/support/fixtures/render_contract_v1.json", import.meta.url)),
@@ -20,6 +21,9 @@ const balancedSnapshot = JSON.parse(
   await readFile(
     new URL("../../test/support/fixtures/live_snapshots/balanced_v1.json", import.meta.url),
   ),
+)
+const versionTwoContract = JSON.parse(
+  await readFile(new URL("../../test/support/fixtures/render_contract_v2.json", import.meta.url)),
 )
 
 const viewport = {width: 1000, height: 600, maxSequence: 106, spacing: 40, padding: 50}
@@ -62,6 +66,148 @@ test("keeps equal event times in one column while lanes remain distinct", () => 
   assert.deepEqual(hits.map(hit => hit.x), [viewport.width / 2, viewport.width / 2])
   assert.notEqual(hits[0].y, hits[1].y)
   assert.deepEqual(hits.map(hit => hit.sequence), [first.sequence, second.sequence])
+})
+
+test("projects every valid version two topology formation into one visible structural command", () => {
+  const expectedRoles = new Map([
+    ["bluesky", "conversation-fan"],
+    ["ripe_ris", "route-fork"],
+    ["solana", "slot-braid"],
+    ["drand", "public-pulse"],
+  ])
+  const windowEnd = "2026-08-03T12:01:03.000Z"
+
+  for (const instruction of versionTwoContract) {
+    const commands = commandsForScene([instruction], viewport, {
+      windowEnd,
+      displayInstructions: [instruction],
+      projectionInstructions: [instruction],
+      hitInstructions: [instruction],
+    })
+    const structural = commands.filter(command =>
+      command.sequence === instruction.sequence && command.type !== "anchor-hit"
+    )
+
+    assert.equal(structural.length, 1, `${instruction.source} must not disappear after topology`)
+    assert.equal(structural[0].role, expectedRoles.get(instruction.source))
+    assert.equal(structural[0].source, instruction.source)
+    assert.equal(
+      structural[0].x,
+      eventTimeToX(instruction.occurred_at, windowEnd, viewport),
+    )
+    assert.ok(projectedPoints(structural[0]).length > 0)
+    assert.equal(commands.filter(command => command.type === "anchor-hit").length, 1)
+  }
+})
+
+test("derives each source material from its bounded grammar width", () => {
+  for (const instruction of versionTwoContract) {
+    const commands = commandsForScene([instruction], viewport, {
+      windowEnd: "2026-08-03T12:01:03.000Z",
+      displayInstructions: [instruction],
+      projectionInstructions: [instruction],
+      hitInstructions: [instruction],
+    })
+    const structural = commands.find(command =>
+      command.sequence === instruction.sequence && command.type !== "anchor-hit"
+    )
+
+    assert.equal(structural.material.core.width, structural.width)
+    assert.ok(structural.material.body.width > structural.material.core.width)
+    assert.ok(structural.material.glow.width > structural.material.body.width)
+  }
+})
+
+test("separates equal-time source families without leaving the shared event-time column", () => {
+  const occurredAt = "2026-08-08T12:00:30.000Z"
+  const instructions = versionTwoContract.map((instruction, index) => ({
+    ...structuredClone(instruction),
+    sequence: 20_000 + index,
+    occurred_at: occurredAt,
+    lane: 0.5,
+  }))
+  const commands = balancedSceneCommands({
+    displayInstructions: instructions,
+    memoryInstructions: [],
+    ambient: null,
+  })
+  const structural = commands.filter(command =>
+    instructions.some(instruction => instruction.sequence === command.sequence) &&
+      command.type !== "anchor-hit"
+  )
+  const expectedX = eventTimeToX(occurredAt, balancedSnapshot.window_end, viewport)
+
+  assert.equal(structural.length, instructions.length)
+  assert.ok(structural.every(command => command.x === expectedX))
+  assert.equal(new Set(structural.map(command => command.y)).size, instructions.length)
+  assert.equal(new Set(structural.map(command => command.role)).size, instructions.length)
+  assert.ok(structural.every(command => projectedPoints(command).length > 0))
+  for (const point of structural.flatMap(projectedPoints)) {
+    assert.ok(point.x >= viewport.padding && point.x <= viewport.width - viewport.padding)
+    assert.ok(point.y >= viewport.padding && point.y <= viewport.height - viewport.padding)
+  }
+  assertCanvasSafeNumbers(structural)
+})
+
+test("keeps source structures bounded before command creation", () => {
+  const commands = balancedSceneCommands({
+    displayInstructions: balanced.display_events,
+    memoryInstructions: balanced.memory_events,
+    ambient: balanced.ambient,
+  })
+  const sourceCommands = commands.filter(command =>
+    ["conversation-fan", "route-fork", "slot-braid", "public-pulse"].includes(command.role)
+  )
+  const sourceInstructions = balanced.display_events.filter(instruction =>
+    ["bluesky", "ripe_ris", "solana", "drand"].includes(instruction.source)
+  )
+
+  assert.equal(sourceCommands.length, sourceInstructions.length)
+  assert.ok(sourceCommands.filter(command => command.role === "conversation-fan")
+    .every(command => command.branches.length >= 1 && command.branches.length <= 8))
+  assert.ok(sourceCommands.filter(command => command.role === "route-fork")
+    .every(command => command.segments.length >= 1 && command.segments.length <= 6))
+  assert.ok(sourceCommands.filter(command => command.role === "slot-braid")
+    .every(command => command.beads.length >= 1 && command.beads.length <= 12))
+  assert.ok(sourceCommands.filter(command => command.role === "slot-braid")
+    .every(command => command.gapMarkers.length <= 11))
+  assert.ok(sourceCommands.filter(command => command.role === "public-pulse")
+    .every(command => command.crystals.length === 1))
+  assert.ok(sourceCommands.some(command => command.attachment !== null))
+  assert.ok(sourceCommands.filter(command => command.attachment !== null)
+    .every(command => projectedPoints(command.attachment).length === 1))
+  assert.ok(commands.length <= 4000)
+  assert.equal(commands.some(command => command.type.endsWith("-glow-copy")), false)
+})
+
+test("projects version two history linearly left on the shared event-time scale", () => {
+  const live = {
+    ...structuredClone(versionTwoContract[0]),
+    sequence: 30_001,
+    occurred_at: "2026-08-08T12:00:30.000Z",
+  }
+  const history = {
+    ...structuredClone(versionTwoContract[1]),
+    sequence: 30_000,
+    occurred_at: "2026-08-08T11:59:30.000Z",
+  }
+  const commands = balancedSceneCommands({
+    displayInstructions: [live],
+    historyInstructions: [history],
+    memoryInstructions: [],
+    ambient: null,
+  })
+  const liveCommand = commands.find(command =>
+    command.sequence === live.sequence && command.role === "conversation-fan"
+  )
+  const historyCommand = commands.find(command =>
+    command.sequence === history.sequence && command.role === "route-fork"
+  )
+  const usableWidth = viewport.width - viewport.padding * 2
+
+  assert.equal(liveCommand.x, viewport.padding + usableWidth / 2)
+  assert.equal(historyCommand.x, viewport.padding - usableWidth / 2)
+  assert.equal(liveCommand.x - historyCommand.x, usableWidth)
 })
 
 test("drops display rows older than the snapshot minute before building topology", () => {
@@ -137,6 +283,22 @@ test("keeps contextual memory in a labeled quiet band with its real identity", (
       command.type === "anchor-hit" && command.sequence === memory.sequence
     ),
     false,
+  )
+})
+
+test("preserves the server's canonical contextual memory order", () => {
+  const commands = balancedSceneCommands({
+    displayInstructions: balanced.display_events,
+    memoryInstructions: balanced.memory_events,
+    ambient: balanced.ambient,
+  })
+  const traceSequences = commands
+    .filter(command => command.type === "memory-trace")
+    .map(command => command.sequence)
+
+  assert.deepEqual(
+    traceSequences,
+    balanced.memory_events.map(instruction => instruction.sequence),
   )
 })
 
@@ -868,4 +1030,22 @@ function assertCanvasSafeNumbers(commands) {
   }
 
   inspect(commands)
+}
+
+function projectedPoints(command) {
+  const points = []
+  const inspect = current => {
+    if (Array.isArray(current)) {
+      current.forEach(inspect)
+      return
+    }
+    if (!current || typeof current !== "object") return
+    if (Number.isFinite(current.x) && Number.isFinite(current.y)) {
+      points.push({x: current.x, y: current.y})
+    }
+    Object.values(current).forEach(inspect)
+  }
+
+  inspect(command)
+  return points
 }

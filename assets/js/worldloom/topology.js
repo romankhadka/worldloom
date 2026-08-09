@@ -1,4 +1,7 @@
+import {grammarFor} from "./source_grammar.js"
+
 const maximumInstructions = 600
+const maximumMemoryInstructions = 4
 const laneReach = 0.34
 const maximumSequenceGap = 12
 const maximumSpineLaneDelta = 0.25
@@ -18,13 +21,41 @@ const versionTwoPairs = new Set([
   "drand\0randomness",
 ])
 
-export function buildTopology(instructions) {
+function contextualMemoryFor(instructions) {
+  const eligible = uniqueInstructions(instructions)
+    .filter(instruction =>
+      instructionSupport(instruction) === "supported" &&
+      (instruction.kind === "earthquake" || instruction.source === "visitor")
+    )
+  const earthquake = eligible
+    .filter(instruction => instruction.kind === "earthquake" && instruction.source === "usgs")
+    .sort(newerInstructionFirst)[0]
+  const visitors = eligible
+    .filter(instruction => instruction.source === "visitor")
+    .sort(newerInstructionFirst)
+    .slice(0, maximumMemoryInstructions - 1)
+
+  return [...(earthquake ? [earthquake] : []), ...visitors]
+    .map(instruction => {
+      const grammar = grammarFor(instruction)
+
+      return {
+        ...formationFor(instruction, grammar),
+        band: "quiet-context",
+        anchorId: null,
+      }
+    })
+}
+
+export function buildTopology(instructions, options = {}) {
+  const memoryInstructions = ownDataValue(options, "memoryInstructions") ?? []
   const topology = {
     spine: [],
     anchors: [],
     edges: [],
     formations: [],
     fallbacks: [],
+    memory: contextualMemoryFor(memoryInstructions),
     ambient: null,
   }
 
@@ -39,31 +70,37 @@ export function buildTopology(instructions) {
       continue
     }
 
-    switch (instruction.kind) {
-      case "wikimedia":
-        extendSpine(topology, instruction)
-        extendFiber(topology, instruction)
+    const grammar = grammarFor(instruction)
+    if (grammar.role === "neutral") {
+      topology.fallbacks.push(fallbackFor(instruction, false))
+      continue
+    }
+
+    switch (grammar.role) {
+      case "backbone":
+        extendSpine(topology, instruction, grammar)
+        extendFiber(topology, instruction, grammar)
         break
-      case "earthquake":
-        attachEarthquake(topology, instruction)
+      case "rupture":
+        attachEarthquake(topology, instruction, grammar)
         break
-      case "weather":
+      case "atmosphere":
         topology.ambient = instruction
         break
-      case "tug":
-        applyTug(topology, instruction)
+      case "intervention":
+        applyIntervention(topology, instruction, grammar)
         break
-      case "knot":
-        applyKnot(topology, instruction)
+      case "conversation-fan":
+        attachBlueskyFan(topology, instruction, grammar)
         break
-      case "illuminate":
-        applyIlluminate(topology, instruction)
+      case "route-fork":
+        attachRipeFork(topology, instruction, grammar)
         break
-      case "public_activity":
-      case "route_change":
-      case "slot":
-      case "randomness":
-        topology.fallbacks.push(fallbackFor(instruction, true))
+      case "slot-braid":
+        attachSolanaBraid(topology, instruction, grammar)
+        break
+      case "public-pulse":
+        attachDrandPulse(topology, instruction, grammar)
         break
       default:
         topology.fallbacks.push(fallbackFor(instruction, false))
@@ -73,17 +110,34 @@ export function buildTopology(instructions) {
   return topology
 }
 
-function attachEarthquake(topology, instruction) {
-  const anchor = nearestAnchor(topology.anchors, instruction)
-  topology.formations.push({...formationFor(instruction), anchorId: anchor?.id ?? null})
+function applyIntervention(topology, instruction, grammar) {
+  switch (instruction.kind) {
+    case "tug":
+      applyTug(topology, instruction, grammar)
+      break
+    case "knot":
+      applyKnot(topology, instruction, grammar)
+      break
+    case "illuminate":
+      applyIlluminate(topology, instruction, grammar)
+      break
+  }
 }
 
-function applyTug(topology, instruction) {
+function attachEarthquake(topology, instruction, grammar) {
+  const anchor = nearestAnchor(topology.anchors, instruction)
+  topology.formations.push({
+    ...formationFor(instruction, grammar),
+    anchorId: anchor?.id ?? null,
+  })
+}
+
+function applyTug(topology, instruction, grammar) {
   const spineTug = tugSpine(topology, instruction)
   const target = nearestAnchor(topology.anchors, instruction)
   if (!target) {
     topology.formations.push({
-      ...formationFor(instruction),
+      ...formationFor(instruction, grammar),
       affectedAnchorIds: [],
       beforeLanes: [],
       afterLanes: [],
@@ -107,7 +161,7 @@ function applyTug(topology, instruction) {
   }
 
   topology.formations.push({
-    ...formationFor(instruction),
+    ...formationFor(instruction, grammar),
     affectedAnchorIds: affected.map(anchor => anchor.id),
     beforeLanes,
     afterLanes: affected.map(anchor => anchor.lane),
@@ -138,9 +192,9 @@ function tugSpine(topology, instruction) {
   }
 }
 
-function applyKnot(topology, instruction) {
+function applyKnot(topology, instruction, grammar) {
   const branchAnchors = nearestDistinctBranches(topology.anchors, instruction)
-  const formation = formationFor(instruction)
+  const formation = formationFor(instruction, grammar)
 
   if (branchAnchors.length >= 2) {
     const [first, second] = branchAnchors
@@ -163,9 +217,12 @@ function applyKnot(topology, instruction) {
   }
 }
 
-function applyIlluminate(topology, instruction) {
+function applyIlluminate(topology, instruction, grammar) {
   const anchor = nearestJunction(topology, instruction) ?? nearestAnchor(topology.anchors, instruction)
-  topology.formations.push({...formationFor(instruction), anchorId: anchor?.id ?? null})
+  topology.formations.push({
+    ...formationFor(instruction, grammar),
+    anchorId: anchor?.id ?? null,
+  })
 }
 
 function nearestDistinctBranches(anchors, instruction) {
@@ -194,12 +251,114 @@ function nearestJunction(topology, instruction) {
   return nearestAnchor(topology.anchors.filter(anchor => junctionIds.has(anchor.id)), instruction)
 }
 
-function formationFor(instruction) {
+function attachBlueskyFan(topology, instruction, grammar) {
+  const anchor = appendSourceAnchor(topology, instruction, grammar)
+  const attachment = nearestAnchor(topology.spine, instruction)
+  const branchDivisor = Math.max(1, grammar.branchCount - 1)
+  const branches = Array.from({length: grammar.branchCount}, (_entry, index) => {
+    const normalizedOffset = grammar.branchCount === 1 ? 0 : index / branchDivisor - 0.5
+
+    return {
+      id: `fan:${instruction.sequence}:${index}`,
+      order: index,
+      lane: clampLane(instruction.lane + normalizedOffset * grammar.divergence * 0.36),
+      pathStyle: grammar.pathStyle,
+      returns: index < Math.round(grammar.branchCount * grammar.returnStrength),
+    }
+  })
+
+  topology.formations.push({
+    ...formationFor(instruction, grammar),
+    anchorId: anchor.id,
+    attachmentSpineId: attachment?.id ?? null,
+    branches,
+  })
+}
+
+function attachRipeFork(topology, instruction, grammar) {
+  const anchor = appendSourceAnchor(topology, instruction, grammar)
+  const attachment = nearestAnchor(topology.spine, instruction)
+  const forkDivisor = Math.max(1, grammar.forkCount - 1)
+  const segments = Array.from({length: grammar.forkCount}, (_entry, index) => ({
+    id: `fork:${instruction.sequence}:${index}`,
+    order: index,
+    angle: grammar.forkCount === 1
+      ? 0
+      : (index / forkDivisor - 0.5) * (0.5 + grammar.extension),
+    extension: grammar.extension,
+    pathStyle: grammar.pathStyle,
+    withdrawalControl: {direction: "inward", amount: grammar.pinch},
+  }))
+
+  topology.formations.push({
+    ...formationFor(instruction, grammar),
+    anchorId: anchor.id,
+    attachmentSpineId: attachment?.id ?? null,
+    segments,
+  })
+}
+
+function attachSolanaBraid(topology, instruction, grammar) {
+  const anchor = appendSourceAnchor(topology, instruction, grammar)
+  const attachment = nearestAnchor(topology.spine, instruction)
+  const beads = Array.from({length: grammar.beadCount}, (_entry, index) => ({
+    id: `bead:${instruction.sequence}:${index}`,
+    slotOrder: index,
+    position: grammar.beadCount === 1 ? 0.5 : index / (grammar.beadCount - 1),
+  }))
+  const gapMarkers = Array.from({length: grammar.gapBreakCount}, (_entry, index) => ({
+    id: `gap:${instruction.sequence}:${index}`,
+    afterSlotOrder: Math.min(
+      grammar.beadCount - 2,
+      Math.floor(((index + 1) * grammar.beadCount) / (grammar.gapBreakCount + 1)) - 1,
+    ),
+  }))
+
+  topology.formations.push({
+    ...formationFor(instruction, grammar),
+    anchorId: anchor.id,
+    attachmentSpineId: attachment?.id ?? null,
+    slotRange: {
+      first: grammar.metrics.first_slot,
+      last: grammar.metrics.last_slot,
+    },
+    beads,
+    gapMarkers,
+  })
+}
+
+function attachDrandPulse(topology, instruction, grammar) {
+  const attachment = nearestAnchor(topology.spine, instruction)
+
+  topology.formations.push({
+    ...formationFor(instruction, grammar),
+    attachmentSpineId: attachment?.id ?? null,
+    pulses: [{
+      id: `pulse:${instruction.sequence}`,
+      order: 0,
+      round: grammar.round,
+    }],
+  })
+}
+
+function appendSourceAnchor(topology, instruction, grammar) {
+  const anchor = anchorFor(
+    instruction,
+    `source:${instruction.source}:${instruction.sequence}`,
+    grammar,
+  )
+  topology.anchors.push(anchor)
+  return anchor
+}
+
+function formationFor(instruction, grammar) {
   return {
     id: `formation:${instruction.sequence}`,
     sequence: instruction.sequence,
     kind: instruction.kind,
     source: instruction.source,
+    role: grammar.role,
+    grammar,
     occurredAt: instruction.occurred_at,
     lane: instruction.lane,
     intensity: instruction.intensity,
@@ -220,7 +379,7 @@ function boundedSpineLane(previousLane, candidateLane) {
   )
 }
 
-function extendSpine(topology, instruction) {
+function extendSpine(topology, instruction, grammar) {
   const previous = topology.spine.at(-1)
   const lane = previous
     ? boundedSpineLane(
@@ -236,16 +395,18 @@ function extendSpine(topology, instruction) {
     sequence: instruction.sequence,
     lane,
     source: instruction.source,
+    grammar,
     intensity: instruction.intensity,
     visual: instruction.visual,
   })
 }
 
-function extendFiber(topology, instruction) {
-  const predecessor = eligiblePredecessor(topology.anchors, instruction)
-  const nearest = predecessor ?? nearestAnchor(topology.anchors, instruction)
+function extendFiber(topology, instruction, grammar) {
+  const backboneAnchors = topology.anchors.filter(anchor => anchor.source === "wikimedia")
+  const predecessor = eligiblePredecessor(backboneAnchors, instruction)
+  const nearest = predecessor ?? nearestAnchor(backboneAnchors, instruction)
   const branchId = predecessor?.branchId ?? `branch:${instruction.sequence}`
-  const anchor = anchorFor(instruction, branchId)
+  const anchor = anchorFor(instruction, branchId, grammar)
 
   topology.anchors.push(anchor)
 
@@ -291,7 +452,7 @@ function normalizedDistance(anchor, instruction) {
   return Math.hypot(instruction.lane - anchor.lane, sequenceDistance)
 }
 
-function anchorFor(instruction, branchId) {
+function anchorFor(instruction, branchId, grammar) {
   return {
     id: `anchor:${instruction.sequence}`,
     sequence: instruction.sequence,
@@ -299,6 +460,7 @@ function anchorFor(instruction, branchId) {
     lane: instruction.lane,
     source: instruction.source,
     kind: instruction.kind,
+    grammar,
     intensity: instruction.intensity,
     visual: instruction.visual,
   }
@@ -476,8 +638,102 @@ function clampNumber(number, minimum, maximum, fallback) {
 
 function uniqueInstructions(instructions) {
   const bySequence = new Map()
-  for (const instruction of Array.isArray(instructions) ? instructions : []) {
-    if (Number.isSafeInteger(instruction?.sequence)) bySequence.set(instruction.sequence, instruction)
+  for (const candidate of ownArrayValues(instructions)) {
+    const instruction = rebuildInstruction(candidate)
+    if (Number.isSafeInteger(instruction.sequence)) {
+      bySequence.set(instruction.sequence, instruction)
+    }
   }
   return [...bySequence.values()].sort((left, right) => left.sequence - right.sequence)
+}
+
+function rebuildInstruction(candidate) {
+  const visual = ownDataValue(candidate, "visual")
+
+  return {
+    sequence: ownDataValue(candidate, "sequence"),
+    kind: ownDataValue(candidate, "kind"),
+    source: ownDataValue(candidate, "source"),
+    occurred_at: ownDataValue(candidate, "occurred_at"),
+    render_version: ownDataValue(candidate, "render_version"),
+    seed: ownDataValue(candidate, "seed"),
+    lane: ownDataValue(candidate, "lane"),
+    intensity: ownDataValue(candidate, "intensity"),
+    visual: {
+      spread: ownDataValue(visual, "spread"),
+      bend: ownDataValue(visual, "bend"),
+      pulse: ownDataValue(visual, "pulse"),
+    },
+    summary: ownDataValue(candidate, "summary"),
+    metrics: rebuildMetricRecord(ownDataValue(candidate, "metrics")),
+  }
+}
+
+function rebuildMetricRecord(candidate) {
+  if (candidate === undefined || candidate === null || typeof candidate !== "object") {
+    return candidate
+  }
+
+  try {
+    if (Array.isArray(candidate)) return []
+    const rebuilt = {}
+
+    for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(candidate))) {
+      if (!Object.hasOwn(descriptor, "value")) return null
+      Object.defineProperty(rebuilt, key, {
+        value: descriptor.value,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      })
+    }
+
+    return rebuilt
+  } catch (_error) {
+    return null
+  }
+}
+
+function ownArrayValues(candidate) {
+  try {
+    if (!Array.isArray(candidate)) return []
+
+    return Object.entries(Object.getOwnPropertyDescriptors(candidate))
+      .filter(([key, descriptor]) => arrayIndex(key) && Object.hasOwn(descriptor, "value"))
+      .sort(([left], [right]) => Number(left) - Number(right))
+      .map(([_key, descriptor]) => descriptor.value)
+  } catch (_error) {
+    return []
+  }
+}
+
+function arrayIndex(key) {
+  if (!/^(0|[1-9]\d*)$/.test(key)) return false
+  const index = Number(key)
+  return Number.isSafeInteger(index) && index >= 0
+}
+
+function ownDataValue(candidate, key) {
+  if (candidate === null || (typeof candidate !== "object" && typeof candidate !== "function")) {
+    return undefined
+  }
+
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(candidate, key)
+    return descriptor && Object.hasOwn(descriptor, "value") ? descriptor.value : undefined
+  } catch (_error) {
+    return undefined
+  }
+}
+
+function newerInstructionFirst(left, right) {
+  const leftTime = parsedTime(left.occurred_at)
+  const rightTime = parsedTime(right.occurred_at)
+  return rightTime - leftTime || right.sequence - left.sequence
+}
+
+function parsedTime(timestamp) {
+  if (typeof timestamp !== "string") return Number.NEGATIVE_INFINITY
+  const milliseconds = Date.parse(timestamp)
+  return Number.isFinite(milliseconds) ? milliseconds : Number.NEGATIVE_INFINITY
 }

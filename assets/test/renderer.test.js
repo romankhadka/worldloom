@@ -2,8 +2,9 @@ import assert from "node:assert/strict"
 import {readFileSync} from "node:fs"
 import test from "node:test"
 
-import {commandsForScene, eventTimeToX} from "../js/worldloom/geometry.js"
+import {commandsForScene, eventTimeToX, signalPalette} from "../js/worldloom/geometry.js"
 import {Renderer} from "../js/worldloom/renderer.js"
+import {balanced} from "./fixtures/balanced_snapshots.js"
 
 const balancedSnapshot = JSON.parse(readFileSync(
   new URL("../../test/support/fixtures/live_snapshots/balanced_v1.json", import.meta.url),
@@ -1061,6 +1062,103 @@ test("paints each fiber as glow, body, and luminous core", () => {
   assert.equal(calls.filter(([name]) => name === "stroke").length, 3)
 })
 
+test("assigns every world signal its restrained source palette family", () => {
+  const expectedFamilies = {
+    wikimedia: "cyan-verdigris",
+    bluesky: "violet",
+    ripe_ris: "electric",
+    solana: "amber",
+    drand: "crystalline",
+    usgs: "ember",
+    open_meteo: "moss-gold",
+    visitor: "ivory",
+  }
+
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(signalPalette).map(([source, palette]) => [source, palette.family]),
+    ),
+    expectedFamilies,
+  )
+
+  const renderer = new Renderer(null, {width: 1_000, height: 600, reducedMotion: true})
+  renderer.setSnapshot(structuredClone(balanced))
+
+  assert.deepEqual(
+    new Set(renderer.commands.map(command => command.paletteFamily).filter(Boolean)),
+    new Set(Object.values(expectedFamilies)),
+  )
+})
+
+test("paints bounded role materials from one structural command per formation", () => {
+  const canvas = fakeCanvas()
+  const cache = fakeCanvas()
+  const renderer = new Renderer(canvas, {
+    width: 1_000,
+    height: 600,
+    reducedMotion: true,
+    createCanvas: () => cache,
+  })
+
+  renderer.setSnapshot(structuredClone(balanced))
+
+  const roles = ["conversation-fan", "route-fork", "slot-braid", "public-pulse"]
+  const structural = renderer.commands.filter(command => roles.includes(command.role))
+  const versionTwoInstructions = balanced.display_events.filter(instruction =>
+    ["bluesky", "ripe_ris", "solana", "drand"].includes(instruction.source)
+  )
+
+  assert.equal(structural.length, versionTwoInstructions.length)
+  assert.deepEqual(
+    structural.map(command => command.sequence),
+    versionTwoInstructions.map(instruction => instruction.sequence),
+  )
+  assert.ok(structural.every(command =>
+    Object.keys(command.material).join(",") === "glow,body,core"
+  ))
+  assert.equal(renderer.commands.some(command => command.cosmeticOf), false)
+
+  for (const palette of Object.values(signalPalette)) {
+    assert.ok(cache.calls.some(([name, color]) =>
+      (name === "strokeStyle" || name === "fillStyle") &&
+        (color === palette.stroke || color === palette.glow)
+    ), `expected ${palette.family} paint calls`)
+  }
+  assert.ok(cache.calls.filter(([name]) => name === "setLineDash").length > 0)
+  assert.ok(cache.calls.filter(([name]) => name === "arc").length > 0)
+  assert.ok(cache.calls.filter(([name]) => name === "lineTo").length > 0)
+})
+
+test("reduced motion paints the same settled source roles without a continuing scheduler", () => {
+  let motionFrameRequests = 0
+  let reducedFrameRequests = 0
+  const motionRenderer = new Renderer(null, {
+    width: 1_000,
+    height: 600,
+    requestFrame: () => ++motionFrameRequests,
+  })
+  const reducedRenderer = new Renderer(null, {
+    width: 1_000,
+    height: 600,
+    reducedMotion: true,
+    requestFrame: () => ++reducedFrameRequests,
+  })
+
+  motionRenderer.setSnapshot(structuredClone(balanced))
+  reducedRenderer.setSnapshot(structuredClone(balanced))
+  motionRenderer.start()
+  reducedRenderer.start()
+
+  const settledIdentity = renderer => renderer.settledSceneDiagnostics().paintCommands.map(
+    command => [command.sequence, command.type, command.role, command.paletteFamily],
+  )
+  assert.deepEqual(settledIdentity(reducedRenderer), settledIdentity(motionRenderer))
+  assert.equal(reducedRenderer.activeTransitions.size, 0)
+  assert.equal(reducedRenderer.viewerPulses, 0)
+  assert.equal(reducedFrameRequests, 0)
+  assert.equal(motionFrameRequests, 1)
+})
+
 test("draws a bounded lane seed and selected-formation halo", () => {
   const canvas = fakeCanvas()
   const renderer = new Renderer(canvas, {width: 800, height: 600, reducedMotion: true})
@@ -1552,10 +1650,13 @@ function fakeCanvas() {
     fillText: record("fillText"),
     drawImage: record("drawImage"),
     translate: record("translate"),
+    setLineDash: record("setLineDash"),
     set lineWidth(value) { calls.push(["lineWidth", value]) },
     set strokeStyle(value) { calls.push(["strokeStyle", value]) },
     set fillStyle(value) { calls.push(["fillStyle", value]) },
     set globalAlpha(value) { calls.push(["globalAlpha", value]) },
+    set lineCap(value) { calls.push(["lineCap", value]) },
+    set lineJoin(value) { calls.push(["lineJoin", value]) },
   }
 
   return {width: 0, height: 0, style: {}, calls, getContext: () => context}

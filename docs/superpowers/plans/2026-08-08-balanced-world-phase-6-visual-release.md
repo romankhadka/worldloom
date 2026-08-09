@@ -120,7 +120,7 @@ rtk git commit -m "Define a non-color grammar for every public signal"
 
 ## Task 3: Build bounded multi-source topology
 
-- [ ] **Step 1: Add failing topology invariants**
+- [x] **Step 1: Add failing topology invariants**
 
 In `assets/test/topology.test.js`, apply every named fixture and assert:
 
@@ -133,29 +133,30 @@ In `assets/test/topology.test.js`, apply every named fixture and assert:
 - output is deterministic under input copy/reload;
 - 600 display plus 4 memory instructions remain below existing topology limits.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 ```bash
 rtk node --test assets/test/topology.test.js
 ```
 
-- [ ] **Step 3: Dispatch through the grammar**
+- [x] **Step 3: Dispatch through the grammar**
 
 Update `assets/js/worldloom/topology.js` to validate source-kind pairs, call `grammarFor`, and build bounded role-specific topology. Preserve sequence as identity and tie-breaker. Do not re-sort by source or fabricate missing source anchors.
 
 Use aggregate metrics only to modify local structure. Under a Wikimedia surge, source round-robin selection has already happened on the server; topology must not reintroduce density bias.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify topology and hold it for the visible projection**
 
 ```bash
 rtk node --test assets/test/topology.test.js assets/test/source_grammar.test.js
-rtk git add assets/js/worldloom/topology.js assets/test/topology.test.js
-rtk git commit -m "Compose distinct source structures on one living spine"
 ```
+
+Topology and geometry must land together so a valid v2 formation is never invisible at a
+commit boundary. Commit these files with Task 4 after its projection tests are green.
 
 ## Task 4: Project and paint bounded materials
 
-- [ ] **Step 1: Write geometry and renderer tests first**
+- [x] **Step 1: Write geometry and renderer tests first**
 
 In `assets/test/geometry.test.js`, assert all source commands are finite, padded, and tied to event-time x columns. Assert equal-time source families separate vertically/structurally and history remains linear left.
 
@@ -174,27 +175,27 @@ visitor: "ivory"
 
 Also assert reduced motion paints the same settled command roles with no continuing pulse/growth scheduler.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 ```bash
 rtk node --test assets/test/geometry.test.js assets/test/renderer.test.js
 ```
 
-- [ ] **Step 3: Add role-specific command projection**
+- [x] **Step 3: Add role-specific command projection**
 
 Update `geometry.js` so role-specific points/segments remain on the shared event-time axis. Cap scene commands at the current global bound; cap each aggregate's branches, forks, beads, and crystals before command creation.
 
-- [ ] **Step 4: Add the restrained palette and painters**
+- [x] **Step 4: Add the restrained palette and painters**
 
 Update `renderer.js` with one palette entry and one painter per grammar role. Keep glow/body/core layers derived at paint time from one structural command. Use line caps, dash rhythm, marker silhouette, angularity, and negative space so meaning survives grayscale.
 
-- [ ] **Step 5: Verify worst-case bounds and commit**
+- [x] **Step 5: Verify worst-case bounds and commit**
 
 ```bash
 rtk node --test assets/test/geometry.test.js assets/test/renderer.test.js assets/test/topology.test.js
 rtk npm test
-rtk git add assets/js/worldloom/geometry.js assets/js/worldloom/renderer.js assets/test/geometry.test.js assets/test/renderer.test.js
-rtk git commit -m "Paint bounded material responses for every world signal"
+rtk git add assets/js/worldloom/topology.js assets/js/worldloom/geometry.js assets/js/worldloom/renderer.js assets/test/topology.test.js assets/test/geometry.test.js assets/test/renderer.test.js assets/test/smoke.test.js docs/superpowers/plans/2026-08-08-balanced-world-phase-6-visual-release.md
+rtk git commit -m "Compose and paint every world signal"
 ```
 
 ## Task 5: Add source health, legend, and semantic summaries

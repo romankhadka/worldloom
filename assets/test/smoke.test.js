@@ -217,8 +217,18 @@ test("balanced Solana windows advance through internally consistent slot ranges"
   }
 })
 
-test("the four signal families have fixed accessible palette roles", () => {
-  assert.deepEqual(Object.keys(signalPalette), ["wikimedia", "usgs", "open_meteo", "visitor"])
+test("all eight signal families have fixed accessible palette roles", () => {
+  assert.deepEqual(Object.keys(signalPalette), [
+    "wikimedia",
+    "bluesky",
+    "ripe_ris",
+    "solana",
+    "drand",
+    "usgs",
+    "open_meteo",
+    "visitor",
+  ])
+  assert.equal(new Set(Object.values(signalPalette).map(palette => palette.family)).size, 8)
 })
 
 test("the live-edge placement surface remains importable without a DOM", () => {

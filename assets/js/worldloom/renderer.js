@@ -8,6 +8,12 @@ const maximumActiveTransitions = 8
 const maximumScaffoldEvents = 12
 const defaultSpacing = 28
 const animatedKinds = new Set(["wikimedia", "earthquake", "tug", "knot", "illuminate"])
+const sourceMaterialRoles = new Set([
+  "conversation-fan",
+  "route-fork",
+  "slot-braid",
+  "public-pulse",
+])
 
 export class Renderer {
   constructor(canvas, options = {}) {
@@ -818,6 +824,11 @@ function drawCommand(context, command, width, height) {
     context.restore()
     return
   }
+  if (sourceMaterialRoles.has(command.role) && command.type === command.role) {
+    drawSourceMaterial(context, command)
+    context.restore()
+    return
+  }
 
   context.strokeStyle = command.stroke ?? "#f3ead4"
   context.fillStyle = command.glow ?? command.stroke ?? "#f3ead4"
@@ -961,6 +972,168 @@ function drawCommand(context, command, width, height) {
   }
 
   context.restore()
+}
+
+function drawSourceMaterial(context, command) {
+  switch (command.role) {
+    case "conversation-fan":
+      drawConversationFan(context, command)
+      break
+    case "route-fork":
+      drawRouteFork(context, command)
+      break
+    case "slot-braid":
+      drawSlotBraid(context, command)
+      break
+    case "public-pulse":
+      drawPublicPulse(context, command)
+      break
+  }
+}
+
+function drawConversationFan(context, command) {
+  paintMaterialLayers(context, command, () => {
+    traceMaterialAttachment(context, command)
+    for (const branch of command.branches) {
+      const {curve} = branch
+      context.moveTo(curve.from.x, curve.from.y)
+      context.bezierCurveTo(
+        curve.control1.x,
+        curve.control1.y,
+        curve.control2.x,
+        curve.control2.y,
+        curve.to.x,
+        curve.to.y,
+      )
+      if (branch.returns && branch.returnPoint) {
+        context.lineTo(branch.returnPoint.x, branch.returnPoint.y)
+      }
+    }
+  }, {dash: [1, 5], lineCap: "round", lineJoin: "round"})
+
+  context.fillStyle = command.stroke
+  context.globalAlpha = 0.78
+  for (const branch of command.branches) {
+    const point = branch.curve.to
+    context.beginPath()
+    context.moveTo(point.x, point.y - 2.8)
+    context.lineTo(point.x + 3.5, point.y + 2.8)
+    context.lineTo(point.x - 3.5, point.y + 2.8)
+    context.lineTo(point.x, point.y - 2.8)
+    context.fill()
+  }
+}
+
+function drawRouteFork(context, command) {
+  paintMaterialLayers(context, command, () => {
+    traceMaterialAttachment(context, command)
+    for (const segment of command.segments) {
+      const [origin, elbow, endpoint] = segment.points
+      context.moveTo(origin.x, origin.y)
+      context.lineTo(elbow.x, elbow.y)
+      context.lineTo(endpoint.x, endpoint.y)
+    }
+  }, {dash: [7, 3], lineCap: "square", lineJoin: "miter"})
+
+  context.strokeStyle = command.stroke
+  context.globalAlpha = 0.82
+  context.lineWidth = Math.max(1, command.width * 0.5)
+  for (const segment of command.segments) {
+    const endpoint = segment.points.at(-1)
+    context.beginPath()
+    context.moveTo(endpoint.x - 3.5, endpoint.y - 3.5)
+    context.lineTo(endpoint.x + 3.5, endpoint.y)
+    context.lineTo(endpoint.x - 3.5, endpoint.y + 3.5)
+    context.stroke()
+  }
+}
+
+function drawSlotBraid(context, command) {
+  const gaps = new Set(command.gapMarkers.map(marker => marker.afterSlotOrder))
+  paintMaterialLayers(context, command, () => {
+    traceMaterialAttachment(context, command)
+    for (const strand of command.strands) {
+      for (let index = 0; index < strand.length - 1; index++) {
+        if (gaps.has(index)) continue
+        context.moveTo(strand[index].x, strand[index].y)
+        context.lineTo(strand[index + 1].x, strand[index + 1].y)
+      }
+    }
+  }, {dash: [], lineCap: "butt", lineJoin: "round"})
+
+  context.fillStyle = command.stroke
+  context.globalAlpha = 0.86
+  for (const bead of command.beads) {
+    context.beginPath()
+    context.arc(bead.x, bead.y, bead.radius, 0, Math.PI * 2)
+    context.fill()
+  }
+  context.strokeStyle = command.glow
+  context.globalAlpha = 0.72
+  context.lineWidth = 1
+  for (const marker of command.gapMarkers) {
+    context.beginPath()
+    context.moveTo(marker.x - marker.size, marker.y - marker.size)
+    context.lineTo(marker.x + marker.size, marker.y + marker.size)
+    context.moveTo(marker.x + marker.size, marker.y - marker.size)
+    context.lineTo(marker.x - marker.size, marker.y + marker.size)
+    context.stroke()
+  }
+}
+
+function drawPublicPulse(context, command) {
+  paintMaterialLayers(context, command, () => {
+    traceMaterialAttachment(context, command)
+    for (const crystal of command.crystals) tracePolyline(context, crystal.points)
+  }, {dash: [2, 3], lineCap: "square", lineJoin: "miter"})
+
+  context.fillStyle = command.stroke
+  context.globalAlpha = 0.74
+  for (const crystal of command.crystals) {
+    context.beginPath()
+    context.arc(
+      command.x,
+      command.y,
+      2.1 + command.intensity * 1.6,
+      0,
+      Math.PI * 2,
+    )
+    context.fill()
+  }
+}
+
+function paintMaterialLayers(context, command, trace, {dash, lineCap, lineJoin}) {
+  const material = command.material ?? {
+    glow: {width: 5, alpha: 0.08},
+    body: {width: 2, alpha: 0.42},
+    core: {width: 1, alpha: 0.82},
+  }
+  context.lineCap = lineCap
+  context.lineJoin = lineJoin
+  context.setLineDash(dash)
+
+  for (const [layer, style] of Object.entries(material)) {
+    context.beginPath()
+    context.lineWidth = style.width
+    context.globalAlpha = style.alpha
+    context.strokeStyle = layer === "glow" ? command.glow : command.stroke
+    trace()
+    context.stroke()
+  }
+
+  context.setLineDash([])
+}
+
+function tracePolyline(context, points) {
+  if (points.length === 0) return
+  context.moveTo(points[0].x, points[0].y)
+  for (const point of points.slice(1)) context.lineTo(point.x, point.y)
+}
+
+function traceMaterialAttachment(context, command) {
+  if (!command.attachment) return
+  context.moveTo(command.attachment.x, command.attachment.y)
+  context.lineTo(command.x, command.y)
 }
 
 function drawFiberPath(context, command) {
