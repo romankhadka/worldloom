@@ -395,21 +395,18 @@ rtk git add assets/css/app.css assets/test/color_system.test.js
 rtk git commit -m "Apply Lacquered Gallery across the interface"
 ```
 
-## Task 3: Align metadata and favicon presentation
+## Task 3: Align browser theme and favicon presentation
 
 **Files:**
-- Modify: `test/worldloom_web/controllers/page_metadata_test.exs:24-58, 67-72`
-- Modify: `lib/worldloom_web/components/layouts/root.html.heex:14, 26-28, 40-42`
+- Modify: `test/worldloom_web/controllers/page_metadata_test.exs:54-83`
+- Modify: `lib/worldloom_web/components/layouts/root.html.heex:14`
 - Modify: `priv/static/images/logo.svg:4`
 
 - [ ] **Step 1: Update metadata tests first**
 
-Change the expected preview description and theme color, then add a favicon assertion:
+Change only the expected browser theme color, then add a favicon assertion:
 
 ```elixir
-expected_image_alt =
-  "An oxblood, jade, copper, and saffron living weave above Worldloom's lacquered gesture dock."
-
 assert document
        |> LazyHTML.query("meta[name='theme-color'][content='#120708']")
        |> Enum.count() == 1
@@ -434,20 +431,14 @@ end
 rtk mix test test/worldloom_web/controllers/page_metadata_test.exs
 ```
 
-Expected: FAIL on old `#07110f`, old preview alternative text, and old favicon fill.
+Expected: FAIL on old `#07110f` and old favicon fill. The existing preview alternative text remains unchanged because it still describes the existing social preview PNG truthfully.
 
-- [ ] **Step 3: Implement the exact metadata contract**
+- [ ] **Step 3: Implement the exact browser presentation contract**
 
 In `root.html.heex` use:
 
 ```heex
 <meta name="theme-color" content="#120708" />
-```
-
-Use this exact content for both `og:image:alt` and `twitter:image:alt`:
-
-```text
-An oxblood, jade, copper, and saffron living weave above Worldloom's lacquered gesture dock.
 ```
 
 In `logo.svg`, preserve the complete path and change only:
@@ -609,8 +600,27 @@ Expected: all Playwright tests pass locally with no console, page, WebSocket, re
 
 **Files:**
 - Modify: `priv/static/images/worldloom-social-preview.png`
+- Modify: `lib/worldloom_web/components/layouts/root.html.heex`
+- Modify: `test/worldloom_web/controllers/page_metadata_test.exs`
 
-- [ ] **Step 1: Start a deterministic feed-disabled capture server**
+- [ ] **Step 1: Write the failing truthful preview metadata contract**
+
+In `page_metadata_test.exs`, change `expected_image_alt` to this exact approved description:
+
+```elixir
+expected_image_alt =
+  "An oxblood, jade, copper, and saffron living weave above Worldloom's lacquered gesture dock."
+```
+
+Run:
+
+```bash
+rtk mix test test/worldloom_web/controllers/page_metadata_test.exs
+```
+
+Expected: FAIL because both `og:image:alt` and `twitter:image:alt` still truthfully describe the old cyan, ember, and olive preview.
+
+- [ ] **Step 2: Start a deterministic feed-disabled capture server**
 
 Use an isolated managed terminal session:
 
@@ -621,7 +631,7 @@ rtk env PORT=4003 WORLDLOOM_FEEDS_ENABLED=false mix phx.server
 
 Wait for `http://localhost:4003/healthz` to return HTTP 200.
 
-- [ ] **Step 2: Capture the verified application at the declared dimensions**
+- [ ] **Step 3: Capture the verified application at the declared dimensions**
 
 After `#loom-canvas[data-ready='true']` is present, run:
 
@@ -631,20 +641,33 @@ rtk npx playwright screenshot --browser chromium --viewport-size "1600,900" --wa
 
 Expected: a 1600-by-900 PNG captured from the application, not a concept mockup.
 
-- [ ] **Step 3: Inspect the preview at original resolution**
+- [ ] **Step 4: Inspect the preview at original resolution**
 
 Reject and recapture if it does not show oxblood/wine foundations, vivid jade/copper/saffron material, readable bone text, the living weave, and an unclipped gesture dock. Reject empty, loading, disconnected, chart-like, or mockup imagery.
 
-- [ ] **Step 4: Prove the asset contract and commit**
+- [ ] **Step 5: Align metadata with the accepted preview and prove GREEN**
+
+Only after accepting the captured preview, use this exact content for both `og:image:alt` and `twitter:image:alt` in `root.html.heex`:
+
+```text
+An oxblood, jade, copper, and saffron living weave above Worldloom's lacquered gesture dock.
+```
+
+Run:
 
 ```bash
 rtk mix test test/worldloom_web/controllers/page_metadata_test.exs
 rtk file priv/static/images/worldloom-social-preview.png
-rtk git add priv/static/images/worldloom-social-preview.png
-rtk git commit -m "Refresh Worldloom's Lacquered Gallery preview"
 ```
 
-Expected: metadata tests pass and `file` reports a 1600-by-900 PNG.
+Expected: all focused metadata tests pass and `file` reports a 1600-by-900 PNG.
+
+- [ ] **Step 6: Commit the preview and its truthful metadata together**
+
+```bash
+rtk git add priv/static/images/worldloom-social-preview.png lib/worldloom_web/components/layouts/root.html.heex test/worldloom_web/controllers/page_metadata_test.exs
+rtk git commit -m "Refresh Worldloom's Lacquered Gallery preview"
+```
 
 ## Task 6: Run the complete release gate and integrate
 

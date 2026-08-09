@@ -27,7 +27,7 @@ defmodule WorldloomWeb.PageMetadataTest do
     end
 
     expected_image_alt =
-      "An oxblood, jade, copper, and saffron living weave above Worldloom's lacquered gesture dock."
+      "A cyan, ember, and olive living weave above Worldloom's gesture dock."
 
     assert document
            |> LazyHTML.query("meta[property='og:image:alt']")
