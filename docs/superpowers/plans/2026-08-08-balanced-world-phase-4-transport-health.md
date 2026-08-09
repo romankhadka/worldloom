@@ -162,7 +162,7 @@ Registry counters and coarse reasons remain internal and are never part of `Feed
 
 Wire the existing Wikimedia worker's connection, valid-frame contact, durable activity, retry, and disconnect transitions into `HealthRegistry` in this task. A started stream task is not proof of a connected transport: record `:connected` only when the worker receives a valid SSE event or heartbeat. Record activity only after a non-empty window is durably accepted by Buffer. This prevents today's active source from regressing to public `:disconnected` while Task 7 remains focused on replay and the two polling workers.
 
-- [ ] **Step 5: Supervise and verify**
+- [x] **Step 5: Supervise and verify**
 
 Start `HealthRegistry`, then `HealthMonitor`, before Buffer and Signals Supervisor in `lib/worldloom/application.ex`, so no worker can notify a missing monitor. `HealthMonitor` handles `:health_registry_changed` with an immediate projection refresh but does not schedule an additional periodic timer. Keep `/healthz` unchanged.
 
