@@ -278,11 +278,11 @@ rtk git commit -m "Measure eligible signal balance without fabricating marks"
 
 ## Task 7: Add responsive visual and accessibility snapshots
 
-- [ ] **Step 1: Add deterministic route setup**
+- [x] **Step 1: Add deterministic route setup**
 
 Extend the existing Playwright setup to seed named snapshots with feeds disabled. Do not make browser tests depend on public providers or current wall time.
 
-- [ ] **Step 2: Add named screenshot cases**
+- [x] **Step 2: Add named screenshot cases**
 
 In `e2e/worldloom.spec.js`, add `toHaveScreenshot` assertions for:
 
@@ -297,11 +297,11 @@ In `e2e/worldloom.spec.js`, add `toHaveScreenshot` assertions for:
 
 Mask only volatile Phoenix debug/runtime fields, never the canvas or legend.
 
-- [ ] **Step 3: Add non-visual browser assertions**
+- [x] **Step 3: Add non-visual browser assertions**
 
 Verify keyboard selection, screen-reader summary, health changes, legend disclosure, source attribution, memory selection, same-time distinguishability, touch gestures, reduced motion, and zero console/page/WebSocket/request failures.
 
-- [ ] **Step 4: Generate and review snapshots**
+- [x] **Step 4: Generate and review snapshots**
 
 ```bash
 rtk npx playwright test e2e/worldloom.spec.js --update-snapshots
@@ -310,7 +310,7 @@ rtk npx playwright test e2e/worldloom.spec.js
 
 Open every generated image at full size. Reject clipped controls, muddy density, indistinguishable grayscale structures, illegible text, or canvas/legend overlap.
 
-- [ ] **Step 5: Commit reviewed snapshots**
+- [x] **Step 5: Commit reviewed snapshots**
 
 ```bash
 rtk git add e2e/worldloom.spec.js e2e/worldloom.spec.js-snapshots playwright.config.js
