@@ -193,7 +193,7 @@ rtk git commit -m "Qualify bounded RIPE route-change summaries"
 
 - [ ] **Step 1: Write deterministic adapter tests**
 
-Create `test/worldloom/signals/solana_slot_adapter_test.exs` with synthetic `slotSubscribe` notifications. Assert only JSON-RPC notifications with integer `slot`, `parent`, and `root` are accepted; occurrence time is injected server receipt time; gaps derive from slot discontinuity; counters saturate; and account, transaction, wallet, and program fields are rejected or ignored without retention.
+Create `test/worldloom/signals/solana_slot_adapter_test.exs` with synthetic `slotSubscribe` notifications. Pin the exact request `%{"jsonrpc" => "2.0", "id" => 1, "method" => "slotSubscribe"}` with no `params`. Assert only `slotNotification` envelopes with a non-negative integer subscription id and integer `slot`, `parent`, and `root` positions in `0..9_007_199_254_740_991` are accepted. Extra fields may be ignored but can never be retained. Assert occurrence time is the once-injected server receipt time; duplicate and backward positions leave state unchanged; gaps derive from consecutive accepted slots across ordinary windows and reconnect continuity; counters saturate and set `truncated`; and account, transaction, wallet, program, and token fields cannot appear in state, inspection, output, or errors.
 
 - [ ] **Step 2: Run and verify RED**
 
@@ -207,14 +207,16 @@ Create `lib/worldloom/signals/solana_slot_adapter.ex` with:
 
 ```elixir
 @spec add(t(), map(), DateTime.t()) ::
-        {:ok, t()} | {:flush, t(), t()} | {:drop, atom(), t()}
+        {:ok, t()} | {:close_required, t()} | {:drop, atom(), t()}
 ```
 
-Use four-second server-receipt windows at offset three. Persist only slot count, first/last slot, gap count, window count/span, summary, lane, and intensity. Validate `root` and `parent` as notification-shape fields and then discard them; this phase does not publish root-lag metrics. No production URL, child spec, runtime flag, or worker belongs in this phase.
+Use four-second server-receipt windows at offset three with a one-second close grace and at most one bounded immediate-successor aggregate. Add deterministic `elapsed?/2`, `close/2`, and `flush/1` operations. An elapsed frame is not consumed: return `{:close_required, identical_state}`, let the caller synchronously commit `close/2`'s completed aggregate, install the promoted state only on success, and retry the same decoded frame with the same receipt time. A timer close with no pending successor advances to the later of the immediate successor and the receipt-aligned live window, retaining only the prior accepted slot for future gap detection; it does not manufacture empty windows.
+
+Expose `subscription_message/0` and `new/2`, where the optional second argument is the last durably committed JSON-safe slot loaded by the future worker. Invalid prior slots are programming errors. Persist only slot count, first/last slot, gap count, `truncated`, window count/span, summary, lane, and intensity. Keep `slot_count` positive, require `slot_count <= last_slot - first_slot + 1`, and allow the gap count to include the transition from a prior window or reconnect. Validate `root` and `parent` as notification-shape fields and then discard them; this phase does not publish root-lag metrics. The struct may contain only its UTC window, bounded counters, first/last and previous accepted slot, `truncated`, and the single sanitized pending aggregate; omit pending state from `Inspect`. No production URL, child spec, runtime flag, or worker belongs in this phase.
 
 - [ ] **Step 4: Normalize and commit**
 
-Add `Normalizer.solana_window/1` with `:slot/:solana` and `solana-window:<unix-start>:4` identity.
+Add `Normalizer.solana_window/1` with `:slot/:solana` and `solana-window:<unix-start>:4` identity. Revalidate JSON-safe ordered slot positions, positive uint32 `slot_count`, uint32 `gap_count`, boolean `truncated`, and `slot_count <= last_slot - first_slot + 1`. Reject empty or impossible aggregates and derive lane and intensity only from approved numeric fields.
 
 ```bash
 rtk mix test test/worldloom/signals/solana_slot_adapter_test.exs test/worldloom/signals/normalizer_test.exs

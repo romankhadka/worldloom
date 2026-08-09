@@ -129,7 +129,7 @@ Add these bounded public payload keys to `SourceEvent`:
 ```elixir
 bluesky: ~w(summary window_count window_span_seconds total_actions original_posts replies reposts creates updates deletes truncated)
 ripe_ris: ~w(summary window_count window_span_seconds announced withdrawn ipv4 ipv6 collector_count peer_count truncated)
-solana: ~w(summary window_count window_span_seconds slot_count first_slot last_slot gap_count)
+solana: ~w(summary window_count window_span_seconds slot_count first_slot last_slot gap_count truncated)
 drand: ~w(summary round)
 ```
 
@@ -137,7 +137,7 @@ Keep keys strings, values JSON-encodable, counters non-negative integers, and th
 
 `render_identity` is an ephemeral trusted-construction field. `Store.event_attributes/2` must pass it to `VisualParameters.for/2` and must never copy it into the durable row.
 
-Add explicit `validate_payload_shape/2` clauses. Every v2 counter must be an integer in `0..4_294_967_295`, `window_count` must be positive, ordinary `window_span_seconds` must equal four, pressure spans must equal `window_count * 4`, boolean `truncated` must be a boolean, Solana slot bounds must be ordered non-negative integers, and drand round must be positive. Reject wrong types before persistence rather than relying on `InstructionMetrics` to fail later.
+Add explicit `validate_payload_shape/2` clauses. Every v2 counter must be an integer in `0..4_294_967_295`, `window_count` must be positive, ordinary `window_span_seconds` must equal four, pressure spans must equal `window_count * 4`, boolean `truncated` must be a boolean, and drand round must be positive. Solana's `slot_count` and `gap_count` are counters, but `first_slot` and `last_slot` are ordered protocol positions and must instead be integers in the JSON-safe range `0..9_007_199_254_740_991`. Reject wrong types before persistence rather than relying on `InstructionMetrics` to fail later.
 
 Split `Worldloom.Loom.Store`'s phase-1 source list into `@primary_sources ~w(wikimedia bluesky ripe_ris solana drand)` and `@context_sources ~w(usgs visitor)`. Query both for current display selection, but apply the scheduled-family balance/quota reporting only to primary sources; keep Open-Meteo ambient-only. New sources remain dormant because no worker is enabled in this phase.
 
