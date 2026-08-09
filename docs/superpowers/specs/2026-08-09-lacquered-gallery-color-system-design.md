@@ -1,7 +1,7 @@
 # Lacquered Gallery Color System Design
 
 **Date:** 2026-08-09  
-**Status:** Approved in conversation; written specification pending review  
+**Status:** Approved  
 **Scope:** Replace Worldloom's current cyan-and-green visual palette with the approved Earth & Lacquer / Lacquered Gallery system across the browser interface, Canvas renderer, metadata, and social presentation.
 
 ## Summary
