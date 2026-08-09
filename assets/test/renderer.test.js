@@ -222,6 +222,25 @@ test("accepts watermark zero only for the empty initial snapshot", () => {
   )
 })
 
+test("accepts a weather-only snapshot without fabricating a live window", () => {
+  const renderer = new Renderer(null, {width: 1000, height: 600})
+  const weatherOnly = {
+    snapshot_version: 1,
+    window_end: null,
+    commit_watermark: balancedSnapshot.ambient.sequence,
+    display_events: [],
+    memory_events: [],
+    ambient: structuredClone(balancedSnapshot.ambient),
+  }
+
+  assert.doesNotThrow(() => renderer.setSnapshot(weatherOnly))
+  assert.equal(renderer.windowEnd, null)
+  assert.deepEqual(renderer.instructions, [])
+  assert.deepEqual(renderer.memoryInstructions, [])
+  assert.deepEqual(renderer.ambient, balancedSnapshot.ambient)
+  assert.deepEqual(renderer.commands.map(command => command.type), ["ambient"])
+})
+
 test("keeps malformed historical timestamps on the legacy chapter coordinate path", () => {
   const renderer = new Renderer(null, {width: 800, height: 600})
   const historical = [{...instruction(41), occurred_at: "legacy timestamp unavailable"}]

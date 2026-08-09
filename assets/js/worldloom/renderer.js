@@ -688,8 +688,9 @@ function validatedSnapshot(envelope) {
   if (envelope.commit_watermark === 0 && allInstructions.length > 0) {
     throw new TypeError("commit watermark zero is reserved for an empty snapshot")
   }
-  if (envelope.window_end === null && allInstructions.length > 0) {
-    throw new TypeError("window_end may be null only for an empty snapshot")
+  const primaryInstructions = [...envelope.display_events, ...envelope.memory_events]
+  if (envelope.window_end === null && primaryInstructions.length > 0) {
+    throw new TypeError("window_end may be null only when primary snapshot roles are empty")
   }
 
   return {

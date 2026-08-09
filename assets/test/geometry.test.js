@@ -81,6 +81,39 @@ test("drops display rows older than the snapshot minute before building topology
   assert.equal(commands.some(command => command.sequence === current.sequence), true)
 })
 
+test("matches the server's whole-second membership at both live-window boundaries", () => {
+  const timestamps = [
+    [1, "2026-08-08T12:00:00Z"],
+    [2, "2026-08-08T12:00:00.999Z"],
+    [3, "2026-08-08T12:01:00Z"],
+    [4, "2026-08-08T12:01:00.999Z"],
+    [5, "2026-08-08T11:59:59.999Z"],
+    [6, "2026-08-08T12:01:01Z"],
+  ]
+  const display = timestamps.map(([sequence, occurredAt]) => ({
+    ...balancedSnapshot.display_events[0],
+    sequence,
+    occurred_at: occurredAt,
+  }))
+
+  const commands = balancedSceneCommands({displayInstructions: display})
+  const hits = commands.filter(command => command.type === "anchor-hit")
+  const hitBySequence = new Map(hits.map(hit => [hit.sequence, hit]))
+  const usableWidth = viewport.width - viewport.padding * 2
+
+  assert.deepEqual([...hitBySequence.keys()], [1, 2, 3, 4])
+  assert.equal(hitBySequence.get(1).x, viewport.padding)
+  assert.equal(hitBySequence.get(2).x, viewport.padding + usableWidth * (0.999 / 60))
+  assert.equal(hitBySequence.get(3).x, viewport.width - viewport.padding)
+  assert.equal(hitBySequence.get(4).x, viewport.width - viewport.padding)
+  const topologySequences = new Set(commands.flatMap(command => [
+    command.sequence,
+    ...(command.segments ?? []).map(segment => segment.sequence),
+  ]))
+  assert.equal(topologySequences.has(5), false)
+  assert.equal(topologySequences.has(6), false)
+})
+
 test("keeps contextual memory in a labeled quiet band with its real identity", () => {
   const memory = balancedSnapshot.memory_events[0]
   const commands = balancedSceneCommands()
@@ -108,7 +141,15 @@ test("keeps contextual memory in a labeled quiet band with its real identity", (
 
 test("renders a loaded memory event once in its real historical position", () => {
   const memory = balancedSnapshot.memory_events[0]
-  const commands = balancedSceneCommands({historyInstructions: [memory]})
+  const historyAnchor = {
+    ...balancedSnapshot.display_events[0],
+    sequence: memory.sequence - 1,
+    occurred_at: "2026-08-08T11:03:00Z",
+  }
+  const commands = balancedSceneCommands({historyInstructions: [historyAnchor, memory]})
+  const formation = commands.find(command =>
+    command.type === "illuminate-bloom" && command.sequence === memory.sequence
+  )
 
   assert.equal(
     commands.some(command =>
@@ -121,6 +162,17 @@ test("renders a loaded memory event once in its real historical position", () =>
       command.type === "anchor-hit" && command.sequence === memory.sequence
     ),
     true,
+  )
+  assert.ok(formation)
+  assert.equal(formation.hit, undefined)
+  assert.ok(Number.isFinite(formation.x))
+  assert.ok(Number.isFinite(formation.y))
+  assert.equal(formation.occurredAt, memory.occurred_at)
+  assert.equal(
+    formation.x,
+    eventTimeToX(memory.occurred_at, balancedSnapshot.window_end, viewport, {
+      clampToWindow: false,
+    }),
   )
 })
 
@@ -180,6 +232,29 @@ test("keeps six hundred dense Wikimedia rows inside the primary viewport", () =>
   assert.equal(hits.length, 600)
   assert.ok(hits.every(hit => hit.x >= viewport.padding))
   assert.ok(hits.every(hit => hit.x <= viewport.width - viewport.padding))
+  assert.ok(commands.length <= 4000)
+})
+
+test("keeps six hundred simultaneous Wikimedia rows finite in one time column", () => {
+  const template = balancedSnapshot.display_events.find(event => event.source === "wikimedia")
+  const simultaneous = Array.from({length: 600}, (_entry, index) => ({
+    ...template,
+    sequence: index + 1,
+    occurred_at: "2026-08-08T12:00:30Z",
+    lane: (index % 11) / 10,
+  }))
+
+  const commands = balancedSceneCommands({
+    displayInstructions: simultaneous,
+    memoryInstructions: [],
+    ambient: null,
+  })
+  const hits = commands.filter(command => command.type === "anchor-hit")
+  const midpoint = viewport.padding + (viewport.width - viewport.padding * 2) / 2
+
+  assert.equal(hits.length, 600)
+  assert.ok(hits.every(hit => hit.x === midpoint))
+  assert.ok(hits.every(hit => Number.isFinite(hit.x) && Number.isFinite(hit.y)))
   assert.ok(commands.length <= 4000)
 })
 

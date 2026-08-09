@@ -222,8 +222,10 @@ function withinLiveWindow(instruction, windowEnd) {
   const occurredAtMilliseconds = Date.parse(instruction?.occurred_at)
   const windowEndMilliseconds = Date.parse(windowEnd)
   if (![occurredAtMilliseconds, windowEndMilliseconds].every(Number.isFinite)) return false
-  return occurredAtMilliseconds >= windowEndMilliseconds - liveWindowMilliseconds &&
-    occurredAtMilliseconds <= windowEndMilliseconds
+  const occurredAtSecond = Math.floor(occurredAtMilliseconds / 1000) * 1000
+  const windowEndSecond = Math.floor(windowEndMilliseconds / 1000) * 1000
+  return occurredAtSecond >= windowEndSecond - liveWindowMilliseconds &&
+    occurredAtSecond <= windowEndSecond
 }
 
 function eventTimePositionsFor(
@@ -461,6 +463,7 @@ function formationCommands(topology, viewport) {
       id: formation.id,
       sequence: formation.sequence,
       transitionSequence: formation.sequence,
+      occurredAt: formation.occurredAt,
       intensity: formation.intensity,
       visual: formation.visual,
       stroke: palette.stroke,
@@ -533,16 +536,17 @@ function knotCommand(common, formation, anchorsById, edgesById, viewport) {
 
 function formationPoint(formation, anchorId, anchorsById, viewport) {
   const anchor = anchorsById.get(anchorId)
-  return anchor
-    ? projectAnchor(anchor, viewport)
-    : {x: sequenceToX(formation.sequence, viewport), y: laneToY(formation.lane, viewport)}
+  return {
+    x: sequenceToX(formation.sequence, viewport),
+    y: laneToY(anchor?.lane ?? formation.lane, viewport),
+  }
 }
 
 function illuminationCurves(formation, edges, anchorsById, viewport) {
   const anchor = anchorsById.get(formation.anchorId)
   if (!anchor) return []
 
-  const point = projectAnchor(anchor, viewport)
+  const point = formationPoint(formation, anchor.id, anchorsById, viewport)
   return edges
     .filter(edge => edge.from === anchor.id || edge.to === anchor.id)
     .sort((left, right) => right.sequence - left.sequence || left.id.localeCompare(right.id))

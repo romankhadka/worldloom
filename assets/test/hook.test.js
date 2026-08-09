@@ -86,6 +86,31 @@ test("decodes and installs the initial six-field snapshot exactly once", t => {
   assert.deepEqual(harness.renderer.snapshots, [balancedSnapshot])
 })
 
+test("installs a weather-only initial snapshot without inventing a live window", t => {
+  const harness = hookHarness(t)
+  const weatherOnly = {
+    snapshot_version: 1,
+    window_end: null,
+    commit_watermark: balancedSnapshot.ambient.sequence,
+    display_events: [],
+    memory_events: [],
+    ambient: balancedSnapshot.ambient,
+  }
+  harness.el.dataset.snapshotVersion = String(weatherOnly.snapshot_version)
+  harness.el.dataset.commitWatermark = String(weatherOnly.commit_watermark)
+  harness.el.dataset.displayEvents = "[]"
+  harness.el.dataset.memoryEvents = "[]"
+  harness.el.dataset.ambient = JSON.stringify(weatherOnly.ambient)
+
+  assert.deepEqual(snapshotFromDataset(harness.el.dataset), weatherOnly)
+  assert.doesNotThrow(() => harness.hook.installInitialSnapshot())
+  assert.deepEqual(harness.renderer.snapshots, [weatherOnly])
+  assert.equal(harness.renderer.snapshots[0].window_end, null)
+  assert.deepEqual(harness.renderer.snapshots[0].ambient, weatherOnly.ambient)
+  assert.deepEqual(harness.renderer.snapshots[0].display_events, [])
+  assert.deepEqual(harness.renderer.snapshots[0].memory_events, [])
+})
+
 test("replaces a server snapshot once without sequence-gap repair", t => {
   const harness = hookHarness(t)
 

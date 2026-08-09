@@ -175,6 +175,7 @@ function formationFor(instruction) {
     sequence: instruction.sequence,
     kind: instruction.kind,
     source: instruction.source,
+    occurredAt: instruction.occurred_at,
     lane: instruction.lane,
     intensity: instruction.intensity,
     visual: instruction.visual,
