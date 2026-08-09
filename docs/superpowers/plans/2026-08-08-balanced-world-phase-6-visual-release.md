@@ -39,7 +39,7 @@
 
 ## Task 1: Define named balanced-world fixtures
 
-- [ ] **Step 1: Create one shared fixture builder**
+- [x] **Step 1: Create one shared fixture builder**
 
 Create `assets/test/fixtures/balanced_snapshots.js` exporting:
 
@@ -51,22 +51,22 @@ export const totalOutage
 export const memoryExpiry
 ```
 
-Build all timestamps from fixed ISO strings. In `balanced`, place one Wikimedia window at second 0, Bluesky at 1, RIPE at 2, Solana at 3, and real drand rounds at 0, 3, 6, and 9 for every ten-second interval. Include earthquake/weather/visitor context without counting them toward scheduled-source balance.
+Build all timestamps from fixed ISO strings. In `balanced`, start the four-second source cadences with Wikimedia at second 0, Bluesky at 1, RIPE at 2, and Solana at 3, then continue each cadence without resetting it at ten-second boundaries. Place real drand rounds every three seconds across the minute; the first ten-second interval therefore contains rounds at 0, 3, 6, and 9. Include earthquake/weather/visitor context without counting them toward scheduled-source balance.
 
-- [ ] **Step 2: Write fixture-contract tests**
+- [x] **Step 2: Write fixture-contract tests**
 
 In `assets/test/smoke.test.js`, assert every fixture has `window_end`, `commit_watermark`, display, memory, and ambient fields; every sequence is unique; every timestamp is UTC; every rolling ten-second balanced interval contains all five scheduled families; and no family exceeds 40 percent of durable primary anchors.
 
-- [ ] **Step 3: Run and verify RED/GREEN**
+- [x] **Step 3: Run and verify RED/GREEN**
 
 ```bash
 rtk node --test assets/test/smoke.test.js
 ```
 
-- [ ] **Step 4: Commit fixtures separately**
+- [x] **Step 4: Commit fixtures separately**
 
 ```bash
-rtk git add assets/test/fixtures/balanced_snapshots.js assets/test/smoke.test.js
+rtk git add assets/test/fixtures/balanced_snapshots.js assets/test/smoke.test.js docs/superpowers/plans/2026-08-08-balanced-world-phase-6-visual-release.md
 rtk git commit -m "Define deterministic balanced-world acceptance fixtures"
 ```
 
