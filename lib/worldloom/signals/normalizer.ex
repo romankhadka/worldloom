@@ -66,7 +66,9 @@ defmodule Worldloom.Signals.Normalizer do
     }
 
     with true <- Enum.all?(counters, fn {_name, count} -> uint32?(count) end),
+         true <- total_actions > 0,
          true <- is_boolean(truncated),
+         true <- valid_bluesky_totals?(counters, truncated),
          {:ok, utc_window_start} <- DateTime.shift_zone(window_start, "Etc/UTC"),
          {:ok, event} <-
            SourceEvent.new(%{
@@ -326,6 +328,21 @@ defmodule Worldloom.Signals.Normalizer do
   end
 
   defp stable_lane(public_shape), do: :erlang.phash2(public_shape, 10_001) / 10_000
+
+  defp valid_bluesky_totals?(counters, false) do
+    operation_total = counters.creates + counters.updates + counters.deletes
+    category_total = counters.original_posts + counters.replies + counters.reposts
+
+    operation_total == counters.total_actions and category_total <= counters.total_actions
+  end
+
+  defp valid_bluesky_totals?(counters, true) do
+    counters.total_actions == 4_294_967_295 and
+      counters
+      |> Map.delete(:total_actions)
+      |> Enum.all?(fn {_name, count} -> count <= counters.total_actions end)
+  end
+
   defp uint32?(number), do: is_integer(number) and number in 0..4_294_967_295
   defp format_decimal(number), do: :erlang.float_to_binary(number, decimals: 1)
   defp to_float(number) when is_float(number), do: number

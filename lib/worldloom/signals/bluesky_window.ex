@@ -27,6 +27,8 @@ defmodule Worldloom.Signals.BlueskyWindow do
   @window_seconds 4
   @offset_seconds 1
   @lateness_seconds 1
+  @replay_horizon_microseconds 60_000_000
+  @future_skew_microseconds 5_000_000
   @collections ~w(app.bsky.feed.post app.bsky.feed.repost)
   @operations ~w(create update delete)
   @operation_fields %{"create" => :creates, "update" => :updates, "delete" => :deletes}
@@ -40,10 +42,11 @@ defmodule Worldloom.Signals.BlueskyWindow do
 
   def new(_observed_at), do: raise(ArgumentError, "window time must be a DateTime")
 
-  @spec add(t(), map()) ::
+  @spec add(t(), map(), DateTime.t()) ::
           {:ok, t()} | {:flush, t(), t()} | {:drop, atom(), t()}
-  def add(%__MODULE__{} = window, frame) when is_map(frame) do
-    with {:ok, observation} <- sanitize(frame) do
+  def add(%__MODULE__{} = window, frame, %DateTime{} = receipt_at) when is_map(frame) do
+    with {:ok, observation} <- sanitize(frame),
+         :ok <- validate_provider_time(observation.occurred_at, receipt_at) do
       event_window_start =
         BoundedCounter.window_start(
           observation.occurred_at,
@@ -71,7 +74,11 @@ defmodule Worldloom.Signals.BlueskyWindow do
     end
   end
 
-  def add(%__MODULE__{} = window, _frame), do: {:drop, :invalid_frame, window}
+  def add(%__MODULE__{} = window, _frame, %DateTime{}),
+    do: {:drop, :invalid_frame, window}
+
+  def add(%__MODULE__{}, _frame, _receipt_at),
+    do: raise(ArgumentError, "receipt time must be a DateTime")
 
   @spec elapsed?(t(), DateTime.t()) :: boolean()
   def elapsed?(%__MODULE__{} = window, %DateTime{} = observed_at) do
@@ -169,7 +176,27 @@ defmodule Worldloom.Signals.BlueskyWindow do
 
   defp provider_time(_time_us), do: {:error, :invalid_timestamp}
 
+  defp validate_provider_time(occurred_at, receipt_at) do
+    occurred_cursor = DateTime.to_unix(occurred_at, :microsecond)
+    receipt_cursor = DateTime.to_unix(receipt_at, :microsecond)
+
+    cond do
+      occurred_cursor < receipt_cursor - @replay_horizon_microseconds ->
+        {:error, :timestamp_too_old}
+
+      occurred_cursor > receipt_cursor + @future_skew_microseconds ->
+        {:error, :timestamp_in_future}
+
+      true ->
+        :ok
+    end
+  end
+
   defp category("app.bsky.feed.repost", _operation, _commit), do: :reposts
+
+  defp category("app.bsky.feed.post", "delete", commit)
+       when not is_map_key(commit, "record"),
+       do: nil
 
   defp category("app.bsky.feed.post", _operation, commit) do
     record = Map.get(commit, "record", %{})

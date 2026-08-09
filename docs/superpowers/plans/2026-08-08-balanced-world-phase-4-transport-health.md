@@ -260,6 +260,10 @@ Solana sends only JSON-RPC `slotSubscribe`; it has no replay and remains product
 
 Each process records connected/contact/activity/drop/retry/disconnected observations directly through `HealthRegistry`. Do not `send(self(), decoded_frame)` or queue ordinary frame work.
 
+At the start of each Bluesky complete-frame callback, call the injected server clock exactly once, bind that value as `receipt_at`, use it for every temporal decision in that callback, and pass it unchanged to `BlueskyWindow.add/3`.
+
+For Bluesky overlap deduplication, the canonical fingerprint material is the JSON encoding of the ordered array `[time_us, "commit", did, collection, operation, rkey]`. Hash that material immediately through `BlueskyRecovery`; never retain or expose the encoded array, DID, record key, cursor, CID, record, or content.
+
 One source-local timer may call `handle_info(:flush_window, state)` once per second. It closes only windows past the one-second lateness grace; a non-empty window submits its one sanitized event and checkpoint, while an empty elapsed window submits `[]` and the checkpoint. Timer messages are lifecycle control, not deferred raw-frame work.
 
 - [ ] **Step 5: Verify isolation and commit**

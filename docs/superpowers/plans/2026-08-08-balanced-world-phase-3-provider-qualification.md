@@ -90,6 +90,8 @@ Include original post create, reply create, repost create, post update, post del
 
 Create `test/worldloom/signals/bluesky_window_test.exs`. Use four-second windows at offset one. Assert exact counts for `total_actions`, `original_posts`, `replies`, `reposts`, `creates`, `updates`, and `deletes`; provider occurrence time from `time_us`; one-second lateness; uint32 saturation; `:empty`; and `inspect(window)` containing none of `did`, `handle`, `text`, `uri`, `cid`, or cursor values.
 
+Call `BlueskyWindow.add/3` with one injected, trusted server `receipt_at`. Assert the inclusive provider-time interval from exactly `receipt_at - 60_000_000` microseconds through exactly `receipt_at + 5_000_000` microseconds, both one-microsecond violations, a year-9999 future timestamp followed by a valid frame, replay after a long outage, and invalid receipt-time rejection. Assert record-less post deletes increment only `total_actions` and `deletes`, repost deletes remain reposts, and post creates/updates require a map-valued record.
+
 Create `test/worldloom/signals/bluesky_recovery_test.exs` for the pure replay boundary. Assert that it:
 
 - rewinds a valid fully committed cursor by exactly `5_000_000` microseconds and clamps the result at zero;
@@ -106,7 +108,7 @@ rtk mix test test/worldloom/signals/bluesky_window_test.exs test/worldloom/signa
 
 - [ ] **Step 4: Implement a deny-by-default window**
 
-Create `lib/worldloom/signals/bluesky_window.ex`. Accept only top-level `kind: "commit"`, collections `app.bsky.feed.post` and `app.bsky.feed.repost`, operations `create`, `update`, and `delete`, and integer `time_us`. Explicitly drop the account and identity events that Jetstream sends regardless of collection filters. Determine reply only from presence of a map-valued `record.reply`; do not retain that map. Return one of:
+Create `lib/worldloom/signals/bluesky_window.ex`. Accept only top-level `kind: "commit"`, collections `app.bsky.feed.post` and `app.bsky.feed.repost`, operations `create`, `update`, and `delete`, and integer `time_us`. `add/3` requires an explicit trusted server-receipt `DateTime` and accepts provider time only from `receipt_at - 60_000_000` microseconds through `receipt_at + 5_000_000` microseconds, inclusive; drop observations outside those bounds without changing the window. Explicitly drop the account and identity events that Jetstream sends regardless of collection filters. Creates and updates require a map-valued record. Determine reply only from presence of a map-valued `record.reply`; do not retain that map. A record-less post delete has no post category, while a repost delete remains a repost. Return one of:
 
 ```elixir
 {:ok, window}

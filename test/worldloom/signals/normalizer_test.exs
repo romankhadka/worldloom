@@ -85,6 +85,65 @@ defmodule Worldloom.Signals.NormalizerTest do
     refute inspected =~ "did:example:synthetic-private-identity"
   end
 
+  test "rejects empty and semantically impossible Bluesky windows" do
+    assert {:error, :invalid_window} =
+             normalizable_bluesky_window()
+             |> Map.merge(%{
+               total_actions: 0,
+               original_posts: 0,
+               creates: 0
+             })
+             |> Normalizer.bluesky_window()
+
+    assert {:error, :invalid_window} =
+             normalizable_bluesky_window()
+             |> Map.put(:creates, 2)
+             |> Normalizer.bluesky_window()
+
+    assert {:error, :invalid_window} =
+             normalizable_bluesky_window()
+             |> Map.merge(%{original_posts: 5, replies: 1})
+             |> Normalizer.bluesky_window()
+  end
+
+  test "requires every Bluesky counter to fit uint32" do
+    assert {:error, :invalid_window} =
+             normalizable_bluesky_window()
+             |> Map.put(:reposts, -1)
+             |> Normalizer.bluesky_window()
+
+    assert {:error, :invalid_window} =
+             normalizable_bluesky_window()
+             |> Map.put(:deletes, 4_294_967_296)
+             |> Normalizer.bluesky_window()
+  end
+
+  test "accepts saturated truncated Bluesky windows without exact sum equality" do
+    uint32_max = 4_294_967_295
+
+    truncated =
+      normalizable_bluesky_window()
+      |> Map.merge(%{
+        total_actions: uint32_max,
+        original_posts: uint32_max,
+        replies: uint32_max,
+        reposts: uint32_max,
+        creates: uint32_max,
+        updates: uint32_max,
+        deletes: uint32_max,
+        truncated: true
+      })
+
+    assert {:ok, %SourceEvent{} = event} = Normalizer.bluesky_window(truncated)
+    assert event.payload["total_actions"] == uint32_max
+    assert event.payload["truncated"]
+
+    assert {:error, :invalid_window} =
+             truncated
+             |> Map.put(:total_actions, uint32_max - 1)
+             |> Normalizer.bluesky_window()
+  end
+
   test "normalizes public USGS features and clamps impossible magnitudes" do
     geojson = read_fixture("usgs.json")
 
@@ -138,6 +197,20 @@ defmodule Worldloom.Signals.NormalizerTest do
     |> Path.join(name)
     |> File.read!()
     |> Jason.decode!()
+  end
+
+  defp normalizable_bluesky_window do
+    %{
+      window_start: ~U[2026-08-08 16:00:01Z],
+      total_actions: 5,
+      original_posts: 2,
+      replies: 1,
+      reposts: 1,
+      creates: 3,
+      updates: 1,
+      deletes: 1,
+      truncated: false
+    }
   end
 
   defp private_noise_absent?(event) do
