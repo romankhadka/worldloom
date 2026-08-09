@@ -255,33 +255,35 @@ rtk git commit -m "Detect public provider contract drift on a schedule"
 
 ## Task 7: Close the operational and public documentation
 
-- [ ] **Step 1: Update public descriptions**
+- [x] **Step 1: Update public descriptions**
 
 Update README and source/privacy/operations docs with direct official attribution links, accurate best-effort language, per-source switches, freshness, recovery, and the statement that Worldloom is an artistic aggregate rather than operational, social, cryptographic, or financial analysis.
 
-- [ ] **Step 2: Complete verification**
+- [x] **Step 2: Complete verification**
 
 ```bash
 rtk mix precommit
 rtk npm test
 rtk npm run test:e2e
-rtk docker build --build-arg GIT_SHA=$(rtk git rev-parse HEAD) .
+rtk git rev-parse HEAD
+rtk docker build --build-arg GIT_SHA=<verified-commit-sha> .
+rtk git diff --check
 rtk git diff --check master...HEAD
 rtk mix hex.audit
 ```
 
-- [ ] **Step 3: Commit documentation**
+- [x] **Step 3: Commit documentation**
 
 ```bash
-rtk git add README.md docs/data-sources.md docs/privacy.md docs/operations.md
+rtk git add README.md docs/data-sources.md docs/privacy.md docs/operations.md docs/superpowers/plans/2026-08-08-balanced-world-phase-5-incremental-sources.md
 rtk git commit -m "Document the balanced world's canary operations"
 ```
 
 ## Phase 5 completion gate
 
-- [ ] Code defaults every new production source off.
-- [ ] Global feed disable overrides every source.
-- [ ] drand, Bluesky, and RIPE each have one isolated switch, vertical test, contract probe, canary checklist, and rollback procedure.
-- [ ] Solana cannot be enabled in production.
-- [ ] No task silently changes a remote environment or deploys a canary.
-- [ ] Provider drift checks run outside deterministic pull-request CI.
+- [x] Code defaults every new production source off.
+- [x] Global feed disable overrides every source.
+- [x] drand, Bluesky, and RIPE each have one isolated switch, vertical test, contract probe, canary checklist, and rollback procedure.
+- [x] Solana cannot be enabled in production.
+- [x] No task silently changes a remote environment or deploys a canary.
+- [x] Provider drift checks run outside deterministic pull-request CI.

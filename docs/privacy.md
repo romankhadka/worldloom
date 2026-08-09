@@ -4,6 +4,10 @@ Worldloom is designed to create one shared artifact without creating visitor
 profiles. It has no registration, login, analytics SDK, advertising, chat, free-form
 text, uploads, or public identity.
 
+This minimization makes an artistic aggregate; it does not turn upstream activity
+into operational, social, cryptographic, financial, or scientific analysis, and it
+does not certify the completeness or correctness of any provider.
+
 ## What the application handles
 
 On first visit, the server generates a random 32-byte browser token. It is stored in
@@ -105,10 +109,15 @@ gesture for access or deletion without compromising that design.
 The current application server—not each browser—contacts Wikimedia, USGS, and
 Open-Meteo. Visiting Worldloom does not cause the browser to call those providers.
 
-Bluesky legacy Jetstream, RIPE RIS Live, Solana, and drand are false-by-default
-server-side sources. If one is separately enabled after review, only the Worldloom
-server contacts it; browser-to-provider connections remain forbidden. Following an
-attribution link leaves Worldloom and is then governed by that provider's policies.
+[Bluesky legacy Jetstream](https://github.com/bluesky-social/jetstream-legacy),
+[RIPE RIS Live](https://ris-live.ripe.net/manual/),
+[Solana WebSocket RPC](https://solana.com/docs/rpc/websocket), and
+[drand Quicknet](https://docs.drand.love/blog/2023/10/16/quicknet-is-live/) are
+false-by-default server-side sources. If one is separately enabled after review,
+only the Worldloom server contacts it; browser-to-provider connections remain
+forbidden. Solana has no approved production endpoint and must remain disabled there.
+Following an attribution link leaves Worldloom and is then governed by that
+provider's policies.
 
 Questions or security-sensitive concerns should use the channel in
 [SECURITY.md](../SECURITY.md).

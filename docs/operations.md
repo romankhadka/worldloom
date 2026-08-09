@@ -3,6 +3,11 @@
 This runbook covers the single-instance Worldloom v1 release. It assumes a Phoenix
 release behind a TLS-terminating proxy and a durable PostgreSQL database.
 
+Worldloom is an artistic aggregate, not an operational, social, cryptographic,
+financial, scientific, alerting, or forecasting system. Preserve honest source gaps;
+never expand a recovery window or reinterpret source failures to make the artwork
+appear busier.
+
 ## Required production configuration
 
 | Variable | Purpose |
@@ -22,6 +27,20 @@ overrides; remove them after controlled testing.
 Incremental public feeds have independent, false-by-default switches. The presence of
 a switch in a release does not authorize enabling it. Keep every new source disabled
 unless the source-specific canary below has explicit operational approval.
+
+| Source | Control | Default | Nominal cadence | Public expiry | Recovery bound |
+|---|---|---:|---:|---:|---|
+| Wikimedia | Global feed switch | On | 4-second windows | Quiet at 20 seconds | 60-second event-ID horizon |
+| USGS | Global feed switch | On | 1 minute | Quiet at 3 minutes | Private ETag and source-ID deduplication |
+| Open-Meteo | Global feed switch | On | 10 minutes | Stale at 30 minutes | Last ambient state plus local retry |
+| drand Quicknet | `WORLDLOOM_DRAND_ENABLED` | Off | 3 seconds | Stale at 12 seconds | 20 exact rounds, then one coarse gap |
+| Bluesky Jetstream | `WORLDLOOM_BLUESKY_ENABLED` | Off | 4-second windows | Quiet at 20 seconds | 5-second overlap, 60-second horizon |
+| RIPE RIS Live | `WORLDLOOM_RIPE_ENABLED` | Off | 4-second windows | Quiet at 20 seconds | Live edge only; no replay claim |
+| Solana | `WORLDLOOM_SOLANA_ENABLED` | Off | Not approved | Not applicable | No production endpoint |
+
+`WORLDLOOM_FEEDS_ENABLED=false` overrides the entire table and starts no feed owner,
+including an independently enabled incremental source. Official contracts and exact
+field handling are linked from [data-sources.md](data-sources.md).
 
 Never print, commit, or place production secret values in command history. Rotate
 `SECRET_KEY_BASE` and the rate-limit salt independently. Rotating the former invalidates
@@ -63,6 +82,22 @@ make a currently unobserved source appear live.
 
 One source can be unavailable while the other sources, visitor gestures, archive, and
 health endpoint continue.
+
+### Provider contract smoke check
+
+Run `mix worldloom.providers.smoke` before an incremental-source canary or after a
+provider announces a protocol change. The command concurrently checks the current
+[drand v2 API](https://docs.drand.love/developer/API-v2/drand-http-api/),
+[Bluesky legacy Jetstream](https://github.com/bluesky-social/jetstream-legacy), and
+[RIPE RIS Live](https://ris-live.ripe.net/manual/) boundaries. It stops each probe
+after one sanitizer-approved observation, starts neither the Worldloom application
+nor Repo, persists nothing, and prints only `ok` or a fixed coarse failure class.
+
+The repository also runs this command weekly and on manual dispatch. It is deliberately
+absent from push and pull-request CI because public-provider drift is nondeterministic.
+It does not probe Solana, enable a source, change remote configuration, or deploy a
+canary. A failure blocks source enablement until the checked-in contract is reviewed;
+it is not a reason to weaken validation or expose the provider response.
 
 ## Incremental source canaries
 

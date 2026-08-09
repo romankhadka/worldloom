@@ -3,7 +3,9 @@
 Worldloom is an artistic visualization, not an alerting, forecasting, social,
 financial, cryptographic-verification, or scientific analysis service. Upstream data
 may be delayed, revised, incomplete, disconnected, rate-limited, or unavailable. The
-interface presents compact summaries and never raw source records.
+interface presents compact summaries and never raw source records. Do not use its
+visual intensity, ordering, or gaps to infer real-world severity, consensus, market
+conditions, network health, or personal behavior.
 
 ## Sources contacted by the current application
 
