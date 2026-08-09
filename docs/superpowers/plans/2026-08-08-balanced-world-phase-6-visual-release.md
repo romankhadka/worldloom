@@ -319,7 +319,7 @@ rtk git commit -m "Lock responsive balanced-world visual acceptance"
 
 ## Task 8: Build an instrumented fake upstream
 
-- [ ] **Step 1: Write fake-upstream tests**
+- [x] **Step 1: Write fake-upstream tests**
 
 Create `test/worldloom/signals/fake_upstream_test.exs`. Start `test/support/fake_upstream.ex` on an ephemeral port and assert it serves:
 
@@ -332,25 +332,25 @@ Create `test/worldloom/signals/fake_upstream_test.exs`. Start `test/support/fake
 
 Assert `/stats` contains no visitor identity, cookie, IP, cursor, raw frame, source content, prefix, peer, or account.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 ```bash
 rtk mix test test/worldloom/signals/fake_upstream_test.exs
 ```
 
-- [ ] **Step 3: Implement the test-only server**
+- [x] **Step 3: Implement the test-only server**
 
 Use Bandit plus WebSock callbacks from test dependencies already in the tree. Keep the module under `test/support` so production releases cannot start it. Accept a deterministic clock and cadence. Expose stats through an Agent using fixed source keys and integer counters only.
 
-- [ ] **Step 4: Add the balanced load profile**
+- [x] **Step 4: Add the balanced load profile**
 
 Create `load/balanced_world.js` to connect real LiveView clients, observe at least two increasing snapshot watermarks, and verify all enabled source names appear in snapshot pushes. Extend `load/README.md` with exact fake-upstream/test-server commands.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 ```bash
 rtk mix test test/worldloom/signals/fake_upstream_test.exs
-rtk git add test/support/fake_upstream.ex test/worldloom/signals/fake_upstream_test.exs load/balanced_world.js load/README.md
+rtk git add test/support/fake_upstream.ex test/support/balanced_world_harness.ex test/worldloom/signals/fake_upstream_test.exs test/worldloom/signals/balanced_world_harness_test.exs assets/test/snapshot_observer.test.js load/snapshot_observer.js load/balanced_world.js load/README.md docs/superpowers/plans/2026-08-08-balanced-world-phase-6-visual-release.md
 rtk git commit -m "Instrument deterministic upstreams for whole-app load"
 ```
 
@@ -365,11 +365,13 @@ Create `load/browser_100.mjs`. Launch one Chromium process with 100 isolated bro
 After the hold, fetch fake `/stats` and assert:
 
 - exactly one concurrent Wikimedia stream, Bluesky socket, and RIPE socket;
-- exactly one subscription set per enabled WebSocket source;
+- exactly one subscription set per enabled WebSocket source: one Bluesky filter
+  set, one two-collector RIPE set, and one Solana slot subscription;
 - drand request count matches bounded cadence rather than browser count;
 - 100 LiveViews observed real summary broadcasts and snapshot reprojections;
 - no browser requested an upstream host directly;
-- all processes/connections return to baseline after close.
+- provider `active_connections` remain at their pre-browser baseline while
+  LiveView processes and browser sockets return to baseline after close.
 
 - [ ] **Step 3: Add an npm script and document resource expectations**
 

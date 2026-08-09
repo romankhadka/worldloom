@@ -20,6 +20,72 @@ bypassed.
 The default is the inexpensive `smoke` profile. The launch profile is explicit
 so it cannot be started accidentally.
 
+## Deterministic balanced-world gate
+
+The balanced-world gate runs the real test application against one local,
+TLS-protected upstream process. The upstream owns every provider connection;
+the k6 client only visits Worldloom over its public LiveView route. Its `/stats`
+response contains fixed aggregate counters only—never cookies, IP addresses,
+cursors, raw frames, source content, prefixes, peers, accounts, or visitor
+identities. Persistent sources report lifetime `connection_opens`, current
+`active_connections`, and `peak_connections`. RIPE records one subscription per
+collector message, so the harness's single collector set is exactly two
+subscriptions on one socket.
+
+Prepare the isolated `worldloom_e2e` database. The reset replaces that test
+database only:
+
+```sh
+MIX_ENV=test WORLDLOOM_E2E=true mix clean
+MIX_ENV=test WORLDLOOM_E2E=true mix ecto.reset
+```
+
+Start the real app, all seven source workers, and the single instrumented
+upstream in one terminal:
+
+```sh
+MIX_ENV=test WORLDLOOM_E2E=true mix run --no-start --no-halt \
+  -e 'Worldloom.TestSupport.BalancedWorldHarness.start!()'
+```
+
+The test app listens at `http://localhost:4002`; aggregate upstream stats are
+available at `https://localhost:4443/stats`. In a second terminal, require real
+snapshot movement and every enabled public source role:
+
+```sh
+k6 run load/balanced_world.js
+```
+
+Passing means the client joined the real `WorldLive` process, observed at least
+two strictly increasing committed watermarks, found all seven enabled source
+names across display, memory, and ambient snapshot roles, and completed with no
+Phoenix protocol errors. The observation exits early once all conditions are
+true; otherwise it waits up to 30 seconds. Override that ceiling or the exact
+expected set explicitly when diagnosing a subset:
+
+```sh
+k6 run \
+  -e WORLDLOOM_BALANCED_OBSERVATION_MS=45000 \
+  -e WORLDLOOM_EXPECTED_SOURCES=wikimedia,bluesky,ripe_ris,solana,drand,usgs,open_meteo \
+  load/balanced_world.js
+```
+
+Inspect the privacy-safe server counters without disabling TLS verification:
+
+```sh
+curl --cacert test/support/fixtures/tls/localhost_ca.pem \
+  https://localhost:4443/stats
+```
+
+To run only the fake provider server on the same fixed port, first compile the
+test environment and then start it with Solana explicitly enabled:
+
+```sh
+MIX_ENV=test WORLDLOOM_E2E=false mix clean
+MIX_ENV=test WORLDLOOM_E2E=false mix run --no-start --no-halt \
+  -e '{:ok, _} = Application.ensure_all_started(:bandit); {:ok, server} = Worldloom.TestSupport.FakeUpstream.start_link(port: 4443, cadence_ms: 1000, solana: true); Process.unlink(server)'
+```
+
 ## Local commands
 
 Start the real app with public feeds disabled in a separate terminal:
