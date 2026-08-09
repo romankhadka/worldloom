@@ -81,12 +81,13 @@ or a materially different request volume requires a licensing review and likely 
 for Worldloom's source code does not grant rights to use an upstream API outside its
 terms.
 
-## Qualified but disabled future sources
+## Qualified incremental sources, disabled by default
 
-Worldloom contains deterministic, deny-by-default qualification boundaries for the
-four sources below. No worker, production source flag, or upstream connection for
-them is active yet. Qualification proves the sanitized contract; it does not promise
-availability or authorize production enablement.
+Worldloom contains deterministic, deny-by-default qualification boundaries and
+independent source switches for the four sources below. Every switch defaults to
+false, and a disabled source creates no process or upstream connection. A switch
+being present in a release does not authorize production enablement. Qualification
+proves the sanitized contract; it does not promise availability.
 
 ### Bluesky legacy Jetstream
 
@@ -177,8 +178,9 @@ This is HTTPS failover plus structural validation. Worldloom does not verify the
 signature, recompute chain identity, compare relay consensus, or describe the result
 as verified randomness. Failed or malformed relays collapse to source unavailability.
 
-The qualified worker remains production-disabled until its independent source flag is
-introduced. It maps UTC to the exact Quicknet round using the published genesis and
+The worker is production-capable behind the false-by-default
+`WORLDLOOM_DRAND_ENABLED` switch. Enabling it remains a separately authorized canary
+operation. It maps UTC to the exact Quicknet round using the published genesis and
 three-second period, persists each accepted round through the shared Buffer, and
 advances its checkpoint only after that durable submission succeeds. A restart
 recovers no more than twenty missing rounds in ascending order. If the durable cursor
@@ -186,7 +188,8 @@ is farther behind, the worker requests the current exact round, records the skip
 round count in checkpoint metadata, and reports a coarse replay gap instead of
 fabricating or merging pulses. A missing or future cursor resumes from the current
 round. Source-local capped backoff keeps relay or persistence failures from delaying
-other feeds.
+other feeds. The canary evidence and one-flag rollback procedure are defined in
+[operations.md](operations.md#drand-quicknet).
 
 ## Best-effort source behavior
 

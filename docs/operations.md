@@ -19,6 +19,10 @@ healthy app with no external feed workers. `WORLDLOOM_WIKIMEDIA_URL`,
 `WORLDLOOM_USGS_URL`, and `WORLDLOOM_OPEN_METEO_URL` are HTTPS-only diagnostic
 overrides; remove them after controlled testing.
 
+Incremental public feeds have independent, false-by-default switches. The presence of
+a switch in a release does not authorize enabling it. Keep every new source disabled
+unless the source-specific canary below has explicit operational approval.
+
 Never print, commit, or place production secret values in command history. Rotate
 `SECRET_KEY_BASE` and the rate-limit salt independently. Rotating the former invalidates
 browser sessions; rotating the latter clears the practical continuity of in-memory
@@ -59,6 +63,37 @@ make a currently unobserved source appear live.
 
 One source can be unavailable while the other sources, visitor gestures, archive, and
 health endpoint continue.
+
+## Incremental source canaries
+
+Enable only one new source in a canary deployment. Record the pre-deploy maximum
+sequence, per-source row count, public feed state, and sibling feed states. Do not
+change a second source flag until the first source has either met its evidence gate or
+been rolled back.
+
+### drand Quicknet
+
+The checked-in release leaves `WORLDLOOM_DRAND_ENABLED=false`. Enabling drand is a
+separate deployment operation and requires explicit authorization; merging the
+production-capable worker does not perform that operation.
+
+- **Enable:** set `WORLDLOOM_DRAND_ENABLED=true` and redeploy one instance. The
+  optional `WORLDLOOM_DRAND_RELAYS` value may select a comma-separated, unique subset
+  of the three pinned official relay origins; arbitrary origins fail startup.
+- **Expected cadence:** one different real Quicknet round every three seconds.
+- **Healthy threshold:** a newly durably accepted round must make the public drand
+  state `live` within twelve seconds.
+- **Recovery bound:** a restart may recover at most twenty missing rounds, in order.
+  A larger gap jumps to the current exact round and records the skipped count.
+- **Observe:** drand external IDs remain unique, no duplicate rows appear, sibling
+  feed processes and cadence remain unaffected, and public copy makes no claim that
+  Worldloom performs BLS signature verification.
+- **Rollback:** set `WORLDLOOM_DRAND_ENABLED=false` and redeploy. This removes only the
+  drand worker; it does not reset the durable checkpoint or alter other feeds.
+
+Close the canary only after the cadence and health threshold remain stable and a
+restart demonstrates bounded, ordered, idempotent recovery. A failed gate is a
+rollback condition, not a reason to broaden timeouts or queue bounds.
 
 ## Telemetry and logs
 

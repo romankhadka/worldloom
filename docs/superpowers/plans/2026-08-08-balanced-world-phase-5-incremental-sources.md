@@ -110,17 +110,17 @@ rtk git commit -m "Supervise public feeds behind independent switches"
 
 ## Task 3: Land drand as the first production-capable source
 
-- [ ] **Step 1: Add end-to-end persistence tests**
+- [x] **Step 1: Add end-to-end persistence tests**
 
 In `test/worldloom/signals/drand_worker_test.exs`, run the real worker against injected relay responses and real Buffer/Coordinator under SQL sandbox ownership. Assert exact durable row, v2 instruction, snapshot display membership, replay idempotence, and public health.
 
-- [ ] **Step 2: Run the focused vertical slice**
+- [x] **Step 2: Run the focused vertical slice**
 
 ```bash
 rtk mix test test/worldloom/signals/drand_worker_test.exs test/worldloom/loom/coordinator_test.exs test/worldloom_web/live/world_live_test.exs
 ```
 
-- [ ] **Step 3: Document the canary and rollback evidence**
+- [x] **Step 3: Document the canary and rollback evidence**
 
 In `docs/operations.md`, define a one-source canary with:
 
@@ -131,7 +131,7 @@ In `docs/operations.md`, define a one-source canary with:
 - rollback: set the flag false and redeploy;
 - observe: no duplicate rows, no BLS-verification claim, other feeds unaffected.
 
-- [ ] **Step 4: Verify code readiness without changing production**
+- [x] **Step 4: Verify code readiness without changing production**
 
 ```bash
 rtk mix precommit
@@ -140,7 +140,7 @@ rtk mix run -e 'IO.inspect(Worldloom.Signals.Config.from_keyword!(Application.fe
 
 Do not set a remote environment variable or deploy from this task. Stop for explicit operational authorization before the canary.
 
-- [ ] **Step 5: Commit the drand vertical slice**
+- [x] **Step 5: Commit the drand vertical slice**
 
 ```bash
 rtk git add test/worldloom/signals/drand_worker_test.exs docs/operations.md docs/data-sources.md

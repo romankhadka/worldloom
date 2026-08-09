@@ -1,12 +1,159 @@
 defmodule Worldloom.Signals.DrandWorkerTest do
-  use ExUnit.Case, async: true
+  use Worldloom.DataCase, async: false
 
+  alias Worldloom.Loom.Coordinator
+  alias Worldloom.Loom.CoordinatorTestStore
+  alias Worldloom.Loom.Event
+  alias Worldloom.Loom.FeedCheckpoint
+  alias Worldloom.Loom.Instruction
+  alias Worldloom.Loom.Store
+  alias Worldloom.Signals.Buffer
+  alias Worldloom.Signals.DrandClient
   alias Worldloom.Signals.DrandWorker
   alias Worldloom.Signals.FeedHealth
+  alias Worldloom.Signals.HealthMonitor
   alias Worldloom.Signals.HealthRegistry
   alias Worldloom.TestSupport.FakeDrandClient
 
+  @fixtures "test/support/fixtures/feeds"
   @genesis_time 1_700_000_000
+  @quicknet_origin "https://api.drand.sh"
+  @quicknet_chain_hash "52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971"
+  @quicknet_info_path "/v2/chains/#{@quicknet_chain_hash}/info"
+  @quicknet_round_path "/v2/chains/#{@quicknet_chain_hash}/rounds/42"
+  @round_time ~U[2023-08-23 15:11:30.000000Z]
+
+  test "persists one exact public round end to end and replays idempotently" do
+    test_process = self()
+    start_independent_store()
+
+    health =
+      start_supervised!({HealthRegistry, name: nil, monitor: nil, clock: fn -> @round_time end})
+
+    coordinator =
+      start_supervised!(
+        {Coordinator,
+         name: nil,
+         bootstrap: :empty,
+         store: CoordinatorTestStore,
+         topic: "loom:drand-vertical:#{System.unique_integer([:positive, :monotonic])}"}
+      )
+
+    buffer =
+      start_supervised!(
+        {Buffer,
+         name: nil,
+         coordinator: coordinator,
+         health_registry: health,
+         clock: fn -> 0 end,
+         timer: fn destination, message, delay ->
+           send(test_process, {:buffer_timer, destination, message, delay})
+           make_ref()
+         end}
+      )
+
+    request = injected_quicknet_request(test_process)
+    first_worker = start_real_worker(buffer, health, request)
+
+    assert_receive {:drand_request, :chain_info}, 500
+    assert_receive {:drand_request, {:round, 42}}, 500
+    drain_once(buffer)
+    assert eventually(fn -> :sys.get_state(first_worker).committed_round == 42 end)
+
+    stored =
+      Repo.one!(
+        from event in Event,
+          where: event.source == "drand" and event.external_id == "drand-round:42"
+      )
+
+    assert Map.take(stored, [
+             :kind,
+             :source,
+             :external_id,
+             :occurred_at,
+             :render_version,
+             :render_seed,
+             :lane,
+             :intensity,
+             :payload
+           ]) == %{
+             kind: "randomness",
+             source: "drand",
+             external_id: "drand-round:42",
+             occurred_at: @round_time,
+             render_version: 2,
+             render_seed: 1_560_607_657,
+             lane: 0.2388,
+             intensity: 0.6,
+             payload: %{
+               "round" => 42,
+               "summary" => "drand Quicknet round 42",
+               "visual" => %{
+                 "bend" => -0.036716,
+                 "pulse" => 0.009241,
+                 "spread" => 0.547957
+               }
+             }
+           }
+
+    assert Instruction.from_event(stored) == %{
+             "sequence" => stored.id,
+             "kind" => "randomness",
+             "source" => "drand",
+             "occurred_at" => "2023-08-23T15:11:30.000000Z",
+             "render_version" => 2,
+             "seed" => 1_560_607_657,
+             "lane" => 0.2388,
+             "intensity" => 0.6,
+             "visual" => %{
+               "bend" => -0.036716,
+               "pulse" => 0.009241,
+               "spread" => 0.547957
+             },
+             "summary" => "drand Quicknet round 42",
+             "metrics" => %{"round" => 42}
+           }
+
+    assert Repo.get!(FeedCheckpoint, "drand") |> Map.take([:cursor, :metadata]) == %{
+             cursor: "42",
+             metadata: %{}
+           }
+
+    snapshot = Coordinator.current_snapshot(coordinator)
+    assert Enum.any?(snapshot.display_events, &(&1.id == stored.id))
+    assert snapshot.commit_watermark == stored.id
+
+    GenServer.stop(first_worker)
+
+    replay_worker = start_real_worker(buffer, health, request)
+    assert_receive {:drand_request, :chain_info}, 500
+    assert_receive {:drand_request, {:round, 42}}, 500
+    drain_once(buffer)
+    assert eventually(fn -> :sys.get_state(replay_worker).committed_round == 42 end)
+
+    assert Repo.aggregate(
+             from(
+               event in Event,
+               where: event.source == "drand" and event.external_id == "drand-round:42"
+             ),
+             :count
+           ) == 1
+
+    assert Coordinator.highest_sequence(coordinator) == stored.id
+
+    monitor =
+      start_supervised!(
+        {HealthMonitor,
+         name: nil,
+         enabled: false,
+         observation_loader: fn -> HealthRegistry.current(health) end,
+         broadcaster: fn _health -> :ok end,
+         clock: fn -> @round_time end,
+         timer: fn _destination, _message, _delay -> make_ref() end}
+      )
+
+    assert HealthMonitor.current(monitor).drand == %{state: :live, observed_at: @round_time}
+  end
 
   test "polls each expected round once and ages durable activity to stale after twelve seconds" do
     now = time_for_round(3, 500)
@@ -210,6 +357,101 @@ defmodule Worldloom.Signals.DrandWorkerTest do
 
     refute inspect(formatted) =~ marker
     assert formatted == %{state: :redacted, message: :redacted, reason: :redacted, log: :redacted}
+  end
+
+  defp start_real_worker(buffer, health, request) do
+    {:ok, worker} =
+      DrandWorker.start_link(
+        name: nil,
+        client_module: DrandClient,
+        client_options: [origins: [@quicknet_origin], request: request],
+        committed_round: nil,
+        buffer: fn events, checkpoint -> Buffer.submit(buffer, events, checkpoint) end,
+        health_registry: health,
+        clock: fn -> @round_time end,
+        random: fn -> 0.5 end,
+        timer: fn _destination, _message, _delay -> make_ref() end
+      )
+
+    on_exit(fn ->
+      if Process.alive?(worker), do: GenServer.stop(worker)
+    end)
+
+    worker
+  end
+
+  defp start_independent_store do
+    original_repo = Repo.get_dynamic_repo()
+
+    {:ok, independent_repo} =
+      Repo.start_link(name: nil, pool: DBConnection.ConnectionPool, pool_size: 4)
+
+    Process.unlink(independent_repo)
+    Repo.put_dynamic_repo(independent_repo)
+    clear_vertical_slice_rows()
+
+    on_exit(fn ->
+      if Process.alive?(independent_repo) do
+        Repo.put_dynamic_repo(independent_repo)
+        clear_vertical_slice_rows()
+        Supervisor.stop(independent_repo)
+      end
+
+      Repo.put_dynamic_repo(original_repo)
+    end)
+
+    start_supervised!({CoordinatorTestStore, delegate: Store, repo: independent_repo})
+  end
+
+  defp clear_vertical_slice_rows do
+    Repo.delete_all(
+      from event in Event,
+        where: event.source == "drand" and event.external_id == "drand-round:42"
+    )
+
+    Repo.delete_all(from checkpoint in FeedCheckpoint, where: checkpoint.source == "drand")
+  end
+
+  defp injected_quicknet_request(test_process) do
+    chain_info = File.read!(Path.join(@fixtures, "drand_chain_info.json"))
+
+    round =
+      @fixtures
+      |> Path.join("drand_rounds.json")
+      |> File.read!()
+      |> Jason.decode!()
+      |> Enum.find(&(Map.fetch!(&1, "round") == 42))
+      |> Jason.encode!()
+
+    fn url, _options ->
+      case url do
+        @quicknet_origin <> @quicknet_info_path ->
+          send(test_process, {:drand_request, :chain_info})
+          json_response(chain_info)
+
+        @quicknet_origin <> @quicknet_round_path ->
+          send(test_process, {:drand_request, {:round, 42}})
+          json_response(round)
+
+        _unexpected ->
+          {:error, :unavailable}
+      end
+    end
+  end
+
+  defp json_response(body) do
+    {:ok,
+     Req.Response.new(
+       status: 200,
+       headers: [{"content-type", "application/json; charset=utf-8"}],
+       body: body
+     )}
+  end
+
+  defp drain_once(buffer) do
+    assert_receive {:buffer_timer, ^buffer, {:drain, _token} = message, 250}, 500
+    send(buffer, message)
+    assert eventually(fn -> Buffer.depth(buffer) == 0 end)
   end
 
   defp start_worker(now, options) do
