@@ -50,6 +50,8 @@ defmodule Worldloom.Signals.RipeSocket do
       clock: clock,
       random: Keyword.get(options, :random, &:rand.uniform/0),
       timer: Keyword.get(options, :timer, &Process.send_after/3),
+      observation_listener:
+        validate_observation_listener!(Keyword.get(options, :observation_listener)),
       upgrade_generation: nil,
       subscription_generation: nil,
       reconnect_token: nil,
@@ -296,7 +298,7 @@ defmodule Worldloom.Signals.RipeSocket do
        )
        when map_size(frame) == 2 and map_size(acknowledgement) == 2 and
               map_size(subscription) == 2 and map_size(socket_options) == 2 and
-              is_binary(collector) and byte_size(collector) == 5 do
+              is_binary(collector) and byte_size(collector) in [5, 14] do
     collector_fingerprint = :crypto.hash(:sha256, collector)
 
     if MapSet.member?(pending_acknowledgements, collector_fingerprint) do
@@ -335,7 +337,7 @@ defmodule Worldloom.Signals.RipeSocket do
   defp add_to_window(frame, receipt_at, state) do
     case RipeWindow.add(state.window, frame, receipt_at) do
       {:ok, window} ->
-        %{state | window: window}
+        state |> Map.put(:window, window) |> notify_observation()
 
       {:close_required, window} ->
         close_and_retry(frame, receipt_at, %{state | window: window})
@@ -465,6 +467,24 @@ defmodule Worldloom.Signals.RipeSocket do
   defp record_health(state, observation) do
     :ok = HealthRegistry.record(state.health_registry, @source, observation)
     state
+  end
+
+  defp notify_observation(%State{observation_listener: {listener, marker}} = state) do
+    updated = %{state | observation_listener: nil}
+    send(listener, {:worldloom_provider_observation, marker})
+    updated
+  end
+
+  defp notify_observation(state), do: state
+
+  defp validate_observation_listener!(nil), do: nil
+
+  defp validate_observation_listener!({listener, marker})
+       when is_pid(listener) and is_reference(marker),
+       do: {listener, marker}
+
+  defp validate_observation_listener!(_invalid) do
+    raise ArgumentError, "observation listener must contain a process and reference"
   end
 
   defp provider_drop(reason) when reason in [:timestamp_too_old, :timestamp_in_future],

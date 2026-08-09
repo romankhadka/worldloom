@@ -29,6 +29,35 @@ defmodule Worldloom.Signals.RipeWindowTest do
     assert Enum.all?(messages, &is_binary(get_in(&1, ["data", "host"])))
   end
 
+  test "maps current RIPE collector hostnames to the configured short allow-list" do
+    response = %{
+      "type" => "ris_rrc_list",
+      "data" => ["rrc00.ripe.net", "rrc01.ripe.net", "rrc02.ripe.net"]
+    }
+
+    assert {:ok, messages} =
+             RipeWindow.subscription_messages(["rrc02", "rrc00"], response)
+
+    assert messages == [
+             subscription("rrc02.ripe.net"),
+             subscription("rrc00.ripe.net")
+           ]
+
+    [frame | _remaining] = read_frames()
+
+    qualified =
+      RipeWindow.authorize(
+        RipeWindow.new(~U[2026-08-08 16:00:02Z], ["rrc00"]),
+        ["rrc00.ripe.net"]
+      )
+
+    current_frame = put_in(frame, ["data", "host"], "rrc00.ripe.net")
+
+    assert {:ok, observed} = RipeWindow.add(qualified, current_frame, @receipt_at)
+    assert RipeWindow.flush(observed).collector_count == 1
+    refute inspect(observed) =~ "rrc00.ripe.net"
+  end
+
   test "rejects invalid collector configuration and malformed list responses" do
     response = %{"type" => "ris_rrc_list", "data" => ["rrc00"]}
 
@@ -48,6 +77,8 @@ defmodule Worldloom.Signals.RipeWindowTest do
           %{"type" => "wrong", "data" => ["rrc00"]},
           %{"type" => "ris_rrc_list", "data" => "rrc00"},
           %{"type" => "ris_rrc_list", "data" => ["rrc00", "rrc00"]},
+          %{"type" => "ris_rrc_list", "data" => ["rrc00", "rrc00.ripe.net"]},
+          %{"type" => "ris_rrc_list", "data" => ["rrc00.example.net"]},
           %{"type" => "ris_rrc_list", "data" => ["RRC00"]},
           %{"type" => "ris_rrc_list", "data" => [nil]},
           %{"type" => "ris_rrc_list", "data" => ["rrc00" | :improper]},

@@ -5,7 +5,8 @@ defmodule Worldloom.Signals.RipeSocket.State do
              :transport,
              :transport_options,
              :collectors,
-             :pending_acknowledgements
+             :pending_acknowledgements,
+             :observation_listener
            ]}
   defstruct [
     :url,
@@ -19,6 +20,7 @@ defmodule Worldloom.Signals.RipeSocket.State do
     :clock,
     :random,
     :timer,
+    :observation_listener,
     :upgrade_generation,
     :subscription_generation,
     :reconnect_token,

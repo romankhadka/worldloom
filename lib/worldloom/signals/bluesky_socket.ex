@@ -63,6 +63,8 @@ defmodule Worldloom.Signals.BlueskySocket do
       clock: clock,
       random: Keyword.get(options, :random, &:rand.uniform/0),
       timer: Keyword.get(options, :timer, &Process.send_after/3),
+      observation_listener:
+        validate_observation_listener!(Keyword.get(options, :observation_listener)),
       upgrade_generation: nil,
       reconnect_token: nil,
       attempt: 0
@@ -246,7 +248,9 @@ defmodule Worldloom.Signals.BlueskySocket do
          {:ok, target, candidate} <- route_window(state, frame, cursor, receipt_at) do
       case observe_target(state, target, cursor, identity_material) do
         {:ok, recovery} ->
-          install_recovery(candidate, target, recovery)
+          candidate
+          |> install_recovery(target, recovery)
+          |> notify_observation()
 
         {:drop, :fingerprint_capacity, recovery} ->
           state
@@ -577,6 +581,24 @@ defmodule Worldloom.Signals.BlueskySocket do
   defp record_health(state, observation) do
     :ok = HealthRegistry.record(state.health_registry, @source, observation)
     state
+  end
+
+  defp notify_observation(%State{observation_listener: {listener, marker}} = state) do
+    updated = %{state | observation_listener: nil}
+    send(listener, {:worldloom_provider_observation, marker})
+    updated
+  end
+
+  defp notify_observation(state), do: state
+
+  defp validate_observation_listener!(nil), do: nil
+
+  defp validate_observation_listener!({listener, marker})
+       when is_pid(listener) and is_reference(marker),
+       do: {listener, marker}
+
+  defp validate_observation_listener!(_invalid) do
+    raise ArgumentError, "observation listener must contain a process and reference"
   end
 
   defp provider_drop(reason) when reason in [:duplicate, :committed],

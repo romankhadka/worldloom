@@ -142,8 +142,10 @@ a slow consumer; Worldloom treats that as source-local degradation.
   reviewed `WORLDLOOM_RIPE_URL` and configure one to four unique `rrcNN` names with
   `WORLDLOOM_RIPE_COLLECTORS`; invalid or empty configuration fails startup.
 - **Subscription bound:** on every connection, request the current `ris_rrc_list`,
-  intersect it with the configured allow-list, and send exactly one string-host
-  subscription per match. Every subscription is `UPDATE` only with
+  intersect exact `rrcNN` or corresponding `rrcNN.ripe.net` advertised hostnames with
+  the configured short-name allow-list, and send exactly one string-host subscription
+  per match. Arbitrary domains and canonical duplicates fail closed. Every
+  subscription is `UPDATE` only with
   `includeRaw=false` and `acknowledge=true`; an empty intersection or malformed,
   duplicate, unrequested, or incomplete acknowledgement fails that connection closed.
   No routing update is accepted until every exact acknowledgement arrives within five

@@ -117,13 +117,16 @@ Source: [RIPE RIS Live](https://ris-live.ripe.net/manual/).
 
 The qualified contract accepts only `UPDATE` messages from an explicit allow-list of
 one to four configured collectors that also appear in RIPE's current collector list.
-It emits one exact subscription per approved collector with `includeRaw: false`. An
-empty intersection is a configuration failure: Worldloom never falls back to an
-unfiltered or full-firehose subscription. Requested acknowledgements must exactly
-confirm each approved `UPDATE` subscription with raw bytes still disabled; malformed,
-duplicate, unrequested, or incomplete acknowledgements fail that connection closed.
-Worldloom accepts no routing update until the full acknowledgement set arrives within
-five seconds.
+Configured allow-list entries remain short `rrcNN` names; discovery accepts only the
+corresponding exact `rrcNN` or `rrcNN.ripe.net` hostname advertised by RIPE and sends
+that advertised hostname back in the subscription. Arbitrary domains and alias
+duplicates fail closed. It emits one exact subscription per approved collector with
+`includeRaw: false`. An empty intersection is a configuration failure: Worldloom never
+falls back to an unfiltered or full-firehose subscription. Requested acknowledgements
+must exactly confirm each approved `UPDATE` subscription with raw bytes still
+disabled; malformed, duplicate, unrequested, or incomplete acknowledgements fail that
+connection closed. Worldloom accepts no routing update until the full acknowledgement
+set arrives within five seconds.
 
 An ordinary four-second summary counts distinct collectors and peers inside that
 window. The durable fields are named `collector_observations` and

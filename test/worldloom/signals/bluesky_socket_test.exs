@@ -161,6 +161,33 @@ defmodule Worldloom.Signals.BlueskySocketTest do
     end
   end
 
+  test "notifies a redacted listener once after the qualified commit boundary" do
+    marker = make_ref()
+
+    context =
+      start_socket(~U[2026-08-08 16:00:03Z], observation_listener: {self(), marker})
+
+    {transport_id, context} = connect(context)
+    refute inspect(:sys.get_state(context.socket)) =~ inspect(marker)
+
+    send_text(context.socket, transport_id, %{"kind" => "identity", "did" => "private-did"})
+    refute_receive {:worldloom_provider_observation, ^marker}, 50
+
+    first_frame = complete_frame(1_786_204_803_000_000)
+    send_text(context.socket, transport_id, first_frame)
+    assert_receive {:worldloom_provider_observation, ^marker}, 500
+    assert :sys.get_state(context.socket).observation_listener == nil
+
+    second_frame =
+      first_frame
+      |> put_in(["time_us"], 1_786_204_803_500_000)
+      |> put_in(["commit", "rkey"], "second-private-record-key")
+
+    send_text(context.socket, transport_id, second_frame)
+    refute_receive {:worldloom_provider_observation, ^marker}, 50
+    refute inspect(:sys.get_state(context.socket)) =~ "private-did"
+  end
+
   test "builds the exact bounded subscription URL and installs process limits" do
     now = ~U[2026-08-08 16:00:30Z]
     committed_cursor = DateTime.to_unix(now, :microsecond) - 10_000_000
@@ -666,6 +693,7 @@ defmodule Worldloom.Signals.BlueskySocketTest do
            transport: FakeWebSocketTransport,
            transport_options: [owner: test_process],
            buffer: buffer,
+           observation_listener: Keyword.get(options, :observation_listener),
            health_registry: health,
            clock: clock_fun(clock),
            random: fn -> 0.5 end,

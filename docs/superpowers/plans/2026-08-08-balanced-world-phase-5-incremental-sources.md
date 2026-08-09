@@ -227,25 +227,25 @@ rtk git commit -m "Prepare bounded RIPE summaries for canary release"
 
 ## Task 6: Add non-flaky scheduled provider contract probes
 
-- [ ] **Step 1: Write the Mix-task tests with injected probes**
+- [x] **Step 1: Write the Mix-task tests with injected probes**
 
 Create `test/worldloom/mix/tasks/worldloom.providers.smoke_test.exs`. Assert the task returns per-source pass/fail, exits nonzero on protocol drift, emits only source and coarse reason, times out each probe, and never prints endpoint query, cursor, payload, or response body.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 ```bash
 rtk mix test test/worldloom/mix/tasks/worldloom.providers.smoke_test.exs
 ```
 
-- [ ] **Step 3: Implement the bounded task**
+- [x] **Step 3: Implement the bounded task**
 
 Create `lib/mix/tasks/worldloom.providers.smoke.ex`. Probe drand, legacy Jetstream, and RIPE concurrently with a 15-second per-source timeout. Each WebSocket probe stops after one valid sanitized observation and persists nothing. Exclude Solana because no production provider is approved.
 
-- [ ] **Step 4: Add the scheduled workflow**
+- [x] **Step 4: Add the scheduled workflow**
 
 Create `.github/workflows/provider-contract.yml` triggered by weekly `schedule` and `workflow_dispatch`, not `push` or `pull_request`. Run `mix worldloom.providers.smoke`; upload no raw artifact. Protocol drift may open a failing workflow signal but may not make pull-request CI flaky.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 ```bash
 rtk mix test test/worldloom/mix/tasks/worldloom.providers.smoke_test.exs

@@ -44,6 +44,7 @@ defmodule Worldloom.Signals.RipeWindow do
   @prefix_capacity 2_048
   @peer_capacity 2_048
   @collector_pattern ~r/\Arrc\d{2}\z/
+  @collector_hostname_pattern ~r/\Arrc\d{2}\.ripe\.net\z/
   @peer_asn_pattern ~r/\A\d+\z/
 
   @spec request_rrc_list_message() :: map()
@@ -56,7 +57,12 @@ defmodule Worldloom.Signals.RipeWindow do
     with :ok <- validate_configured_collectors(configured_collectors),
          {:ok, available_collectors} <- validate_rrc_list(response),
          approved_collectors =
-           Enum.filter(configured_collectors, &MapSet.member?(available_collectors, &1)),
+           Enum.flat_map(configured_collectors, fn collector ->
+             case Map.fetch(available_collectors, collector) do
+               {:ok, advertised_hostname} -> [advertised_hostname]
+               :error -> []
+             end
+           end),
          false <- approved_collectors == [] do
       {:ok, Enum.map(approved_collectors, &subscription_message/1)}
     else
@@ -87,7 +93,7 @@ defmodule Worldloom.Signals.RipeWindow do
 
   @spec authorize(t(), [String.t()]) :: t()
   def authorize(%__MODULE__{} = window, approved_collectors) do
-    case validate_configured_collectors(approved_collectors) do
+    case validate_approved_collectors(approved_collectors) do
       :ok ->
         approved_fingerprints =
           approved_collectors
@@ -107,7 +113,7 @@ defmodule Worldloom.Signals.RipeWindow do
         }
 
       {:error, :invalid_collectors} ->
-        raise ArgumentError, "approved collectors must be one to four unique rrcNN names"
+        raise ArgumentError, "approved collectors must be one to four unique RIPE hostnames"
     end
   end
 
@@ -196,9 +202,21 @@ defmodule Worldloom.Signals.RipeWindow do
 
   defp validate_configured_collectors(_collectors), do: {:error, :invalid_collectors}
 
+  defp validate_approved_collectors(collectors) when is_list(collectors) do
+    case reduce_provider_collector_list(collectors, 4) do
+      {:ok, collector_map} ->
+        if map_size(collector_map) > 0, do: :ok, else: {:error, :invalid_collectors}
+
+      :invalid ->
+        {:error, :invalid_collectors}
+    end
+  end
+
+  defp validate_approved_collectors(_collectors), do: {:error, :invalid_collectors}
+
   defp validate_rrc_list(%{"type" => "ris_rrc_list", "data" => collectors})
        when is_list(collectors) do
-    case reduce_collector_list(collectors, 100) do
+    case reduce_provider_collector_list(collectors, 100) do
       {:ok, available_collectors} -> {:ok, available_collectors}
       :invalid -> {:error, :invalid_rrc_list}
     end
@@ -231,6 +249,33 @@ defmodule Worldloom.Signals.RipeWindow do
     end
   end
 
+  defp reduce_provider_collector_list(collectors, capacity) do
+    case Enum.reduce_while(collector_entries(collectors), {%{}, 0}, fn
+           :improper_tail, _state ->
+             {:halt, :invalid}
+
+           {:collector, collector}, {seen, count} ->
+             canonical_collector = canonical_collector(collector)
+
+             cond do
+               count == capacity ->
+                 {:halt, :invalid}
+
+               is_nil(canonical_collector) ->
+                 {:halt, :invalid}
+
+               Map.has_key?(seen, canonical_collector) ->
+                 {:halt, :invalid}
+
+               true ->
+                 {:cont, {Map.put(seen, canonical_collector, collector), count + 1}}
+             end
+         end) do
+      {collector_map, _count} -> {:ok, collector_map}
+      :invalid -> :invalid
+    end
+  end
+
   defp collector_entries(collectors) do
     Stream.unfold(collectors, fn
       [] -> nil
@@ -243,6 +288,17 @@ defmodule Worldloom.Signals.RipeWindow do
     do: byte_size(collector) == 5 and Regex.match?(@collector_pattern, collector)
 
   defp valid_collector?(_collector), do: false
+
+  defp valid_provider_collector?(collector) when is_binary(collector) do
+    valid_collector?(collector) or
+      (byte_size(collector) == 14 and Regex.match?(@collector_hostname_pattern, collector))
+  end
+
+  defp valid_provider_collector?(_collector), do: false
+
+  defp canonical_collector(collector) do
+    if valid_provider_collector?(collector), do: binary_part(collector, 0, 5), else: nil
+  end
 
   defp empty_window(observed_at, approved_collector_fingerprints) do
     window_start = BoundedCounter.window_start(observed_at, @window_seconds, @offset_seconds)
@@ -362,7 +418,7 @@ defmodule Worldloom.Signals.RipeWindow do
   end
 
   defp collector_fingerprint(collector, window) do
-    if valid_collector?(collector) do
+    if valid_provider_collector?(collector) do
       collector_fingerprint = fingerprint(collector)
 
       if MapSet.member?(window.approved_collector_fingerprints, collector_fingerprint) do

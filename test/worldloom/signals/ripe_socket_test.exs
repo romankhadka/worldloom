@@ -174,6 +174,55 @@ defmodule Worldloom.Signals.RipeSocketTest do
              %{size: 2_000_000, kill: true, error_logger: false}
   end
 
+  test "negotiates current RIPE collector hostnames without widening the allow-list" do
+    context = start_socket(~U[2026-08-08 16:00:03Z])
+    {transport_id, context} = connect(context)
+    assert_receive {:transport_sent, ^transport_id, {:text, _request}}, 500
+
+    send_text(context.socket, transport_id, %{
+      "type" => "ris_rrc_list",
+      "data" => ["rrc00.ripe.net", "rrc02.ripe.net"]
+    })
+
+    assert_receive {:transport_sent, ^transport_id, {:text, encoded_subscription}}, 500
+    assert Jason.decode!(encoded_subscription) == subscription("rrc00.ripe.net")
+    refute_receive {:transport_sent, ^transport_id, {:text, _other_subscription}}, 50
+
+    send_text(
+      context.socket,
+      transport_id,
+      encoded_subscription |> Jason.decode!() |> subscription_acknowledgement()
+    )
+
+    assert eventually(fn -> :sys.get_state(context.socket).subscribed? end)
+
+    [frame | _remaining] = read_frames()
+    send_text(context.socket, transport_id, put_in(frame, ["data", "host"], "rrc00.ripe.net"))
+
+    assert eventually(fn -> :sys.get_state(context.socket).window.announced == 3 end)
+  end
+
+  test "notifies a redacted listener once after an authorized update" do
+    marker = make_ref()
+
+    context =
+      start_socket(~U[2026-08-08 16:00:03Z], observation_listener: {self(), marker})
+
+    {transport_id, context} = connect_and_subscribe(context)
+    refute inspect(:sys.get_state(context.socket)) =~ inspect(marker)
+    [frame | _remaining] = read_frames()
+
+    send_text(context.socket, transport_id, %{"type" => "ris_error", "data" => %{}})
+    refute_receive {:worldloom_provider_observation, ^marker}, 50
+
+    send_text(context.socket, transport_id, frame)
+    assert_receive {:worldloom_provider_observation, ^marker}, 500
+    assert :sys.get_state(context.socket).observation_listener == nil
+
+    send_text(context.socket, transport_id, frame)
+    refute_receive {:worldloom_provider_observation, ^marker}, 50
+  end
+
   test "accepts each exact subscription acknowledgement once and fails duplicates closed" do
     context = start_socket(~U[2026-08-08 16:00:03Z])
     {transport_id, context} = connect(context)
@@ -735,6 +784,7 @@ defmodule Worldloom.Signals.RipeSocketTest do
          transport: FakeWebSocketTransport,
          transport_options: [owner: test_process],
          buffer: buffer,
+         observation_listener: Keyword.get(options, :observation_listener),
          health_registry: health,
          clock: clock_fun(clock),
          random: fn -> 0.5 end,

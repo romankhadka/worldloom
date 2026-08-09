@@ -9,7 +9,8 @@ defmodule Worldloom.Signals.BlueskySocket.State do
              :window_cursor,
              :next_window,
              :next_window_cursor,
-             :next_recovery
+             :next_recovery,
+             :observation_listener
            ]}
   defstruct [
     :url,
@@ -28,6 +29,7 @@ defmodule Worldloom.Signals.BlueskySocket.State do
     :clock,
     :random,
     :timer,
+    :observation_listener,
     :upgrade_generation,
     :reconnect_token,
     attempt: 0
