@@ -80,8 +80,9 @@ The qualified legacy subscription is limited to `app.bsky.feed.post` and
 of total actions, original posts, replies, reposts, creates, updates, and deletes,
 plus a bounded truncation flag. Worldloom does not retain post text, handles, DIDs,
 record keys, URIs, CIDs, records, or raw frames. A future resumable worker may
-checkpoint only its fully committed numeric cursor and bounded overlap fingerprints;
-neither exists in current production because the worker is disabled.
+checkpoint only its fully committed numeric cursor. Bounded overlap fingerprints are
+transient worker state and are never checkpointed; neither exists in current
+production because the worker is disabled.
 
 Legacy Jetstream is appropriate for an informal artistic aggregate, but it is not a
 stable authenticated firehose and has no production SLA. Protocol drift or relay
@@ -136,7 +137,9 @@ relay origins `https://api.drand.sh`, `https://api2.drand.sh`, and
 accepts the first structurally valid response. A round produces only its positive
 JSON-safe round number and a transient SHA-256 render identity derived from the
 decoded signature. The durable payload contains only the round and fixed summary;
-the signature, digest, chain-info body, and complete response are discarded.
+the stored event also carries deterministic render seed and visual parameters derived
+through that transient identity. The signature, digest, chain-info body, and complete
+response are discarded and never persisted.
 
 This is HTTPS failover plus structural validation. Worldloom does not verify the BLS
 signature, recompute chain identity, compare relay consensus, or describe the result
