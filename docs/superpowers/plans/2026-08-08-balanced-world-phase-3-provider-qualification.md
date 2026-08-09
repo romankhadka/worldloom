@@ -136,11 +136,11 @@ rtk git commit -m "Qualify bounded Bluesky activity summaries"
 
 - [ ] **Step 1: Create synthetic UPDATE fixtures**
 
-Create `test/support/fixtures/feeds/ripe_frames.json` with `type: "ris_message"` and `data.type: "UPDATE"`. Include synthetic collectors, peers, IPv4 and IPv6 announcements and withdrawals, non-UPDATE messages, more than 2,048 distinct synthetic values, malformed times, and identifiers that must never survive aggregation.
+Create `test/support/fixtures/feeds/ripe_frames.json` with `type: "ris_message"` and `data.type: "UPDATE"`. Model `announcements` as an array of `%{"next_hop" => string, "prefixes" => [CIDR strings]}` groups and `withdrawals` as a flat array of CIDR strings, matching the current RIS Live UPDATE schema. Include synthetic collectors, peers, IPv4 and IPv6 announcements and withdrawals, non-UPDATE messages, malformed times, and identifiers that must never survive aggregation. Keep the checked-in fixture reviewable; construct the greater-than-2,048 adversarial collections mechanically in the test.
 
 - [ ] **Step 2: Write the subscription and aggregation tests**
 
-Create `test/worldloom/signals/ripe_window_test.exs`. Assert `subscription_messages/2` returns one exact subscription per approved current collector because the protocol's `host` filter is a string, not an array:
+Create `test/worldloom/signals/ripe_window_test.exs`. Assert `request_rrc_list_message/0` returns exactly `%{"type" => "request_rrc_list", "data" => nil}`. Assert `subscription_messages/2` accepts one to four unique configured collectors matching `~r/\Arrc\d{2}\z/` and a `%{"type" => "ris_rrc_list", "data" => available_collectors}` response whose data is an array of strings. Preserve configured allow-list order when intersecting and return one exact subscription per approved current collector because the protocol's `host` filter is a string, not an array:
 
 ```elixir
 Enum.map(approved_current_collectors, fn collector ->
@@ -155,7 +155,7 @@ Enum.map(approved_current_collectors, fn collector ->
 end)
 ```
 
-Reject a configured collector list larger than four and reject an empty intersection with the `ris_rrc_list` response; never fall back to the full firehose. Aggregate four-second windows at offset two. Assert announced/withdrawn prefix counts, IPv4/IPv6 counts, distinct collector/peer counts, 2,048-set caps, `truncated`, and no raw identifier in `inspect(window)`.
+Reject malformed lists, duplicate or invalid configured collectors, a configured collector list larger than four, and an empty intersection with the `ris_rrc_list` response; never fall back to the full firehose or emit an unfiltered subscription. Aggregate four-second windows at offset two. Assert announced/withdrawn prefix-occurrence counts, IPv4/IPv6 counts, distinct collector/peer counts, a collector-hash cap of four, a peer-hash cap of 2,048, `truncated`, and no raw identifier in `inspect(window)`.
 
 - [ ] **Step 3: Run and verify RED**
 
@@ -165,13 +165,17 @@ rtk mix test test/worldloom/signals/ripe_window_test.exs
 
 - [ ] **Step 4: Implement hashed ephemeral distinct sets**
 
-Create `lib/worldloom/signals/ripe_window.ex`. Hash collector and peer identifiers immediately with `:crypto.hash(:sha256, identifier)` and retain only hashes in capped `MapSet`s. Count prefix strings by family, then discard them; never store prefixes or identifiers in the struct. Accept only `UPDATE` messages from the configured collector allow list and provider timestamps inside the one-second lateness bound.
+Create `lib/worldloom/signals/ripe_window.ex`. `RipeWindow.add/3` requires one explicit trusted server `receipt_at`. Accept `data.timestamp` only as a non-negative finite JSON number representing Unix seconds, convert it deterministically to integer microseconds with `round(timestamp * 1_000_000)`, and accept the inclusive interval from `receipt_at - 20_000_000` through `receipt_at + 5_000_000` microseconds. Validate this before prefix traversal or state mutation. The twenty-second past bound is a transport-staleness limit aligned with RIPE's high-cadence quiet threshold, not replay. Separately, `elapsed?/2` closes a four-second window only after its one-second late-arrival grace. Test both exact temporal boundaries, both one-microsecond violations, malformed and fractional timestamps, and future or stale frames followed by a valid frame to prove they cannot poison the window.
 
-Traverse at most 2,048 announcement/withdrawal groups and 2,048 prefixes per complete frame. If either bound is exceeded, count only the bounded prefix and set `truncated: true`; never enumerate the remaining decoded collection.
+Accept only `UPDATE` messages from the configured collector allow list. Validate allow-listed collector and peer strings, hash them immediately with `:crypto.hash(:sha256, identifier)`, and retain only hashes in capped worker-local `MapSet`s. Count CIDR prefix occurrences by family, then discard them. Validate and discard every traversed announcement `next_hop`; reject a malformed traversed group or prefix without partially mutating the window.
+
+Inspect at most 2,048 announcement group elements and at most 2,048 prefix entries total per complete frame. Flatten announcement prefixes in outer-array then inner-array wire order, followed by withdrawals in wire order. Stop immediately when either budget is exhausted, do not sort or enumerate the unvisited tail, count only visited valid prefixes, and set `truncated: true`. Cap retained collector hashes at four and peer hashes at 2,048; reject unseen values after capacity while continuing to recognize duplicates.
+
+The struct may contain only UTC window time, counters, capped hash sets, and `truncated`; derive `Inspect` to omit both hash sets. Never retain or expose collector, peer, peer ASN, message ID, next hop, prefix, path, community, raw bytes, or the source frame in state, output, logs, telemetry, PubSub, or errors.
 
 - [ ] **Step 5: Normalize and commit**
 
-Add `Normalizer.ripe_window/1`, producing `:route_change/:ripe_ris`, identity `ripe-window:<unix-start>:4`, and the exact public aggregate.
+Add `Normalizer.ripe_window/1`, producing `:route_change/:ripe_ris`, identity `ripe-window:<unix-start>:4`, and the exact public aggregate. Reject empty windows and every counter outside uint32. Require `collector_count` in `1..4`, `peer_count` in `1..2048`, positive `announced + withdrawn`, positive `ipv4 + ipv6`, and equal prefix and family totals whenever `truncated` is false. Require a boolean `truncated`, UTC-normalize `window_start`, and derive deterministic lane and intensity only from approved counters. Test zero activity, relational mismatch, set-bound violations, saturation/truncation, ignored extra private inputs, and repeated deterministic normalization.
 
 ```bash
 rtk mix test test/worldloom/signals/ripe_window_test.exs test/worldloom/signals/normalizer_test.exs
