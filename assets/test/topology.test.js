@@ -234,6 +234,17 @@ test("preserves JSON-safe Solana positions beyond the uint32 counter range", () 
   assert.equal(topology.fallbacks[0].source, "solana")
 })
 
+test("preserves JSON-safe drand rounds beyond the uint32 counter range", () => {
+  const drand = structuredClone(versionTwoContract[3])
+  drand.metrics.round = Number.MAX_SAFE_INTEGER
+
+  const topology = buildTopology([drand])
+
+  assert.equal(topology.fallbacks.length, 1)
+  assert.equal(topology.fallbacks[0].kind, "randomness")
+  assert.equal(topology.fallbacks[0].source, "drand")
+})
+
 test("requires one Solana slot exactly when both endpoints are equal", () => {
   const solana = structuredClone(versionTwoContract[2])
   const oneSlot = {
@@ -310,7 +321,7 @@ test("neutralizes mismatched or malformed version two contracts", () => {
     },
     {
       ...structuredClone(drand),
-      metrics: {...drand.metrics, round: 4_294_967_296},
+      metrics: {...drand.metrics, round: Number.MAX_SAFE_INTEGER + 1},
     },
   ].map((contractInstruction, index) => ({
     ...contractInstruction,

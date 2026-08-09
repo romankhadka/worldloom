@@ -258,7 +258,7 @@ defmodule Worldloom.Loom.SourceEvent do
   end
 
   defp validate_payload_shape(payload, :drand) do
-    boolean_result(uint32?(payload["round"]) and payload["round"] > 0)
+    boolean_result(json_safe_integer?(payload["round"]) and payload["round"] > 0)
   end
 
   defp validate_payload_shape(payload, :wikimedia) do

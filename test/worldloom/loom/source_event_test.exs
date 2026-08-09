@@ -327,12 +327,23 @@ defmodule Worldloom.Loom.SourceEventTest do
     refute Map.has_key?(event.payload, "render_identity")
     refute Map.has_key?(event.payload, :render_identity)
 
+    assert {:ok, _event} =
+             SourceEvent.new(
+               valid_attributes(:randomness, :drand, %{
+                 payload: %{
+                   "summary" => "drand Quicknet reached the JSON-safe boundary",
+                   "round" => @json_safe_max
+                 }
+               })
+             )
+
     invalid_attributes = [
       %{render_identity: nil},
       %{render_identity: String.duplicate("A", 64)},
       %{render_identity: String.duplicate("a", 63)},
       %{render_identity: String.duplicate("g", 64)},
       %{payload: Map.put(valid_payload(:drand), "round", 0)},
+      %{payload: Map.put(valid_payload(:drand), "round", @json_safe_max + 1)},
       %{payload: Map.put(valid_payload(:drand), "round", 1.0)}
     ]
 

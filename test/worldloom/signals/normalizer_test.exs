@@ -5,6 +5,7 @@ defmodule Worldloom.Signals.NormalizerTest do
   alias Worldloom.Signals.Normalizer
 
   @fixtures "test/support/fixtures/feeds"
+  @drand_render_identity "8ada64bae5c6c0f5540a6a13af56e663240edfbd2c76ac6a8f27671eb7259ce3"
   @forbidden ~w(user user_text ip title comment revision server_url)
   @json_safe_max 9_007_199_254_740_991
   @uint32_max 4_294_967_295
@@ -496,6 +497,70 @@ defmodule Worldloom.Signals.NormalizerTest do
 
     for invalid <- invalid_windows do
       assert {:error, :invalid_window} = Normalizer.solana_window(invalid)
+    end
+  end
+
+  test "normalizes a deterministic drand Quicknet round without retaining beacon output" do
+    schedule = %{period: 3, genesis_time: 1_692_803_367}
+    round = %{round: 42, render_identity: @drand_render_identity}
+
+    assert {:ok, %SourceEvent{} = event} = Normalizer.drand_round(schedule, round)
+    assert {:ok, repeated_event} = Normalizer.drand_round(schedule, round)
+    assert event.kind == :randomness
+    assert event.source == :drand
+    assert event.external_id == "drand-round:42"
+    assert event.occurred_at == ~U[2023-08-23 15:11:30.000000Z]
+    assert event.lane == repeated_event.lane
+    assert event.intensity == repeated_event.intensity
+    assert event.payload == %{"summary" => "drand Quicknet round 42", "round" => 42}
+    assert event.render_identity == @drand_render_identity
+    refute inspect(event) =~ @drand_render_identity
+    refute inspect(event) =~ "95a9f9f5b231b771"
+  end
+
+  test "checks drand Quicknet round arithmetic against UTC limits" do
+    schedule = %{period: 3, genesis_time: 1_692_803_367}
+
+    assert {:ok, %SourceEvent{occurred_at: ~U[2023-08-23 15:09:27.000000Z]}} =
+             Normalizer.drand_round(schedule, %{
+               round: 1,
+               render_identity: @drand_render_identity
+             })
+
+    assert {:ok, %SourceEvent{occurred_at: ~U[9999-12-31 23:59:57.000000Z]}} =
+             Normalizer.drand_round(schedule, %{
+               round: 83_903_165_811,
+               render_identity: @drand_render_identity
+             })
+
+    for invalid_round <- [83_903_165_812, @json_safe_max, @json_safe_max + 1, 0, 1.0] do
+      assert {:error, :invalid_round} =
+               Normalizer.drand_round(schedule, %{
+                 round: invalid_round,
+                 render_identity: @drand_render_identity
+               })
+    end
+  end
+
+  test "rejects malformed drand schedule and render identity inputs" do
+    round = %{round: 42, render_identity: @drand_render_identity}
+
+    invalid_inputs = [
+      {%{period: 4, genesis_time: 1_692_803_367}, round},
+      {%{period: 3, genesis_time: 0}, round},
+      {%{period: 3, genesis_time: 253_402_300_800}, round},
+      {%{period: 3, genesis_time: "1692803367"}, round},
+      {%{period: 3, genesis_time: 1_692_803_367}, Map.put(round, :render_identity, nil)},
+      {%{period: 3, genesis_time: 1_692_803_367},
+       Map.put(round, :render_identity, String.upcase(@drand_render_identity))},
+      {%{period: 3, genesis_time: 1_692_803_367},
+       Map.put(round, :render_identity, String.duplicate("a", 63))},
+      {%{period: 3, genesis_time: 1_692_803_367}, %{round: 42}}
+    ]
+
+    for {invalid_schedule, invalid_round} <- invalid_inputs do
+      assert {:error, :invalid_round} =
+               Normalizer.drand_round(invalid_schedule, invalid_round)
     end
   end
 

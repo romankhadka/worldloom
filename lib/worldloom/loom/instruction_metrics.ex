@@ -45,7 +45,7 @@ defmodule Worldloom.Loom.InstructionMetrics do
 
   defp valid_scalar?(key, metric) when key in @boolean_keys, do: is_boolean(metric)
 
-  defp valid_scalar?(key, metric) when key in ~w(first_slot last_slot),
+  defp valid_scalar?(key, metric) when key in ~w(first_slot last_slot round),
     do: json_safe_integer?(metric)
 
   defp valid_scalar?(_key, metric), do: uint32?(metric)

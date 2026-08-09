@@ -150,7 +150,7 @@ defmodule Worldloom.Loom.InstructionMetricsTest do
          "gap_count" => @uint32_max,
          "truncated" => true
        })},
-      {"drand", Map.put(@payloads["drand"], "round", @uint32_max)}
+      {"drand", Map.put(@payloads["drand"], "round", @json_safe_max)}
     ]
 
     Enum.each(boundary_payloads, fn {source, payload} ->
@@ -169,6 +169,7 @@ defmodule Worldloom.Loom.InstructionMetricsTest do
       {"solana", Map.put(@payloads["solana"], "first_slot", @json_safe_max + 1)},
       {"solana", Map.put(@payloads["solana"], "gap_count", [1])},
       {"solana", Map.put(@payloads["solana"], "truncated", "false")},
+      {"drand", Map.put(@payloads["drand"], "round", @json_safe_max + 1)},
       {"drand", Map.put(@payloads["drand"], "round", 42.0)}
     ]
 

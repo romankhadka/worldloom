@@ -2,6 +2,7 @@ defmodule Worldloom.Signals.Normalizer do
   alias Worldloom.Loom.SourceEvent
 
   @json_safe_max 9_007_199_254_740_991
+  @maximum_unix_second 253_402_300_799
   @maximum_languages 5
   @uint32_max 4_294_967_295
 
@@ -228,6 +229,39 @@ defmodule Worldloom.Signals.Normalizer do
   end
 
   def solana_window(_window), do: {:error, :invalid_window}
+
+  @spec drand_round(map(), map()) :: {:ok, SourceEvent.t()} | {:error, :invalid_round}
+  def drand_round(
+        %{period: 3, genesis_time: genesis_time},
+        %{round: round, render_identity: render_identity}
+      ) do
+    with true <- is_integer(genesis_time) and genesis_time in 1..@maximum_unix_second,
+         true <- is_integer(round) and round in 1..@json_safe_max,
+         true <- valid_render_identity?(render_identity),
+         unix_second <- genesis_time + (round - 1) * 3,
+         true <- unix_second in 0..@maximum_unix_second,
+         {:ok, occurred_at} <- DateTime.from_unix(unix_second, :second),
+         {:ok, event} <-
+           SourceEvent.new(%{
+             kind: :randomness,
+             source: :drand,
+             external_id: "drand-round:#{round}",
+             occurred_at: occurred_at,
+             lane: stable_lane(%{round: round}),
+             intensity: 0.6,
+             payload: %{
+               "summary" => "drand Quicknet round #{round}",
+               "round" => round
+             },
+             render_identity: render_identity
+           }) do
+      {:ok, event}
+    else
+      _invalid -> {:error, :invalid_round}
+    end
+  end
+
+  def drand_round(_schedule, _round), do: {:error, :invalid_round}
 
   @spec earthquakes(map()) :: {:ok, [SourceEvent.t()]} | {:error, atom()}
   def earthquakes(%{"features" => features}) when is_list(features) do
@@ -538,6 +572,12 @@ defmodule Worldloom.Signals.Normalizer do
 
   defp uint32?(number), do: is_integer(number) and number in 0..@uint32_max
   defp json_safe_integer?(number), do: is_integer(number) and number in 0..@json_safe_max
+
+  defp valid_render_identity?(render_identity)
+       when is_binary(render_identity) and byte_size(render_identity) == 64,
+       do: Regex.match?(~r/\A[0-9a-f]{64}\z/, render_identity)
+
+  defp valid_render_identity?(_render_identity), do: false
   defp format_decimal(number), do: :erlang.float_to_binary(number, decimals: 1)
   defp to_float(number) when is_float(number), do: number
   defp to_float(number) when is_integer(number), do: number * 1.0
