@@ -337,7 +337,10 @@ defmodule Worldloom.Signals.Normalizer do
   end
 
   defp valid_bluesky_totals?(counters, true) do
+    operation_total = counters.creates + counters.updates + counters.deletes
+
     counters.total_actions == 4_294_967_295 and
+      operation_total >= counters.total_actions and
       counters
       |> Map.delete(:total_actions)
       |> Enum.all?(fn {_name, count} -> count <= counters.total_actions end)

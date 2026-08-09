@@ -138,9 +138,24 @@ defmodule Worldloom.Signals.NormalizerTest do
     assert event.payload["total_actions"] == uint32_max
     assert event.payload["truncated"]
 
+    exactly_accounted =
+      Map.merge(truncated, %{creates: uint32_max - 1, updates: 1, deletes: 0})
+
+    assert {:ok, %SourceEvent{}} = Normalizer.bluesky_window(exactly_accounted)
+
     assert {:error, :invalid_window} =
              truncated
              |> Map.put(:total_actions, uint32_max - 1)
+             |> Normalizer.bluesky_window()
+
+    assert {:error, :invalid_window} =
+             truncated
+             |> Map.merge(%{creates: 0, updates: 0, deletes: 0})
+             |> Normalizer.bluesky_window()
+
+    assert {:error, :invalid_window} =
+             truncated
+             |> Map.merge(%{creates: uint32_max - 2, updates: 1, deletes: 0})
              |> Normalizer.bluesky_window()
   end
 
