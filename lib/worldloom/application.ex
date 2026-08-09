@@ -8,13 +8,13 @@ defmodule Worldloom.Application do
   @impl true
   def start(_type, _args) do
     children = [
-      WorldloomWeb.Telemetry,
+      {WorldloomWeb.Telemetry, configured_options(WorldloomWeb.Telemetry)},
       Worldloom.Repo,
       {DNSCluster, query: Application.get_env(:worldloom, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Worldloom.PubSub},
       WorldloomWeb.Presence,
       Worldloom.Loom.RateLimiter,
-      Worldloom.Loom.Coordinator,
+      {Worldloom.Loom.Coordinator, configured_options(Worldloom.Loom.Coordinator)},
       Worldloom.Signals.Buffer,
       Worldloom.Signals.Supervisor,
       {Worldloom.Signals.HealthMonitor, enabled: signal_ingestion_enabled?()},
@@ -43,4 +43,6 @@ defmodule Worldloom.Application do
     |> Application.fetch_env!(Worldloom.Signals)
     |> Keyword.get(:enabled, true)
   end
+
+  defp configured_options(module), do: Application.get_env(:worldloom, module, [])
 end

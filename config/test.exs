@@ -5,6 +5,8 @@ config :worldloom, Worldloom.Signals, enabled: false
 e2e? = System.get_env("WORLDLOOM_E2E") == "true"
 config :worldloom, :acceptance_scene_diagnostics, e2e?
 config :worldloom, :e2e_routes, e2e?
+config :worldloom, Worldloom.Loom.Coordinator, bootstrap: if(e2e?, do: :store, else: :empty)
+config :worldloom, WorldloomWeb.Telemetry, periodic_measurements: e2e?
 
 # Configure your database
 #

@@ -11,11 +11,17 @@ defmodule Worldloom.Loom.Coordinator do
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(options \\ []) do
     name = Keyword.get(options, :name, __MODULE__)
+    bootstrap = Keyword.get(options, :bootstrap, :store)
+
+    if bootstrap not in [:store, :empty] do
+      raise ArgumentError, "bootstrap must be :store or :empty"
+    end
 
     state = %{
       store: Keyword.get(options, :store, Store),
       pubsub: Keyword.get(options, :pubsub, Worldloom.PubSub),
-      topic: Keyword.get(options, :topic, @topic)
+      topic: Keyword.get(options, :topic, @topic),
+      bootstrap: bootstrap
     }
 
     GenServer.start_link(__MODULE__, state, registration_options(name))
@@ -43,7 +49,7 @@ defmodule Worldloom.Loom.Coordinator do
 
   @impl true
   def init(state) do
-    snapshot = state.store.live_snapshot(nil)
+    snapshot = initial_snapshot(state)
 
     initialized_state =
       state
@@ -53,6 +59,18 @@ defmodule Worldloom.Loom.Coordinator do
     :persistent_term.put(@start_count_key, start_count() + 1)
     :telemetry.execute([:worldloom, :loom, :coordinator, :start], %{count: 1}, %{})
     {:ok, initialized_state}
+  end
+
+  defp initial_snapshot(%{bootstrap: :store} = state), do: state.store.live_snapshot(nil)
+
+  defp initial_snapshot(%{bootstrap: :empty}) do
+    %LiveSnapshot{
+      window_end: nil,
+      commit_watermark: 0,
+      display_events: [],
+      memory_events: [],
+      ambient: nil
+    }
   end
 
   @impl true

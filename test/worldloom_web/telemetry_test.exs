@@ -18,6 +18,11 @@ defmodule WorldloomWeb.TelemetryTest do
     [:worldloom, :runtime]
   ]
 
+  test "ordinary test startup disables only scheduled runtime polling" do
+    assert Application.fetch_env!(:worldloom, Telemetry)[:periodic_measurements] == false
+    assert Supervisor.which_children(Telemetry) == []
+  end
+
   test "publishes the complete bounded operations contract" do
     handler_id = {__MODULE__, make_ref()}
     test_process = self()

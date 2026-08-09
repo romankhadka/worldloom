@@ -19,14 +19,19 @@ defmodule WorldloomWeb.Telemetry do
   end
 
   @impl true
-  def init(_arg) do
-    children = [
-      # Telemetry poller will execute the given period measurements
-      # every 10_000ms. Learn more here: https://hexdocs.pm/telemetry_metrics
-      {:telemetry_poller, measurements: periodic_measurements(), period: 10_000}
-      # Add reporters as children of your supervision tree.
-      # {Telemetry.Metrics.ConsoleReporter, metrics: metrics()}
-    ]
+  def init(options) do
+    children =
+      if Keyword.get(options, :periodic_measurements, true) do
+        [
+          # Telemetry poller will execute the given period measurements
+          # every 10_000ms. Learn more here: https://hexdocs.pm/telemetry_metrics
+          {:telemetry_poller, measurements: periodic_measurements(), period: 10_000}
+          # Add reporters as children of your supervision tree.
+          # {Telemetry.Metrics.ConsoleReporter, metrics: metrics()}
+        ]
+      else
+        []
+      end
 
     Supervisor.init(children, strategy: :one_for_one)
   end

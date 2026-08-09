@@ -63,6 +63,40 @@ defmodule Worldloom.Loom.CoordinatorTest do
     assert CoordinatorTestStore.calls() == [{:live_snapshot, nil}]
   end
 
+  test "an explicit empty bootstrap avoids storage until the first durable commit" do
+    inserted_event = stored_event(41)
+    authoritative_snapshot = snapshot(41, ~U[2026-08-08 12:01:00Z], [inserted_event])
+
+    start_supervised!(
+      {CoordinatorTestStore,
+       external_results: [{:ok, [inserted_event]}], snapshots: [authoritative_snapshot]}
+    )
+
+    {coordinator, _topic} =
+      start_coordinator(store: CoordinatorTestStore, bootstrap: :empty)
+
+    assert Coordinator.current_snapshot(coordinator) == CoordinatorTestStore.empty_snapshot()
+    assert Coordinator.highest_sequence(coordinator) == 0
+    assert CoordinatorTestStore.calls() == []
+
+    assert {:ok, [^inserted_event]} =
+             Coordinator.commit_external(
+               coordinator,
+               [source_event(41)],
+               checkpoint("cursor-41")
+             )
+
+    assert Coordinator.current_snapshot(coordinator) == authoritative_snapshot
+    assert Coordinator.highest_sequence(coordinator) == 41
+    assert {:live_snapshot, nil} in CoordinatorTestStore.calls()
+  end
+
+  test "rejects an unknown bootstrap strategy before starting" do
+    assert_raise ArgumentError, ~r/bootstrap must be :store or :empty/, fn ->
+      Coordinator.start_link(name: nil, bootstrap: :unknown)
+    end
+  end
+
   @tag :committed_storage
   test "serializes concurrent commits and broadcasts snapshots in watermark order", %{
     independent_repo: independent_repo,
@@ -364,7 +398,8 @@ defmodule Worldloom.Loom.CoordinatorTest do
       Coordinator.start_link(
         name: nil,
         topic: topic,
-        store: Keyword.get(options, :store, Store)
+        store: Keyword.get(options, :store, Store),
+        bootstrap: Keyword.get(options, :bootstrap, :store)
       )
 
     on_exit(fn -> Process.exit(coordinator, :shutdown) end)
