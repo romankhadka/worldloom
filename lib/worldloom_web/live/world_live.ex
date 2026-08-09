@@ -480,7 +480,11 @@ defmodule WorldloomWeb.WorldLive do
 
   defp assign_encoded_live_snapshot(socket, snapshot, encoded_snapshot, scaffold) do
     trusted_events = snapshot.display_events ++ snapshot.memory_events
-    accessible_formations = encoded_snapshot.display_events ++ encoded_snapshot.memory_events
+
+    accessible_formations =
+      encoded_snapshot.display_events
+      |> Kernel.++(encoded_snapshot.memory_events)
+      |> Enum.take(-@accessible_limit)
 
     socket
     |> assign(:utc_chapter, snapshot_utc_chapter(snapshot.window_end))

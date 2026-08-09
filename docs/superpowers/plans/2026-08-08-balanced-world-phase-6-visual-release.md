@@ -356,11 +356,11 @@ rtk git commit -m "Instrument deterministic upstreams for whole-app load"
 
 ## Task 9: Prove one hundred isolated browsers do not multiply upstream work
 
-- [ ] **Step 1: Create the real-browser runner**
+- [x] **Step 1: Create the real-browser runner**
 
 Create `load/browser_100.mjs`. Launch one Chromium process with 100 isolated browser contexts, one page per context, distinct cookie jars, and no shared storage. Ramp 10 pages every two seconds, wait for `#loom-canvas[data-ready='true']`, require two watermark advances, hold sixty seconds, collect console/page/request/WebSocket failures, then close every context.
 
-- [ ] **Step 2: Assert upstream and app evidence**
+- [x] **Step 2: Assert upstream and app evidence**
 
 After the hold, fetch fake `/stats` and assert:
 
@@ -373,23 +373,23 @@ After the hold, fetch fake `/stats` and assert:
 - provider `active_connections` remain at their pre-browser baseline while
   LiveView processes and browser sockets return to baseline after close.
 
-- [ ] **Step 3: Add an npm script and document resource expectations**
+- [x] **Step 3: Add an npm script and document resource expectations**
 
 Add `"test:browser-100": "node load/browser_100.mjs"` to `package.json`. Document that this explicit local gate is heavier than pull-request CI and requires the instrumented test app.
 
-- [ ] **Step 4: Run both protocol and real-browser profiles**
+- [x] **Step 4: Run both protocol and real-browser profiles**
 
 ```bash
-rtk k6 run -e WORLDLOOM_PROFILE=local-100 load/worldloom.js
+rtk k6 run -e WORLDLOOM_PROFILE=local-100 -e WORLDLOOM_BASE_URL=http://localhost:4002 load/worldloom.js
 rtk npm run test:browser-100
 ```
 
 Expected: both gates pass; the real-browser report includes 100 ready pages, two or more snapshot advances per page, zero browser failures, and one server-side connection/subscription per enabled streaming source.
 
-- [ ] **Step 5: Commit the load gate**
+- [x] **Step 5: Commit the load gate**
 
 ```bash
-rtk git add load/browser_100.mjs load/README.md package.json package-lock.json
+rtk git add assets/test/browser_100.test.js load/browser_100.mjs load/README.md package.json lib/worldloom_web/live/world_live.ex test/worldloom_web/live/world_live_test.exs test/support/fake_upstream.ex docs/superpowers/plans/2026-08-08-balanced-world-phase-6-visual-release.md
 rtk git commit -m "Verify Worldloom with one hundred isolated browsers"
 ```
 

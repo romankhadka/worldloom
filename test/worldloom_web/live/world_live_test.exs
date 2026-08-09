@@ -406,6 +406,31 @@ defmodule WorldloomWeb.WorldLiveTest do
     refute has_element?(live_view, "#signal-detail")
   end
 
+  test "bounds the live accessibility window while retaining the full trusted snapshot", %{
+    conn: conn
+  } do
+    display_events = seed_events(25, ~U[2026-08-08 12:00:00Z])
+
+    put_current_snapshot(%LiveSnapshot{
+      window_end: ~U[2026-08-08 12:01:00Z],
+      commit_watermark: List.last(display_events).id,
+      display_events: display_events,
+      memory_events: [],
+      ambient: nil
+    })
+
+    {:ok, live_view, _html} = live(conn, "/")
+
+    expected_accessible_sequences = display_events |> Enum.take(-20) |> Enum.map(& &1.id)
+
+    assert accessible_sequence_ids(live_view) == expected_accessible_sequences
+    assert live_view |> live_assign(:trusted_events) |> map_size() == 25
+
+    omitted_but_trusted_event = List.first(display_events)
+    render_hook(live_view, "select-formation", %{"sequence" => omitted_but_trusted_event.id})
+    assert_patch live_view, chapter_path(omitted_but_trusted_event)
+  end
+
   test "late recovery advances only the snapshot commit watermark", %{conn: conn} do
     snapshot = seed_live_snapshot_fixture()
     {:ok, live_view, _html} = live(conn, "/")

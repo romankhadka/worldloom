@@ -15,6 +15,7 @@ defmodule Worldloom.TestSupport.FakeUpstream do
   @ca_file Path.expand("test/support/fixtures/tls/localhost_ca.pem")
   @fixture_directory Path.expand("test/support/fixtures/feeds")
   @drand_chain_hash "52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971"
+  @websocket_idle_timeout_ms 3_600_000
   @sources [:wikimedia, :usgs, :open_meteo, :bluesky, :ripe_ris, :drand, :solana]
   @counter_keys [
     :connection_opens,
@@ -430,7 +431,7 @@ defmodule Worldloom.TestSupport.FakeUpstream do
         window_index: 0,
         window_scheduled?: false
       },
-      timeout: 60_000
+      timeout: @websocket_idle_timeout_ms
     )
     |> halt()
   end

@@ -7,7 +7,8 @@
   },
   "scripts": {
     "test": "node --test assets/test/**/*.test.js",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:browser-100": "node load/browser_100.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1"

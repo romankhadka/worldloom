@@ -86,6 +86,44 @@ MIX_ENV=test WORLDLOOM_E2E=false mix run --no-start --no-halt \
   -e '{:ok, _} = Application.ensure_all_started(:bandit); {:ok, server} = Worldloom.TestSupport.FakeUpstream.start_link(port: 4443, cadence_ms: 1000, solana: true); Process.unlink(server)'
 ```
 
+## One hundred isolated browsers
+
+With the deterministic balanced-world harness running, launch the explicit
+real-browser gate in a second terminal:
+
+```sh
+npm run test:browser-100
+```
+
+This starts one headless Chromium process and creates 100 independent browser
+contexts—one page, cookie jar, and local-storage namespace per context. It ramps
+10 pages every two seconds, waits for every canvas to become ready and observe
+two real snapshot advances, then holds all 100 LiveViews for 60 seconds. Reduced
+motion and an 800×600 viewport keep the gate focused on server ownership and
+snapshot reprojection instead of continuous paint cost.
+
+Passing requires:
+
+- 100 ready pages with unique synthetic cookie and storage tokens;
+- two or more strictly increasing snapshot advances in every page;
+- zero console, page, request, response, or WebSocket failures;
+- zero browser requests to any origin other than the Worldloom app;
+- one lifetime open, one active connection, and a peak of one for each
+  server-owned streaming source;
+- exactly one Bluesky filter subscription, one two-message RIPE collector set,
+  and one Solana slot subscription;
+- bounded drand and polling request deltas based on elapsed time, never browser
+  count;
+- the Presence count returning to its pre-run baseline after every context
+  closes.
+
+The runner measures its disconnected Presence baseline first, so a developer's
+already-open localhost tab does not create a false failure. This gate is
+intentionally heavier than pull-request CI. Allow roughly two minutes and have
+at least 4 GB of free memory available. A diagnostic run may override visitor,
+batch, ramp, hold, or timeout values with the `WORLDLOOM_BROWSER_*` variables,
+but only the default 100-browser, 60-second run is release evidence.
+
 ## Local commands
 
 Start the real app with public feeds disabled in a separate terminal:
