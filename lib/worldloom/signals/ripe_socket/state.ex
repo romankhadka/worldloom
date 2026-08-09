@@ -4,7 +4,8 @@ defmodule Worldloom.Signals.RipeSocket.State do
              :url,
              :transport,
              :transport_options,
-             :collectors
+             :collectors,
+             :pending_acknowledgements
            ]}
   defstruct [
     :url,
@@ -19,7 +20,10 @@ defmodule Worldloom.Signals.RipeSocket.State do
     :random,
     :timer,
     :upgrade_generation,
+    :subscription_generation,
     :reconnect_token,
+    pending_acknowledgements: MapSet.new(),
+    awaiting_acknowledgements?: false,
     subscribed?: false,
     attempt: 0
   ]

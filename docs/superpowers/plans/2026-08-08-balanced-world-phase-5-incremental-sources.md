@@ -190,17 +190,17 @@ rtk git commit -m "Prepare bounded Bluesky summaries for canary release"
 
 ## Task 5: Land RIPE route movement third
 
-- [ ] **Step 1: Add the complete fake-edge vertical test**
+- [x] **Step 1: Add the complete fake-edge vertical test**
 
 Use a local fake WebSocket server to answer `request_rrc_list`, acknowledge subscriptions, emit fixture UPDATEs, close as a slow consumer, and reconnect. Assert one source-owned GenServer, one string-host subscription per approved current collector, no replay after reconnect, honest gap health, one aggregate per non-empty window, and no prefix/peer/collector identity outside ephemeral hashed sets.
 
-- [ ] **Step 2: Run focused verification**
+- [x] **Step 2: Run focused verification**
 
 ```bash
 rtk mix test test/worldloom/signals/ripe_socket_test.exs test/worldloom/signals/ripe_window_test.exs test/worldloom/signals/buffer_test.exs
 ```
 
-- [ ] **Step 3: Document canary and rollback evidence**
+- [x] **Step 3: Document canary and rollback evidence**
 
 Add:
 
@@ -211,17 +211,17 @@ Add:
 - rollback: disable only RIPE;
 - privacy checks: no peer, ASN, prefix, collector, message id, or raw BGP bytes outside the adapter.
 
-- [ ] **Step 4: Verify code readiness without changing production**
+- [x] **Step 4: Verify code readiness without changing production**
 
 ```bash
 rtk mix precommit
 rtk rg -n 'peer|prefix|collector|raw|asn|message.*id' docs/privacy.md docs/operations.md lib/worldloom/signals/ripe_socket.ex test/worldloom/signals/ripe_socket_test.exs
 ```
 
-- [ ] **Step 5: Commit the RIPE vertical slice**
+- [x] **Step 5: Commit the RIPE vertical slice**
 
 ```bash
-rtk git add test/worldloom/signals/ripe_socket_test.exs docs/operations.md docs/data-sources.md docs/privacy.md
+rtk git add docs/data-sources.md docs/operations.md docs/privacy.md docs/superpowers/plans/2026-08-08-balanced-world-phase-5-incremental-sources.md lib/worldloom/signals/ripe_socket.ex lib/worldloom/signals/ripe_socket/state.ex test/worldloom/signals/ripe_socket_test.exs
 rtk git commit -m "Prepare bounded RIPE summaries for canary release"
 ```
 

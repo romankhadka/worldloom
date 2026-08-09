@@ -14,6 +14,7 @@ defmodule Worldloom.Signals.RipeSocket do
   @source_name "ripe_ris"
   @flush_interval 1_000
   @upgrade_timeout 5_000
+  @subscription_timeout 5_000
   @maximum_mailbox_depth 100
   @maximum_heap_words 2_000_000
 
@@ -50,7 +51,10 @@ defmodule Worldloom.Signals.RipeSocket do
       random: Keyword.get(options, :random, &:rand.uniform/0),
       timer: Keyword.get(options, :timer, &Process.send_after/3),
       upgrade_generation: nil,
+      subscription_generation: nil,
       reconnect_token: nil,
+      pending_acknowledgements: MapSet.new(),
+      awaiting_acknowledgements?: false,
       subscribed?: false,
       attempt: 0
     }
@@ -107,6 +111,14 @@ defmodule Worldloom.Signals.RipeSocket do
 
   defp dispatch({:upgrade_timeout, _stale_generation}, state), do: {:noreply, state}
 
+  defp dispatch(
+         {:subscription_timeout, generation},
+         %State{subscription_generation: generation} = state
+       ),
+       do: {:noreply, disconnect(state, :subscription)}
+
+  defp dispatch({:subscription_timeout, _stale_generation}, state), do: {:noreply, state}
+
   defp dispatch(:flush_window, state) do
     now = state.clock.()
     updated = close_elapsed_window(state, now)
@@ -148,7 +160,10 @@ defmodule Worldloom.Signals.RipeSocket do
            closed_state
            | transport: transport,
              upgrade_generation: generation,
+             subscription_generation: nil,
              reconnect_token: nil,
+             pending_acknowledgements: MapSet.new(),
+             awaiting_acknowledgements?: false,
              subscribed?: false
          }}
 
@@ -168,10 +183,14 @@ defmodule Worldloom.Signals.RipeSocket do
   end
 
   defp reduce_transport_event(:connected, state) do
+    subscription_generation = make_ref()
+    state.timer.(self(), {:subscription_timeout, subscription_generation}, @subscription_timeout)
+
     connected =
       state
       |> record_health(:connected)
       |> Map.put(:upgrade_generation, nil)
+      |> Map.put(:subscription_generation, subscription_generation)
 
     case send_json(connected, RipeWindow.request_rrc_list_message()) do
       {:ok, updated} -> {:continue, updated}
@@ -193,7 +212,8 @@ defmodule Worldloom.Signals.RipeSocket do
 
   defp reduce_transport_event({:close, code, _reason}, state) do
     {:ok, transport} = state.transport_module.acknowledge_close(state.transport, code)
-    {:disconnect, disconnect(%{state | transport: transport}, nil)}
+    gap_reason = if state.subscribed?, do: :replay, else: nil
+    {:disconnect, disconnect(%{state | transport: transport}, gap_reason)}
   end
 
   defp reduce_transport_event({:binary, _payload}, state),
@@ -218,18 +238,25 @@ defmodule Worldloom.Signals.RipeSocket do
     end
   end
 
-  defp reduce_provider_frame(frame, _receipt_at, %State{subscribed?: false} = state) do
+  defp reduce_provider_frame(
+         frame,
+         _receipt_at,
+         %State{subscribed?: false, awaiting_acknowledgements?: false} = state
+       ) do
     with true <- exact_rrc_list?(frame),
          {:ok, messages} <- RipeWindow.subscription_messages(state.collectors, frame) do
       case send_json_messages(state, messages) do
         {:ok, updated} ->
           approved_collectors = Enum.map(messages, &get_in(&1, ["data", "host"]))
 
+          pending_acknowledgements =
+            approved_collectors |> Enum.map(&:crypto.hash(:sha256, &1)) |> MapSet.new()
+
           %{
             updated
             | window: RipeWindow.authorize(updated.window, approved_collectors),
-              subscribed?: true,
-              attempt: 0
+              pending_acknowledgements: pending_acknowledgements,
+              awaiting_acknowledgements?: true
           }
 
         {:error, failed} ->
@@ -241,7 +268,62 @@ defmodule Worldloom.Signals.RipeSocket do
   end
 
   defp reduce_provider_frame(frame, receipt_at, state) do
-    add_to_window(frame, receipt_at, state)
+    case subscription_acknowledgement(frame, state.pending_acknowledgements) do
+      {:ok, pending_acknowledgements} ->
+        complete_subscription_acknowledgement(state, pending_acknowledgements)
+
+      :not_acknowledgement when state.subscribed? ->
+        add_to_window(frame, receipt_at, state)
+
+      :not_acknowledgement ->
+        disconnect(state, :subscription)
+
+      :invalid_acknowledgement ->
+        disconnect(state, :subscription)
+    end
+  end
+
+  defp subscription_acknowledgement(
+         %{
+           "type" => "ris_subscribe_ok",
+           "data" =>
+             %{
+               "subscription" => %{"type" => "UPDATE", "host" => collector} = subscription,
+               "socketOptions" => %{"includeRaw" => false, "acknowledge" => true} = socket_options
+             } = acknowledgement
+         } = frame,
+         pending_acknowledgements
+       )
+       when map_size(frame) == 2 and map_size(acknowledgement) == 2 and
+              map_size(subscription) == 2 and map_size(socket_options) == 2 and
+              is_binary(collector) and byte_size(collector) == 5 do
+    collector_fingerprint = :crypto.hash(:sha256, collector)
+
+    if MapSet.member?(pending_acknowledgements, collector_fingerprint) do
+      {:ok, MapSet.delete(pending_acknowledgements, collector_fingerprint)}
+    else
+      :invalid_acknowledgement
+    end
+  end
+
+  defp subscription_acknowledgement(%{"type" => "ris_subscribe_ok"}, _pending),
+    do: :invalid_acknowledgement
+
+  defp subscription_acknowledgement(_frame, _pending), do: :not_acknowledgement
+
+  defp complete_subscription_acknowledgement(state, pending_acknowledgements) do
+    if MapSet.size(pending_acknowledgements) == 0 do
+      %{
+        state
+        | pending_acknowledgements: pending_acknowledgements,
+          awaiting_acknowledgements?: false,
+          subscribed?: true,
+          subscription_generation: nil,
+          attempt: 0
+      }
+    else
+      %{state | pending_acknowledgements: pending_acknowledgements}
+    end
   end
 
   defp exact_rrc_list?(%{"type" => "ris_rrc_list", "data" => collectors} = frame)
@@ -354,7 +436,16 @@ defmodule Worldloom.Signals.RipeSocket do
 
   defp close_transport(state) do
     state.transport_module.close(state.transport)
-    %{state | transport: nil, upgrade_generation: nil, subscribed?: false}
+
+    %{
+      state
+      | transport: nil,
+        upgrade_generation: nil,
+        subscription_generation: nil,
+        pending_acknowledgements: MapSet.new(),
+        awaiting_acknowledgements?: false,
+        subscribed?: false
+    }
   end
 
   defp schedule_reconnect(%State{reconnect_token: token} = state) when is_reference(token),

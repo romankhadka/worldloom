@@ -59,8 +59,11 @@ only these privacy-preserving transformations:
   row; it never enters `loom_events`, logs, telemetry, health, PubSub, or browser
   instructions.
 - RIPE `UPDATE` messages become prefix-occurrence, address-family, and distinct-count
-  totals. Collector and peer values are represented only by bounded ephemeral hashes;
-  prefixes, next hops, ASNs, paths, communities, IDs, and raw payloads are discarded.
+  totals. The reviewed collector allow-list remains operational configuration, while
+  provider-observed collector and peer values are represented only by bounded
+  ephemeral hashes. Acknowledgement values are checked transiently against those
+  hashes; prefixes, next hops, ASNs, paths, communities, IDs, raw payloads, provider
+  error text, and close reasons are discarded.
 - Solana slot notifications become slot progression and gap counters. Subscription,
   parent/root, account, transaction, wallet, program, and token fields are discarded.
 - drand exact-round signatures are decoded transiently to derive a SHA-256 render

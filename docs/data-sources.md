@@ -119,7 +119,11 @@ The qualified contract accepts only `UPDATE` messages from an explicit allow-lis
 one to four configured collectors that also appear in RIPE's current collector list.
 It emits one exact subscription per approved collector with `includeRaw: false`. An
 empty intersection is a configuration failure: Worldloom never falls back to an
-unfiltered or full-firehose subscription.
+unfiltered or full-firehose subscription. Requested acknowledgements must exactly
+confirm each approved `UPDATE` subscription with raw bytes still disabled; malformed,
+duplicate, unrequested, or incomplete acknowledgements fail that connection closed.
+Worldloom accepts no routing update until the full acknowledgement set arrives within
+five seconds.
 
 An ordinary four-second summary counts distinct collectors and peers inside that
 window. The durable fields are named `collector_observations` and
@@ -132,7 +136,11 @@ communities, message IDs, and raw payloads are discarded and never enter the pub
 event.
 
 RIS Live is best-effort and may disconnect a slow consumer. Reconnection starts at
-the live edge; Worldloom does not fabricate the missed interval.
+the live edge; Worldloom does not fabricate the missed interval. The
+production-capable worker is independently supervised behind the false-by-default
+`WORLDLOOM_RIPE_ENABLED` switch and creates no process or upstream connection while
+disabled. Its no-replay canary and one-flag rollback procedure are defined in
+[operations.md](operations.md#ripe-ris-live).
 
 ### Solana slot progression
 

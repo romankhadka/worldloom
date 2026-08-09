@@ -131,6 +131,48 @@ bounded, idempotent recovery with privacy-clean public surfaces. Protocol drift,
 unexpected content retention, duplicate rows, an unbounded replay, or sibling-feed
 interference is a rollback condition.
 
+### RIPE RIS Live
+
+The checked-in release leaves `WORLDLOOM_RIPE_ENABLED=false`. Enabling RIPE is a
+separate deployment operation and requires explicit authorization. RIS Live is an
+unauthenticated, best-effort routing stream and may send a final error before closing
+a slow consumer; Worldloom treats that as source-local degradation.
+
+- **Enable:** set `WORLDLOOM_RIPE_ENABLED=true` and redeploy one instance. Keep the
+  reviewed `WORLDLOOM_RIPE_URL` and configure one to four unique `rrcNN` names with
+  `WORLDLOOM_RIPE_COLLECTORS`; invalid or empty configuration fails startup.
+- **Subscription bound:** on every connection, request the current `ris_rrc_list`,
+  intersect it with the configured allow-list, and send exactly one string-host
+  subscription per match. Every subscription is `UPDATE` only with
+  `includeRaw=false` and `acknowledge=true`; an empty intersection or malformed,
+  duplicate, unrequested, or incomplete acknowledgement fails that connection closed.
+  No routing update is accepted until every exact acknowledgement arrives within five
+  seconds of the WebSocket connection.
+- **Healthy threshold:** a connected feed with no durably accepted activity for
+  twenty seconds becomes `quiet`; a closed transport becomes `disconnected`
+  immediately. Neither state makes the application health endpoint fail.
+- **Recovery bound:** reconnect at the live edge, enumerate collectors again, and
+  never request, synthesize, or label missed routing updates as replay. A provider
+  close records one coarse gap observation without retaining its error text or close
+  reason.
+- **Observe:** each non-empty four-second window creates at most one unique RIPE
+  event row, and its cursor-free checkpoint updates in the same successful
+  transaction. Confirm every reconnect repeats collector negotiation and sibling
+  feed cadence and processes remain unaffected.
+- **Privacy gate:** inspect RIPE `loom_events`, application logs, telemetry, health,
+  process status, and browser instructions for peer addresses, peer ASNs, prefixes,
+  collector identities, message IDs, paths, communities, next hops, raw BGP bytes,
+  provider errors, or close reasons. Only bounded ephemeral hashes may represent
+  provider-observed peers and collectors during aggregation.
+- **Rollback:** set only `WORLDLOOM_RIPE_ENABLED=false` and redeploy. This removes
+  only the RIPE socket owner; it does not alter another source or fabricate the
+  disconnected interval.
+
+Close the canary only after a forced slow-consumer close demonstrates a privacy-safe
+gap, fresh collector negotiation, no replay, and one summary per new non-empty
+window. An unbounded subscription, raw payload, identity leakage, replay claim, or
+sibling-feed interference is a rollback condition.
+
 ## Telemetry and logs
 
 Structured production logs include event names and coarse source/status metadata,
