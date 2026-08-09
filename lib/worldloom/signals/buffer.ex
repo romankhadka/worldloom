@@ -315,10 +315,17 @@ defmodule Worldloom.Signals.Buffer do
   defp take_ready_source(rotation, blocked_until, now, sources_left) do
     {{:value, source}, remaining} = :queue.out(rotation)
 
-    if Map.get(blocked_until, source, 0) <= now do
+    if ready?(blocked_until, source, now) do
       {:ok, source, remaining}
     else
       take_ready_source(:queue.in(source, remaining), blocked_until, now, sources_left - 1)
+    end
+  end
+
+  defp ready?(blocked_until, source, now) do
+    case Map.fetch(blocked_until, source) do
+      :error -> true
+      {:ok, deadline} -> deadline <= now
     end
   end
 
@@ -473,7 +480,7 @@ defmodule Worldloom.Signals.Buffer do
   defp next_delay(state, now, minimum_delay) do
     sources = :queue.to_list(state.rotation)
 
-    if Enum.any?(sources, &(Map.get(state.blocked_until, &1, 0) <= now)) do
+    if Enum.any?(sources, &ready?(state.blocked_until, &1, now)) do
       minimum_delay
     else
       earliest_unblock =

@@ -139,6 +139,24 @@ defmodule Worldloom.Signals.BufferTest do
     assert Buffer.depth(buffer) == 0
   end
 
+  test "schedules a new source when the monotonic clock origin is negative" do
+    {buffer, _coordinator} = start_buffer(clock_start: -1_000_000)
+
+    submission =
+      Task.async(fn ->
+        Buffer.submit(
+          buffer,
+          [signal_event(:bluesky, 1)],
+          checkpoint(:bluesky, "bluesky-1")
+        )
+      end)
+
+    fire_timer(buffer, 250)
+
+    assert Task.await(submission) == :ok
+    assert Buffer.depth(buffer) == 0
+  end
+
   test "exhausting one partition fails only its waiters and never blocks another source" do
     {:ok, coordinator} = ScriptedCoordinator.start_link(self(), %{wikimedia: :always})
     {buffer, _coordinator} = start_buffer(coordinator: coordinator)
@@ -706,7 +724,8 @@ defmodule Worldloom.Signals.BufferTest do
       end
 
     test_process = self()
-    clock = start_supervised!({Agent, fn -> 0 end}, id: make_ref())
+    clock_start = Keyword.get(options, :clock_start, 0)
+    clock = start_supervised!({Agent, fn -> clock_start end}, id: make_ref())
 
     health_registry =
       Keyword.get_lazy(options, :health_registry, &start_health_registry/0)
