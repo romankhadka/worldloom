@@ -129,21 +129,40 @@ Expose:
 @spec current(GenServer.server()) :: map()
 ```
 
-Publish `{:feed_health, projection}` only when the public projection changes.
+The registry never publishes public health. On a connection-state transition, it sends `HealthMonitor` only the payload-free message `:health_registry_changed`, so a disconnect projects immediately without copying registry state through a mailbox. Periodic monitor refreshes age quiet/stale activity. `HealthMonitor` remains the sole owner of public health telemetry, cache, PubSub topic, and broadcasts.
 
 - [ ] **Step 4: Replace checkpoint-derived high-cadence health**
 
-Update `FeedHealth.project/2` and `HealthMonitor` to use registry observations for Wikimedia, Bluesky, RIPE, Solana, and drand. Rules:
+Update `FeedHealth.project/2` and `HealthMonitor` to use this explicit input contract:
+
+```elixir
+FeedHealth.project(
+  %{
+    observations: %{
+      optional(:wikimedia | :bluesky | :ripe_ris | :solana | :drand) => %{
+        connection: :connected | :disconnected,
+        last_contact_at: DateTime.t() | nil,
+        last_activity_at: DateTime.t() | nil
+      }
+    },
+    checkpoints: [map()]
+  },
+  now
+)
+```
+
+Registry counters and coarse reasons remain internal and are never part of `FeedHealth` input or public output. `HealthMonitor` loads both inputs, owns the public projection, and broadcasts `{:feed_health, projection}` only when that projection changes. Rules:
 
 - a closed socket is `:disconnected` immediately;
 - connected high-cadence feeds become `:quiet` after 20 seconds without valid activity;
 - drand becomes `:stale` after 12 seconds without a new valid round;
 - USGS and Open-Meteo retain their existing thresholds;
-- checkpoints remain durability/replay state only.
+- checkpoints remain durability/replay state only; and
+- public `observed_at` is the last activity time for high-cadence sources and the checkpoint success time for polling sources.
 
 - [ ] **Step 5: Supervise and verify**
 
-Start `HealthRegistry` before Buffer and Signals Supervisor in `lib/worldloom/application.ex`. Keep `/healthz` unchanged.
+Start `HealthRegistry`, then `HealthMonitor`, before Buffer and Signals Supervisor in `lib/worldloom/application.ex`, so no worker can notify a missing monitor. `HealthMonitor` handles `:health_registry_changed` with an immediate projection refresh but does not schedule an additional periodic timer. Keep `/healthz` unchanged.
 
 ```bash
 rtk mix test test/worldloom/signals/health_registry_test.exs test/worldloom/signals/feed_health_test.exs test/worldloom/signals/health_monitor_test.exs test/worldloom_web/controllers/health_controller_test.exs
