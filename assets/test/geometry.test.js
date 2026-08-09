@@ -7,6 +7,7 @@ import {
   cubicPrefix,
   commandsForEvent,
   commandsForScene,
+  eventTimeToX,
   laneToY,
   sequenceToX,
 } from "../js/worldloom/geometry.js"
@@ -14,8 +15,231 @@ import {
 const contract = JSON.parse(
   await readFile(new URL("../../test/support/fixtures/render_contract_v1.json", import.meta.url)),
 )
+const balancedSnapshot = JSON.parse(
+  await readFile(
+    new URL("../../test/support/fixtures/live_snapshots/balanced_v1.json", import.meta.url),
+  ),
+)
 
 const viewport = {width: 1000, height: 600, maxSequence: 106, spacing: 40, padding: 50}
+
+test("projects the snapshot minute exactly across the drawable width", () => {
+  const projectionViewport = {width: 1001, height: 600, padding: 50}
+  const xFor = occurredAt => eventTimeToX(
+    occurredAt,
+    balancedSnapshot.window_end,
+    projectionViewport,
+  )
+
+  assert.equal(xFor("2026-08-08T12:00:00Z"), projectionViewport.padding)
+  assert.equal(
+    xFor("2026-08-08T12:00:30Z"),
+    projectionViewport.padding + 0.5 * (projectionViewport.width - 2 * projectionViewport.padding),
+  )
+  assert.equal(
+    xFor("2026-08-08T12:01:00Z"),
+    projectionViewport.width - projectionViewport.padding,
+  )
+})
+
+test("keeps equal event times in one column while lanes remain distinct", () => {
+  const first = {
+    ...balancedSnapshot.display_events[0],
+    sequence: 1,
+    occurred_at: "2026-08-08T12:00:30Z",
+    lane: 0.2,
+  }
+  const second = {
+    ...balancedSnapshot.display_events[1],
+    sequence: 9_001,
+    occurred_at: first.occurred_at,
+    lane: 0.8,
+  }
+  const commands = balancedSceneCommands({displayInstructions: [first, second]})
+  const hits = commands.filter(command => command.type === "anchor-hit")
+
+  assert.deepEqual(hits.map(hit => hit.x), [viewport.width / 2, viewport.width / 2])
+  assert.notEqual(hits[0].y, hits[1].y)
+  assert.deepEqual(hits.map(hit => hit.sequence), [first.sequence, second.sequence])
+})
+
+test("drops display rows older than the snapshot minute before building topology", () => {
+  const expired = {
+    ...balancedSnapshot.display_events[0],
+    sequence: 800,
+    occurred_at: "2026-08-08T11:59:59Z",
+  }
+  const current = {
+    ...balancedSnapshot.display_events[1],
+    sequence: 801,
+    occurred_at: "2026-08-08T12:00:30Z",
+  }
+
+  const commands = balancedSceneCommands({displayInstructions: [expired, current]})
+
+  assert.equal(commands.some(command => command.sequence === expired.sequence), false)
+  assert.equal(commands.some(command => command.sequence === current.sequence), true)
+})
+
+test("keeps contextual memory in a labeled quiet band with its real identity", () => {
+  const memory = balancedSnapshot.memory_events[0]
+  const commands = balancedSceneCommands()
+  const band = commands.find(command => command.type === "memory-band")
+  const trace = commands.find(command =>
+    command.type === "memory-trace" && command.sequence === memory.sequence
+  )
+
+  assert.ok(band)
+  assert.equal(band.label, "Earlier traces")
+  assert.equal(band.role, "contextual-memory")
+  assert.ok(trace)
+  assert.equal(trace.role, "contextual-memory")
+  assert.equal(trace.occurredAt, memory.occurred_at)
+  assert.equal(trace.sequence, memory.sequence)
+  assert.ok(trace.hit)
+  assert.ok(trace.y > viewport.height - viewport.padding)
+  assert.equal(
+    commands.some(command =>
+      command.type === "anchor-hit" && command.sequence === memory.sequence
+    ),
+    false,
+  )
+})
+
+test("renders a loaded memory event once in its real historical position", () => {
+  const memory = balancedSnapshot.memory_events[0]
+  const commands = balancedSceneCommands({historyInstructions: [memory]})
+
+  assert.equal(
+    commands.some(command =>
+      command.type === "memory-trace" && command.sequence === memory.sequence
+    ),
+    false,
+  )
+  assert.equal(
+    commands.some(command =>
+      command.type === "anchor-hit" && command.sequence === memory.sequence
+    ),
+    true,
+  )
+})
+
+test("extends historical pages left at the live pixels-per-second scale", () => {
+  const history = {
+    ...balancedSnapshot.display_events[0],
+    sequence: 700,
+    occurred_at: "2026-08-08T11:59:30Z",
+  }
+  const windowStart = {
+    ...balancedSnapshot.display_events[0],
+    sequence: 701,
+    occurred_at: "2026-08-08T12:00:00Z",
+  }
+  const windowEnd = {
+    ...balancedSnapshot.display_events[1],
+    sequence: 702,
+    occurred_at: "2026-08-08T12:01:00Z",
+  }
+  const commands = balancedSceneCommands({
+    displayInstructions: [windowStart, windowEnd],
+    historyInstructions: [history],
+  })
+  const xBySequence = new Map(
+    commands
+      .filter(command => command.type === "anchor-hit")
+      .map(command => [command.sequence, command.x]),
+  )
+  const usableWidth = viewport.width - viewport.padding * 2
+
+  assert.equal(xBySequence.get(history.sequence), viewport.padding - usableWidth / 2)
+  assert.equal(xBySequence.get(windowStart.sequence), viewport.padding)
+  assert.equal(xBySequence.get(windowEnd.sequence), viewport.width - viewport.padding)
+  assert.equal(
+    (xBySequence.get(windowStart.sequence) - xBySequence.get(history.sequence)) / 30,
+    (xBySequence.get(windowEnd.sequence) - xBySequence.get(windowStart.sequence)) / 60,
+  )
+})
+
+test("keeps six hundred dense Wikimedia rows inside the primary viewport", () => {
+  const template = balancedSnapshot.display_events.find(event => event.source === "wikimedia")
+  const windowStartMilliseconds = Date.parse(balancedSnapshot.window_end) - 60_000
+  const dense = Array.from({length: 600}, (_entry, index) => ({
+    ...template,
+    sequence: index + 1,
+    occurred_at: new Date(windowStartMilliseconds + index * 100).toISOString(),
+    lane: 0.2 + (index % 7) * 0.1,
+  }))
+
+  const commands = balancedSceneCommands({
+    displayInstructions: dense,
+    memoryInstructions: [],
+    ambient: null,
+  })
+  const hits = commands.filter(command => command.type === "anchor-hit")
+
+  assert.equal(hits.length, 600)
+  assert.ok(hits.every(hit => hit.x >= viewport.padding))
+  assert.ok(hits.every(hit => hit.x <= viewport.width - viewport.padding))
+  assert.ok(commands.length <= 4000)
+})
+
+test("ignores sequence distance and scaffold density when placing live events", () => {
+  const occurredAt = "2026-08-08T12:00:30Z"
+  const display = [
+    {...balancedSnapshot.display_events[0], sequence: 2, occurred_at: occurredAt},
+    {...balancedSnapshot.display_events[1], sequence: 2_000_000, occurred_at: occurredAt},
+  ]
+  const scaffold = Array.from({length: 12}, (_entry, index) => ({
+    ...balancedSnapshot.display_events[0],
+    sequence: 10_000 + index * 73,
+    occurred_at: `2026-08-08T11:59:${String(40 + index).padStart(2, "0")}Z`,
+  }))
+  const withoutScaffold = balancedSceneCommands({displayInstructions: display})
+  const withScaffold = balancedSceneCommands({
+    displayInstructions: display,
+    scaffoldInstructions: scaffold,
+  })
+  const liveXs = commands => commands
+    .filter(command => command.type === "anchor-hit" &&
+      display.some(instruction => instruction.sequence === command.sequence))
+    .map(command => command.x)
+  const midpoint = viewport.padding + 0.5 * (viewport.width - viewport.padding * 2)
+
+  assert.deepEqual(liveXs(withoutScaffold), [midpoint, midpoint])
+  assert.deepEqual(liveXs(withScaffold), [midpoint, midpoint])
+})
+
+test("projects live scaffold context on its actual event-time coordinate", () => {
+  const scaffold = [
+    {
+      ...balancedSnapshot.display_events[0],
+      sequence: 10,
+      occurred_at: "2026-08-08T11:59:30Z",
+    },
+    {
+      ...balancedSnapshot.display_events[1],
+      sequence: 500_000,
+      occurred_at: "2026-08-08T12:00:00Z",
+    },
+  ]
+  const commands = commandsForScene(scaffold, viewport, {
+    windowEnd: balancedSnapshot.window_end,
+    displayInstructions: [],
+    memoryInstructions: [],
+    ambient: null,
+    historyInstructions: [],
+    scaffoldInstructions: scaffold,
+    projectionInstructions: scaffold,
+    hitInstructions: scaffold,
+  })
+  const hits = commands.filter(command => command.type === "anchor-hit")
+  const usableWidth = viewport.width - viewport.padding * 2
+
+  assert.deepEqual(hits.map(hit => hit.x), [
+    viewport.padding - usableWidth / 2,
+    viewport.padding,
+  ])
+})
 
 test("projects sequence horizontally and lane vertically", () => {
   assert.equal(sequenceToX(106, viewport), 950)
@@ -237,7 +461,7 @@ test("projects a bounded public scaffold as a coherent viewport-spanning spine",
   assert.ok(scene.length <= 4000)
 })
 
-test("gives consecutive public scaffold anchors a stable desktop cadence", () => {
+test("keeps legacy chapter scaffold coordinates linearly sequence-spaced", () => {
   const {scaffold, visitors} = publicSurgeInstructions()
   const desktop = {width: 1600, height: 900, padding: 40, spacing: 28, maxSequence: 612}
   const scene = projectedPublicSurge(scaffold, visitors, desktop)
@@ -252,7 +476,7 @@ test("gives consecutive public scaffold anchors a stable desktop cadence", () =>
   )
   assert.equal(
     spine.segments.at(-1).curve.to.x - spine.segments[0].curve.from.x,
-    11 * 4 * desktop.spacing,
+    11 * desktop.spacing,
   )
   assert.equal(
     visitorHits.at(-1).x - spine.segments.at(-1).curve.to.x,
@@ -450,4 +674,29 @@ function tangentDifference(previous, current) {
 function normalize(vector) {
   const length = Math.hypot(vector.x, vector.y) || 1
   return {x: vector.x / length, y: vector.y / length}
+}
+
+function balancedSceneCommands({
+  displayInstructions = balancedSnapshot.display_events,
+  memoryInstructions = balancedSnapshot.memory_events,
+  historyInstructions = [],
+  scaffoldInstructions = [],
+  ambient = balancedSnapshot.ambient,
+} = {}, projectionViewport = viewport) {
+  const topologyInstructions = [
+    ...scaffoldInstructions,
+    ...historyInstructions,
+    ...displayInstructions,
+  ]
+
+  return commandsForScene(topologyInstructions, projectionViewport, {
+    windowEnd: balancedSnapshot.window_end,
+    displayInstructions,
+    memoryInstructions,
+    ambient,
+    historyInstructions,
+    scaffoldInstructions,
+    projectionInstructions: topologyInstructions,
+    hitInstructions: [...historyInstructions, ...displayInstructions],
+  })
 }

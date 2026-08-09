@@ -9,20 +9,41 @@ export const signalPalette = Object.freeze({
 })
 
 const supportedRenderVersion = 1
+const liveWindowMilliseconds = 60_000
 const defaultSpacing = 28
 const maximumVisitorBandSpan = 8
 const maximumDurableDisplayStep = 8
-const minimumPublicDisplayStep = 4
 const visitorBandViewportDivisor = 3
 
 export function sequenceToX(sequence, viewport) {
+  const panOffset = viewport.panOffset ?? 0
+  const eventTimePosition = viewport.eventTimePositions?.get(sequence)
+  if (Number.isFinite(eventTimePosition)) return eventTimePosition + panOffset
+
   const padding = viewport.padding ?? 40
   const spacing = viewport.spacing ?? defaultSpacing
   const displayPosition = viewport.displayPositions?.get(sequence) ?? sequence
   const maxSequence = viewport.maxSequence ?? sequence
   const maxDisplayPosition = viewport.displayPositions?.get(maxSequence) ?? maxSequence
-  const panOffset = viewport.panOffset ?? 0
   return viewport.width - padding - (maxDisplayPosition - displayPosition) * spacing + panOffset
+}
+
+export function eventTimeToX(
+  occurredAt,
+  windowEnd,
+  viewport,
+  {clampToWindow = true} = {},
+) {
+  const padding = viewport.padding ?? 40
+  const usableWidth = Math.max(0, viewport.width - padding * 2)
+  const windowEndMilliseconds = Date.parse(windowEnd)
+  const occurredAtMilliseconds = Date.parse(occurredAt)
+  if (![windowEndMilliseconds, occurredAtMilliseconds].every(Number.isFinite)) return padding
+
+  const windowStartMilliseconds = windowEndMilliseconds - liveWindowMilliseconds
+  const rawRatio = (occurredAtMilliseconds - windowStartMilliseconds) / liveWindowMilliseconds
+  const ratio = clampToWindow ? Math.min(1, Math.max(0, rawRatio)) : rawRatio
+  return padding + ratio * usableWidth
 }
 
 export function laneToY(lane, viewport) {
@@ -89,18 +110,54 @@ export function chapterSeams(instructions, viewport) {
 export function commandsForScene(
   instructions,
   viewport,
-  {ambient = null, projectionInstructions = instructions, hitInstructions = instructions} = {},
+  {
+    ambient = null,
+    projectionInstructions = instructions,
+    hitInstructions = instructions,
+    windowEnd = null,
+    displayInstructions = instructions,
+    memoryInstructions = [],
+    historyInstructions = [],
+    scaffoldInstructions = [],
+  } = {},
 ) {
-  const ordered = uniqueInstructions(instructions)
-  const projectionOrdered = uniqueInstructions(projectionInstructions)
-  const hitOrdered = uniqueInstructions(hitInstructions)
+  const currentDisplayInstructions = windowEnd === null
+    ? displayInstructions
+    : displayInstructions.filter(instruction => withinLiveWindow(instruction, windowEnd))
+  const currentDisplaySequences = new Set(
+    currentDisplayInstructions.map(instruction => instruction.sequence),
+  )
+  const expiredDisplaySequences = new Set(
+    displayInstructions
+      .filter(instruction => !currentDisplaySequences.has(instruction.sequence))
+      .map(instruction => instruction.sequence),
+  )
+  const withoutExpiredDisplay = collection => collection.filter(
+    instruction => !expiredDisplaySequences.has(instruction.sequence),
+  )
+  const ordered = uniqueInstructions(withoutExpiredDisplay(instructions))
+  const projectionOrdered = uniqueInstructions(withoutExpiredDisplay(projectionInstructions))
+  const hitOrdered = uniqueInstructions(withoutExpiredDisplay(hitInstructions))
   const maxSequence = viewport.maxSequence ?? ordered.at(-1)?.sequence ?? ambient?.sequence ?? 0
   const projectedViewport = {
     ...viewport,
     maxSequence,
     displayPositions: displayPositionsFor(projectionOrdered, viewport),
+    eventTimePositions: windowEnd === null
+      ? null
+      : eventTimePositionsFor(
+          currentDisplayInstructions,
+          historyInstructions,
+          scaffoldInstructions,
+          windowEnd,
+          viewport,
+        ),
   }
   const topology = buildTopology(ordered)
+  const topologySequences = new Set(ordered.map(instruction => instruction.sequence))
+  const contextualMemory = memoryInstructions.filter(
+    instruction => !topologySequences.has(instruction.sequence),
+  )
   const ambientInstruction = topology.ambient ?? ambient
   const ambientCommands = ambientInstruction
     ? commandsForEvent(ambientInstruction, projectedViewport)
@@ -108,6 +165,7 @@ export function commandsForScene(
 
   return [
     ...ambientCommands,
+    ...contextualMemoryCommands(contextualMemory, viewport),
     ...chapterSeams(ordered, projectedViewport),
     ...spineCommands(topology, projectedViewport),
     ...capillaryCommands(topology, projectedViewport),
@@ -116,6 +174,76 @@ export function commandsForScene(
     ...topology.fallbacks.map(fallback => fallbackCommand(fallback, projectedViewport)),
     ...hitOrdered.map(instruction => hitCommand(instruction, projectedViewport)),
   ]
+}
+
+function contextualMemoryCommands(instructions, viewport) {
+  const ordered = uniqueInstructions(instructions).slice(-4)
+  if (ordered.length === 0) return []
+
+  const padding = viewport.padding ?? 40
+  const bandTop = viewport.height - padding + Math.min(8, padding * 0.2)
+  const bandBottom = viewport.height - Math.min(8, padding * 0.2)
+  const bandHeight = Math.max(0, bandBottom - bandTop)
+  const usableWidth = Math.max(0, viewport.width - padding * 2)
+  const traces = ordered.map((instruction, index) => {
+    const x = padding + usableWidth * ((index + 1) / (ordered.length + 1))
+    const y = bandTop + bandHeight / 2
+    const intensity = boundedNumber(instruction.intensity, 0.5)
+    const palette = signalPalette[instruction.source] ?? signalPalette.visitor
+    const hitSize = Math.max(20, 22 + intensity * 18)
+
+    return {
+      type: "memory-trace",
+      role: "contextual-memory",
+      sequence: instruction.sequence,
+      occurredAt: instruction.occurred_at,
+      x,
+      y,
+      intensity,
+      stroke: palette.stroke,
+      glow: palette.glow,
+      visual: visualParameters(instruction),
+      hit: {x: x - hitSize / 2, y: y - hitSize / 2, width: hitSize, height: hitSize},
+    }
+  })
+
+  return [{
+    type: "memory-band",
+    role: "contextual-memory",
+    label: "Earlier traces",
+    x: padding,
+    y: bandTop,
+    width: usableWidth,
+    height: bandHeight,
+  }, ...traces]
+}
+
+function withinLiveWindow(instruction, windowEnd) {
+  const occurredAtMilliseconds = Date.parse(instruction?.occurred_at)
+  const windowEndMilliseconds = Date.parse(windowEnd)
+  if (![occurredAtMilliseconds, windowEndMilliseconds].every(Number.isFinite)) return false
+  return occurredAtMilliseconds >= windowEndMilliseconds - liveWindowMilliseconds &&
+    occurredAtMilliseconds <= windowEndMilliseconds
+}
+
+function eventTimePositionsFor(
+  displayInstructions,
+  historyInstructions,
+  scaffoldInstructions,
+  windowEnd,
+  viewport,
+) {
+  const positions = new Map()
+  for (const instruction of displayInstructions) {
+    positions.set(instruction.sequence, eventTimeToX(instruction.occurred_at, windowEnd, viewport))
+  }
+  for (const instruction of [...historyInstructions, ...scaffoldInstructions]) {
+    positions.set(
+      instruction.sequence,
+      eventTimeToX(instruction.occurred_at, windowEnd, viewport, {clampToWindow: false}),
+    )
+  }
+  return positions
 }
 
 export function catmullRomToBezier(previous, from, to, next) {
@@ -648,7 +776,6 @@ function displayPositionsFor(instructions, viewport) {
   if (instructions.length === 0) return positions
 
   let previousSequence = instructions[0].sequence
-  let previousInstruction = instructions[0]
   let previousPosition = previousSequence
   positions.set(previousSequence, previousPosition)
 
@@ -656,16 +783,11 @@ function displayPositionsFor(instructions, viewport) {
     if (instructions[index].source !== "visitor") {
       const instruction = instructions[index]
       const rawStep = instruction.sequence - previousSequence
-      const minimumStep = previousInstruction.source === "wikimedia" &&
-        instruction.source === "wikimedia"
-        ? minimumPublicDisplayStep
-        : 1
       previousPosition += Math.min(
         maximumDurableDisplayStep,
-        Math.max(minimumStep, rawStep),
+        Math.max(1, rawStep),
       )
       previousSequence = instruction.sequence
-      previousInstruction = instruction
       positions.set(instruction.sequence, previousPosition)
       index++
       continue
@@ -689,7 +811,6 @@ function displayPositionsFor(instructions, viewport) {
     }
 
     previousSequence = finalVisitorSequence
-    previousInstruction = instructions[runEnd]
     previousPosition += displaySpan
     index = runEnd + 1
   }

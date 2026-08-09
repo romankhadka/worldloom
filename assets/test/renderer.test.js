@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import {readFileSync} from "node:fs"
 import test from "node:test"
 
-import {commandsForScene} from "../js/worldloom/geometry.js"
+import {commandsForScene, eventTimeToX} from "../js/worldloom/geometry.js"
 import {Renderer} from "../js/worldloom/renderer.js"
 
 const balancedSnapshot = JSON.parse(readFileSync(
@@ -14,7 +14,9 @@ const instruction = sequence => ({
   sequence,
   kind: sequence % 4 === 0 ? "weather" : "wikimedia",
   source: sequence % 4 === 0 ? "open_meteo" : "wikimedia",
-  occurred_at: `2026-08-03T12:${String(Math.floor(sequence / 60) % 60).padStart(2, "0")}:${String(sequence % 60).padStart(2, "0")}.000000Z`,
+  occurred_at: new Date(
+    Date.parse("2026-08-08T12:00:00Z") + (sequence % 600) * 100,
+  ).toISOString(),
   render_version: 1,
   seed: sequence,
   lane: (sequence % 10) / 10,
@@ -35,6 +37,70 @@ test("replaces live state from one complete snapshot envelope", () => {
   assert.deepEqual(renderer.memoryInstructions, balancedSnapshot.memory_events)
   assert.equal(renderer.windowEnd, balancedSnapshot.window_end)
   assert.deepEqual(renderer.ambient, balancedSnapshot.ambient)
+})
+
+test("passes every snapshot role to geometry as explicit scene input", () => {
+  const projectedScenes = []
+  const renderer = new Renderer(null, {
+    projectScene: (_instructions, _viewport, scene) => {
+      projectedScenes.push(scene)
+      return []
+    },
+  })
+
+  renderer.setSnapshot(structuredClone(balancedSnapshot))
+
+  const scene = projectedScenes.at(-1)
+  assert.equal(scene.windowEnd, balancedSnapshot.window_end)
+  assert.deepEqual(scene.displayInstructions, balancedSnapshot.display_events)
+  assert.deepEqual(scene.memoryInstructions, balancedSnapshot.memory_events)
+  assert.deepEqual(scene.ambient, balancedSnapshot.ambient)
+  assert.deepEqual(scene.historyInstructions, [])
+})
+
+test("keeps contextual memory selectable in its quiet band", () => {
+  const renderer = new Renderer(null, {width: 1000, height: 600, padding: 50})
+
+  renderer.setSnapshot(structuredClone(balancedSnapshot))
+
+  const memory = balancedSnapshot.memory_events[0]
+  const trace = renderer.commands.find(command =>
+    command.type === "memory-trace" && command.sequence === memory.sequence
+  )
+  assert.ok(trace)
+  assert.equal(renderer.hitTest(trace.x, trace.y), memory.sequence)
+  assert.equal(trace.occurredAt, memory.occurred_at)
+})
+
+test("paints the contextual band and its restrained memory mark", () => {
+  const bandCalls = cachedCallsFor({
+    type: "memory-band",
+    role: "contextual-memory",
+    label: "Earlier traces",
+    x: 10,
+    y: 50,
+    width: 80,
+    height: 10,
+  })
+  const traceCalls = cachedCallsFor({
+    type: "memory-trace",
+    role: "contextual-memory",
+    sequence: 899,
+    occurredAt: "2026-08-08T11:03:17Z",
+    x: 50,
+    y: 55,
+    intensity: 0.4,
+    stroke: "#f3ead4",
+    glow: "#fff9e9",
+  })
+
+  assert.equal(bandCalls.some(([name]) => name === "fillRect"), true)
+  assert.equal(
+    bandCalls.some(([name, label]) => name === "fillText" && label === "Earlier traces"),
+    true,
+  )
+  assert.equal(traceCalls.some(([name]) => name === "arc"), true)
+  assert.equal(traceCalls.some(([name]) => name === "fill"), true)
 })
 
 test("accepts legal display omissions as full replacements without gap repair", () => {
@@ -146,6 +212,25 @@ test("accepts watermark zero only for the empty initial snapshot", () => {
     () => renderer.setSnapshot({...emptySnapshot, display_events: [instruction(1)]}),
     /watermark/i,
   )
+  assert.throws(
+    () => renderer.setSnapshot({
+      ...emptySnapshot,
+      commit_watermark: 1,
+      display_events: [instruction(1)],
+    }),
+    /window_end/i,
+  )
+})
+
+test("keeps malformed historical timestamps on the legacy chapter coordinate path", () => {
+  const renderer = new Renderer(null, {width: 800, height: 600})
+  const historical = [{...instruction(41), occurred_at: "legacy timestamp unavailable"}]
+
+  assert.doesNotThrow(() => renderer.setEvents(historical))
+  const hit = renderer.commands.find(command => command.type === "anchor-hit")
+  assert.ok(hit)
+  assert.ok(Number.isFinite(hit.x))
+  assert.equal(renderer.windowEnd, null)
 })
 
 test("rejects unsupported versions and non-UTC window anchors transactionally", () => {
@@ -510,8 +595,10 @@ test("retains a bounded public scaffold through all-visitor reloads and snapshot
     {watermark: 715},
   ))
 
-  assertVisibleScaffold(renderer)
-  assert.equal(visitorBandWidth(renderer), renderer.spacing * 8)
+  assertEventTimeScaffold(renderer, scaffold, "2026-08-08T12:01:00Z")
+  const liveHits = renderer.commands.filter(command => command.type === "anchor-hit")
+  assert.ok(liveHits.every(hit => hit.x >= renderer.padding))
+  assert.ok(liveHits.every(hit => hit.x <= renderer.width - renderer.padding))
   assert.equal(renderer.events.length, 600)
   assert.equal(renderer.events[0].sequence, 116)
   assert.equal(renderer.watermark, 715)
@@ -1260,6 +1347,21 @@ function assertVisibleScaffold(renderer) {
   assert.ok(Math.max(...visibleXs) - Math.min(...visibleXs) >= renderer.width * 0.65)
 }
 
+function assertEventTimeScaffold(renderer, scaffold, windowEnd) {
+  const spine = renderer.commands.find(
+    command => command.type === "fiber-path" && command.role === "spine",
+  )
+  assert.ok(spine)
+  assert.equal(
+    spine.segments[0].curve.from.x,
+    eventTimeToX(scaffold[0].occurred_at, windowEnd, renderer.viewport()),
+  )
+  assert.equal(
+    spine.segments.at(-1).curve.to.x,
+    eventTimeToX(scaffold.at(-1).occurred_at, windowEnd, renderer.viewport()),
+  )
+}
+
 function visitorBandWidth(renderer) {
   const spine = renderer.commands.find(
     command => command.type === "fiber-path" && command.role === "spine",
@@ -1317,6 +1419,7 @@ function fakeCanvas() {
     save: record("save"),
     restore: record("restore"),
     fillRect: record("fillRect"),
+    fillText: record("fillText"),
     drawImage: record("drawImage"),
     translate: record("translate"),
     set lineWidth(value) { calls.push(["lineWidth", value]) },

@@ -186,7 +186,12 @@ export class Renderer {
       ...this.events.slice(-topologyCapacity),
     ]
     this.commands = this.projectScene(topologyInstructions, viewport, {
+      windowEnd: this.windowEnd,
+      displayInstructions: this.instructions,
+      memoryInstructions: this.memoryInstructions,
       ambient: this.ambient,
+      historyInstructions: this.historyInstructions,
+      scaffoldInstructions: scaffoldOnly,
       projectionInstructions: [...scaffoldOnly, ...this.events],
       hitInstructions: this.events,
     }).slice(-maximumCommands)
@@ -683,6 +688,9 @@ function validatedSnapshot(envelope) {
   if (envelope.commit_watermark === 0 && allInstructions.length > 0) {
     throw new TypeError("commit watermark zero is reserved for an empty snapshot")
   }
+  if (envelope.window_end === null && allInstructions.length > 0) {
+    throw new TypeError("window_end may be null only for an empty snapshot")
+  }
 
   return {
     snapshotVersion: envelope.snapshot_version,
@@ -762,6 +770,17 @@ function drawCommand(context, command, width, height) {
     case "ambient":
       context.globalAlpha = command.coverage ?? 0.2
       context.fillRect(0, 0, width, height)
+      break
+    case "memory-band":
+      context.globalAlpha = 0.07
+      context.fillRect(command.x, command.y, command.width, command.height)
+      context.globalAlpha = 0.42
+      context.fillText(command.label, command.x + 6, command.y + Math.max(10, command.height * 0.55))
+      break
+    case "memory-trace":
+      context.globalAlpha = 0.24 + (command.intensity ?? 0.5) * 0.2
+      context.arc(command.x, command.y, 3 + (command.intensity ?? 0.5) * 4, 0, Math.PI * 2)
+      context.fill()
       break
     case "ripple":
     case "knot":
