@@ -98,14 +98,18 @@ The qualified legacy subscription is limited to `app.bsky.feed.post` and
 `app.bsky.feed.repost`. Accepted public commit operations become four-second counts
 of total actions, original posts, replies, reposts, creates, updates, and deletes,
 plus a bounded truncation flag. Worldloom does not retain post text, handles, DIDs,
-record keys, URIs, CIDs, records, or raw frames. A future resumable worker may
-checkpoint only its fully committed numeric cursor. Bounded overlap fingerprints are
-transient worker state and are never checkpointed; neither exists in current
-production because the worker is disabled.
+record keys, URIs, CIDs, records, or raw frames. The resumable worker checkpoints
+only its fully committed numeric cursor. Bounded overlap fingerprints are
+transient worker state and are never checkpointed. The production-capable worker is
+independently supervised behind the false-by-default `WORLDLOOM_BLUESKY_ENABLED`
+switch, so it creates no process, upstream connection, event, or checkpoint while
+disabled.
 
 Legacy Jetstream is appropriate for an informal artistic aggregate, but it is not a
 stable authenticated firehose and has no production SLA. Protocol drift or relay
-failure is source unavailability, not activity to invent or reinterpret.
+failure is source unavailability, not activity to invent or reinterpret. Its bounded
+canary evidence and one-flag rollback procedure are defined in
+[operations.md](operations.md#bluesky-legacy-jetstream).
 
 ### RIPE RIS Live
 

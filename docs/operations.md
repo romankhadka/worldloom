@@ -95,6 +95,42 @@ Close the canary only after the cadence and health threshold remain stable and a
 restart demonstrates bounded, ordered, idempotent recovery. A failed gate is a
 rollback condition, not a reason to broaden timeouts or queue bounds.
 
+### Bluesky legacy Jetstream
+
+The checked-in release leaves `WORLDLOOM_BLUESKY_ENABLED=false`. Enabling Bluesky is
+a separate deployment operation and requires explicit authorization. The adapter
+targets the deployed legacy Jetstream protocol: it is a best-effort, unauthenticated
+artistic signal, not a protocol-stable firehose or production-SLA dependency.
+
+- **Enable:** set `WORLDLOOM_BLUESKY_ENABLED=true` and redeploy one instance. Do not
+  change `WORLDLOOM_BLUESKY_URL` during the canary; the configured secure endpoint is
+  validated before the supervision tree starts.
+- **Subscription bound:** the server owns one socket and requests only
+  `app.bsky.feed.post` and `app.bsky.feed.repost`, with
+  `maxMessageSizeBytes=262144` and compression disabled.
+- **Healthy threshold:** a connected feed with no durably accepted activity for
+  twenty seconds becomes `quiet`; a closed transport becomes `disconnected`
+  immediately. Neither state makes the application health endpoint fail.
+- **Recovery bound:** reconnect from five seconds before the private fully committed
+  numeric cursor, deduplicate the overlap, and accept no more than sixty seconds of
+  replay. A missing checkpoint starts at the live tail; a future or older checkpoint
+  returns there and reports one coarse gap instead of inventing activity.
+- **Observe:** each non-empty four-second window creates at most one unique Bluesky
+  event row; the checkpoint advances only in the same successful transaction. Confirm
+  sibling feed cadence and processes remain unaffected through disconnect/reconnect.
+- **Privacy gate:** inspect Bluesky `loom_events`, application logs, telemetry, and
+  browser instructions for DID, handle, record text, record key, URI, CID, raw frame,
+  and cursor leakage. The numeric recovery cursor is allowed only in the private
+  `feed_checkpoints` row and redacted from logs, telemetry, health, and the browser.
+- **Rollback:** set only `WORLDLOOM_BLUESKY_ENABLED=false` and redeploy. This removes
+  only the Bluesky socket owner; it does not reset its private checkpoint or alter
+  another source.
+
+Close the canary only after a quiet-state observation and a forced reconnect prove
+bounded, idempotent recovery with privacy-clean public surfaces. Protocol drift,
+unexpected content retention, duplicate rows, an unbounded replay, or sibling-feed
+interference is a rollback condition.
+
 ## Telemetry and logs
 
 Structured production logs include event names and coarse source/status metadata,

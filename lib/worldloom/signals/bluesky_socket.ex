@@ -40,7 +40,7 @@ defmodule Worldloom.Signals.BlueskySocket do
     clock = Keyword.get(options, :clock, &DateTime.utc_now/0)
     now = clock.()
 
-    {_replay_cursor, committed_cursor, recovery} =
+    {_replay_cursor, committed_cursor, recovery, recovery_gap?} =
       options |> initial_cursor() |> recovery_state(now)
 
     url = Keyword.fetch!(options, :url)
@@ -68,6 +68,7 @@ defmodule Worldloom.Signals.BlueskySocket do
       attempt: 0
     }
 
+    state = record_recovery_gap(state, recovery_gap?)
     state.timer.(self(), :flush_window, @flush_interval)
     send(self(), :connect)
     {:ok, state}
@@ -152,11 +153,11 @@ defmodule Worldloom.Signals.BlueskySocket do
   defp connect(state) do
     now = state.clock.()
 
-    {replay_cursor, committed_cursor, _fresh_recovery} =
+    {replay_cursor, committed_cursor, _fresh_recovery, recovery_gap?} =
       recovery_state(state.committed_cursor, now)
 
     endpoint = subscription_endpoint(state.url, replay_cursor)
-    closed_state = close_transport(state)
+    closed_state = state |> close_transport() |> record_recovery_gap(recovery_gap?)
 
     case state.transport_module.connect(endpoint, state.transport_options) do
       {:ok, transport} ->
@@ -504,10 +505,14 @@ defmodule Worldloom.Signals.BlueskySocket do
 
   defp recovery_state(committed_cursor, now) do
     case BlueskyRecovery.new(committed_cursor, now) do
-      {:replay, cursor, recovery} -> {cursor, committed_cursor, recovery}
-      {:live_tail, _gap, recovery} -> {nil, nil, recovery}
+      {:replay, cursor, recovery} -> {cursor, committed_cursor, recovery, false}
+      {:live_tail, {:gap, :missing_checkpoint}, recovery} -> {nil, nil, recovery, false}
+      {:live_tail, {:gap, _reason}, recovery} -> {nil, nil, recovery, true}
     end
   end
+
+  defp record_recovery_gap(state, true), do: record_health(state, {:drop, :replay})
+  defp record_recovery_gap(state, false), do: state
 
   defp initial_cursor(options) do
     checkpoint_cursor =

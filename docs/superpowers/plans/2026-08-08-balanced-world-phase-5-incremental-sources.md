@@ -149,17 +149,17 @@ rtk git commit -m "Prepare the drand public pulse for canary release"
 
 ## Task 4: Land bounded Bluesky summaries second
 
-- [ ] **Step 1: Add the complete fake-edge vertical test**
+- [x] **Step 1: Add the complete fake-edge vertical test**
 
 Use a local fake WebSocket server to emit fixture frames, disconnect, and replay a five-second overlap. Assert one source-owned GenServer, two `wantedCollections` query values, `maxMessageSizeBytes=262144`, dedupe, one durable aggregate per non-empty four-second window, checkpoint cursor advancement, and no account/identity/content retention.
 
-- [ ] **Step 2: Run focused verification**
+- [x] **Step 2: Run focused verification**
 
 ```bash
 rtk mix test test/worldloom/signals/bluesky_socket_test.exs test/worldloom/signals/bluesky_window_test.exs test/worldloom/signals/buffer_test.exs
 ```
 
-- [ ] **Step 3: Document canary and rollback evidence**
+- [x] **Step 3: Document canary and rollback evidence**
 
 Add to `docs/operations.md`:
 
@@ -168,9 +168,11 @@ Add to `docs/operations.md`:
 - quiet threshold: twenty seconds without valid activity;
 - replay: five-second cursor overlap capped at sixty seconds;
 - rollback: disable only the Bluesky flag;
-- privacy checks: no DID, handle, record text, URI, CID, or cursor in rows/logs/telemetry/browser.
+- privacy checks: no DID, handle, record text, URI, CID, or cursor in public event
+  rows, logs, telemetry, or the browser; the numeric cursor is confined to the
+  private checkpoint row.
 
-- [ ] **Step 4: Verify code readiness without changing production**
+- [x] **Step 4: Verify code readiness without changing production**
 
 ```bash
 rtk mix precommit
@@ -179,10 +181,10 @@ rtk rg -n 'did|handle|record|uri|cid|cursor' docs/privacy.md docs/operations.md 
 
 Review input-only matches; do not deploy without explicit authorization.
 
-- [ ] **Step 5: Commit the Bluesky vertical slice**
+- [x] **Step 5: Commit the Bluesky vertical slice**
 
 ```bash
-rtk git add test/worldloom/signals/bluesky_socket_test.exs docs/operations.md docs/data-sources.md docs/privacy.md
+rtk git add docs/data-sources.md docs/operations.md docs/privacy.md docs/superpowers/plans/2026-08-08-balanced-world-phase-5-incremental-sources.md lib/worldloom/signals/bluesky_socket.ex test/support/websocket_fixture_server.ex test/support/websocket_fixture_server/router.ex test/worldloom/signals/bluesky_socket_test.exs
 rtk git commit -m "Prepare bounded Bluesky summaries for canary release"
 ```
 

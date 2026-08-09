@@ -8,6 +8,13 @@ defmodule Worldloom.TestSupport.WebSocketFixtureServer.Router do
 
   @impl true
   def call(%Plug.Conn{request_path: "/socket"} = connection, options) do
+    if Keyword.fetch!(options, :record_requests) do
+      send(
+        Keyword.fetch!(options, :test_process),
+        {:fixture_request, connection.request_path, connection.query_string}
+      )
+    end
+
     connection
     |> WebSockAdapter.upgrade(
       Worldloom.TestSupport.WebSocketFixtureServer.Socket,

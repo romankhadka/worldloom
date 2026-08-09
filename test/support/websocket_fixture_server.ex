@@ -5,9 +5,12 @@ defmodule Worldloom.TestSupport.WebSocketFixtureServer do
   @spec start_link(keyword()) :: Supervisor.on_start()
   def start_link(options) do
     test_process = Keyword.fetch!(options, :test_process)
+    record_requests = Keyword.get(options, :record_requests, false)
 
     Bandit.start_link(
-      plug: {Worldloom.TestSupport.WebSocketFixtureServer.Router, test_process: test_process},
+      plug:
+        {Worldloom.TestSupport.WebSocketFixtureServer.Router,
+         test_process: test_process, record_requests: record_requests},
       scheme: :https,
       ip: {127, 0, 0, 1},
       port: 0,
