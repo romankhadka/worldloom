@@ -34,7 +34,7 @@
 
 ## Task 1: Centralize saturation and fixed-window arithmetic
 
-- [ ] **Step 1: Write failing boundary tests**
+- [x] **Step 1: Write failing boundary tests**
 
 Create `test/worldloom/signals/bounded_counter_test.exs`. Assert:
 
@@ -49,17 +49,17 @@ assert BoundedCounter.window_start(~U[2026-08-08 12:00:06Z], 4, 1) ==
 
 Reject negative increments, non-DateTimes, widths outside `1..60`, and offsets outside the window.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 ```bash
 rtk mix test test/worldloom/signals/bounded_counter_test.exs
 ```
 
-- [ ] **Step 3: Implement the tiny pure helper**
+- [x] **Step 3: Implement the tiny pure helper**
 
 Create `lib/worldloom/signals/bounded_counter.ex` with `@uint32_max 4_294_967_295`, `add/2`, and `window_start/3`. Keep it free of provider names and process state.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 ```bash
 rtk mix test test/worldloom/signals/bounded_counter_test.exs
@@ -69,7 +69,7 @@ rtk git commit -m "Bound signal counters and staggered windows"
 
 ## Task 2: Qualify the pinned legacy Bluesky Jetstream contract
 
-- [ ] **Step 1: Create sanitized protocol fixtures**
+- [x] **Step 1: Create sanitized protocol fixtures**
 
 Create `test/support/fixtures/feeds/bluesky_frames.json` with only synthetic DIDs/keys and these representative decoded shapes:
 
@@ -87,7 +87,7 @@ Create `test/support/fixtures/feeds/bluesky_frames.json` with only synthetic DID
 
 Include original post create, reply create, repost create, post update, post delete, unknown collection, malformed timestamp, and one frame carrying synthetic text/identity fields that must disappear. Do not copy a real DID, handle, text, URI, CID, or cursor into the fixture.
 
-- [ ] **Step 2: Write failing aggregation tests**
+- [x] **Step 2: Write failing aggregation tests**
 
 Create `test/worldloom/signals/bluesky_window_test.exs`. Use four-second windows at offset one. Assert exact counts for `total_actions`, `original_posts`, `replies`, `reposts`, `creates`, `updates`, and `deletes`; provider occurrence time from `time_us`; one-second lateness; uint32 saturation; `:empty`; and `inspect(window)` containing none of `did`, `handle`, `text`, `uri`, `cid`, or cursor values.
 
@@ -101,13 +101,13 @@ Create `test/worldloom/signals/bluesky_recovery_test.exs` for the pure replay bo
 - selects the live tail and reports a gap when the checkpoint is missing, ahead of server receipt time, or more than 60 seconds behind it; and
 - never exposes raw cursor or identity material through `inspect/1`.
 
-- [ ] **Step 3: Run and verify RED**
+- [x] **Step 3: Run and verify RED**
 
 ```bash
 rtk mix test test/worldloom/signals/bluesky_window_test.exs test/worldloom/signals/bluesky_recovery_test.exs
 ```
 
-- [ ] **Step 4: Implement a deny-by-default window**
+- [x] **Step 4: Implement a deny-by-default window**
 
 Create `lib/worldloom/signals/bluesky_window.ex`. Accept only top-level `kind: "commit"`, collections `app.bsky.feed.post` and `app.bsky.feed.repost`, operations `create`, `update`, and `delete`, and integer `time_us`. `add/3` requires an explicit trusted server-receipt `DateTime` and accepts provider time only from `receipt_at - 60_000_000` microseconds through `receipt_at + 5_000_000` microseconds, inclusive; drop observations outside those bounds without changing the window. Explicitly drop the account and identity events that Jetstream sends regardless of collection filters. Creates and updates require a map-valued record. Determine reply only from presence of a map-valued `record.reply`; do not retain that map. A record-less post delete has no post category, while a repost delete remains a repost. Return one of:
 
@@ -121,11 +121,11 @@ The struct may contain only window times, approved counters, and `truncated`. Do
 
 Create `lib/worldloom/signals/bluesky_recovery.ex` as a pure boundary for the legacy service's Unix-microsecond cursor. Given the maximum fully committed cursor and current server receipt time, return either the exact five-second rewind or an explicit live-tail gap when the checkpoint is missing, future-dated, or older than the 60-second replay horizon. Track only fixed-size hashes for observations above the committed cursor in a 4,096-entry open-window set. Duplicate hashes are dropped; once full, previously unseen overlap observations are dropped with an explicit bounded-capacity reason instead of being accepted without deduplication. Phase 4 may call this boundary but must not reimplement its policy.
 
-- [ ] **Step 5: Normalize the aggregate**
+- [x] **Step 5: Normalize the aggregate**
 
 Add `Normalizer.bluesky_window/1`, producing `:public_activity/:bluesky`, identity `bluesky-window:<unix-start>:4`, provider `occurred_at = window_start`, deterministic lane from the approved counters, and the exact allow-listed payload.
 
-- [ ] **Step 6: Verify privacy and commit**
+- [x] **Step 6: Verify privacy and commit**
 
 ```bash
 rtk mix test test/worldloom/signals/bluesky_window_test.exs test/worldloom/signals/bluesky_recovery_test.exs test/worldloom/signals/normalizer_test.exs test/worldloom/loom/source_event_test.exs
@@ -135,11 +135,11 @@ rtk git commit -m "Qualify bounded Bluesky activity summaries"
 
 ## Task 3: Qualify a collector-bounded RIPE RIS Live contract
 
-- [ ] **Step 1: Create synthetic UPDATE fixtures**
+- [x] **Step 1: Create synthetic UPDATE fixtures**
 
 Create `test/support/fixtures/feeds/ripe_frames.json` with `type: "ris_message"` and `data.type: "UPDATE"`. Model `announcements` as an array of `%{"next_hop" => string, "prefixes" => [CIDR strings]}` groups and `withdrawals` as a flat array of CIDR strings, matching the current RIS Live UPDATE schema. Include synthetic collectors, peers, IPv4 and IPv6 announcements and withdrawals, non-UPDATE messages, malformed times, and identifiers that must never survive aggregation. Keep the checked-in fixture reviewable; construct the greater-than-2,048 adversarial collections mechanically in the test.
 
-- [ ] **Step 2: Write the subscription and aggregation tests**
+- [x] **Step 2: Write the subscription and aggregation tests**
 
 Create `test/worldloom/signals/ripe_window_test.exs`. Assert `request_rrc_list_message/0` returns exactly `%{"type" => "request_rrc_list", "data" => nil}`. Assert `subscription_messages/2` accepts one to four unique configured collectors matching `~r/\Arrc\d{2}\z/` and a `%{"type" => "ris_rrc_list", "data" => available_collectors}` response whose data is an array of strings. Validate the provider list in one bounded pass, halting on a duplicate, invalid entry, or an entry beyond the complete 100-name `rrc00` through `rrc99` namespace; retain only a `MapSet` for membership. Preserve configured allow-list order when intersecting and return one exact subscription per approved current collector because the protocol's `host` filter is a string, not an array:
 
@@ -158,13 +158,13 @@ end)
 
 Reject malformed lists, duplicate or invalid configured collectors, a configured collector list larger than four, and an empty intersection with the `ris_rrc_list` response; never fall back to the full firehose or emit an unfiltered subscription. Aggregate four-second windows at offset two. Assert announced/withdrawn prefix-occurrence counts, IPv4/IPv6 counts, distinct collector/peer counts, a collector-hash cap of four, a peer-hash cap of 2,048, `truncated`, and no raw identifier in `inspect(window)`.
 
-- [ ] **Step 3: Run and verify RED**
+- [x] **Step 3: Run and verify RED**
 
 ```bash
 rtk mix test test/worldloom/signals/ripe_window_test.exs
 ```
 
-- [ ] **Step 4: Implement hashed ephemeral distinct sets**
+- [x] **Step 4: Implement hashed ephemeral distinct sets**
 
 Create `lib/worldloom/signals/ripe_window.ex`. `RipeWindow.new/2` accepts the initial `DateTime` and the approved one-to-four-collector allow-list, immediately replacing the raw collector strings with an `approved_collector_fingerprints` hash set. Keep a separate `observed_collector_fingerprints` set so `collector_count` measures collectors actually observed rather than collectors configured. `RipeWindow.add/3` requires one explicit trusted server `receipt_at`. Accept `data.timestamp` only as a non-negative finite JSON number representing Unix seconds, convert it deterministically to integer microseconds with `round(timestamp * 1_000_000)`, and accept the inclusive interval from `receipt_at - 20_000_000` through `receipt_at + 5_000_000` microseconds. Validate this before prefix traversal or state mutation. The twenty-second past bound is a transport-staleness limit aligned with RIPE's high-cadence quiet threshold, not replay.
 
@@ -180,7 +180,7 @@ Inspect at most 2,048 announcement group elements and at most 2,048 prefix entri
 
 The struct may contain only UTC window time, counters, capped hash sets, `truncated`, and the single bounded sanitized pending aggregate; derive `Inspect` to omit every hash set and the pending internal state. Never retain or expose collector, peer, peer ASN, message ID, next hop, prefix, path, community, raw bytes, or the source frame in state, output, logs, telemetry, PubSub, or errors.
 
-- [ ] **Step 5: Normalize and commit**
+- [x] **Step 5: Normalize and commit**
 
 Add `Normalizer.ripe_window/1`, producing `:route_change/:ripe_ris`, identity `ripe-window:<unix-start>:4`, and the exact public aggregate. Reject empty windows and every counter outside uint32. Require `collector_count` in `1..4`, `peer_count` in `1..2048`, and each distinct count to be no greater than both the direction total and the address-family total. Require positive totals and exact equality when `truncated` is false. When truncated totals differ, treat each two-counter partition as either an exact total when neither component is saturated or a lower-bounded total when either component equals uint32 max; accept only intersecting possible raw-total ranges. This preserves equality for traversal or set truncation without rejecting legitimate independent counter saturation. Require a boolean `truncated`, UTC-normalize `window_start`, and derive deterministic lane and intensity only from approved counters. Test zero activity, small truncated mismatch/equality, compatible and incompatible saturation ranges, impossible distinct counts, set-bound violations, ignored extra private inputs, and repeated deterministic normalization.
 
@@ -227,7 +227,7 @@ rtk git commit -m "Qualify Solana slot cadence against fixtures"
 
 ## Task 5: Qualify drand Quicknet relay failover
 
-- [ ] **Step 1: Write failing client tests around injected response and transport edges**
+- [x] **Step 1: Write failing client tests around injected response and transport edges**
 
 Create `test/worldloom/signals/drand_client_test.exs`. Use the fixed Quicknet chain hash:
 
@@ -241,13 +241,13 @@ Assert SHA-256 of the decoded 48 signature bytes becomes a 64-character lowercas
 
 Inject the request edge and timeout configuration without weakening production origin validation. Assert first-valid rather than first-completed behavior, chain-info failover, at most three concurrent tasks, timeout without caller exit, and that halting the race terminates every losing task without delayed results. Raised or exiting request functions collapse to the same unavailable outcome. Live relay smoke tests remain scheduled outside deterministic CI.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 ```bash
 rtk mix test test/worldloom/signals/drand_client_test.exs
 ```
 
-- [ ] **Step 3: Implement bounded concurrent Req calls**
+- [x] **Step 3: Implement bounded concurrent direct-Mint calls**
 
 Create `lib/worldloom/signals/drand_client.ex` and `lib/worldloom/signals/drand_transport.ex`. Accept one to three unique pinned relay origins, an injected `Req.Response`-compatible request function, and finite timeout configuration through `new/1`; invalid configuration is a programming error. Derive `Inspect` without relays, request functions, URLs, response bodies, signatures, or render identities. Use one shared race helper for chain info and exact rounds with `Task.async_stream/3`, `ordered: false`, `max_concurrency: 3`, finite `timeout`, and `on_timeout: :kill_task`. Reduce until the first validated result and halt the stream so enumerable cleanup terminates outstanding tasks. Treat `{:exit, _}`, request exceptions, transport errors, non-200 responses, and invalid bodies identically; never return or log their reasons.
 
@@ -260,11 +260,11 @@ The default edge uses a fresh passive-mode direct Mint HTTPS connection with sys
 
 This is HTTPS structural validation and first-valid-response failover, not BLS signature verification, chain-identity recomputation, or relay consensus. Coarse telemetry may contain outcome atoms, duration, and relay count only.
 
-- [ ] **Step 4: Normalize without persisting beacon output**
+- [x] **Step 4: Normalize without persisting beacon output**
 
 Add `Normalizer.drand_round/2`. Require validated `%{period: 3, genesis_time: genesis_time}` and `%{round: round, render_identity: identity}`. Compute `unix_second = genesis_time + (round - 1) * 3`, require it in `0..253_402_300_799`, and construct UTC time with `DateTime.from_unix/2`. Return `{:error, :invalid_round}` for an unsafe round, invalid identity, or out-of-range timestamp. Pass `render_identity` ephemerally to `SourceEvent`; durable payload remains exactly `%{"summary" => "drand Quicknet round #{round}", "round" => round}`. Identity is exactly `drand-round:<round>` and occurrence time never uses local receipt time. Update SourceEvent, InstructionMetrics, browser validation, and their fixtures/tests so drand rounds use the positive JSON-safe range rather than uint32. Add boundaries for round one, maximum JSON-safe input, timestamp overflow, mismatched requested round, and repeated deterministic normalization.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 ```bash
 rtk mix test test/worldloom/signals/drand_client_test.exs test/worldloom/signals/normalizer_test.exs test/worldloom/loom/visual_parameters_test.exs
@@ -274,7 +274,7 @@ rtk git commit -m "Qualify drand Quicknet relay failover"
 
 ## Task 6: Document the qualification boundary
 
-- [ ] **Step 1: Add source and privacy documentation**
+- [x] **Step 1: Add source and privacy documentation**
 
 Create `docs/data-sources.md` and update `docs/privacy.md` plus the fixture README. State:
 
@@ -284,7 +284,7 @@ Create `docs/data-sources.md` and update `docs/privacy.md` plus the fixture READ
 - drand uses API v2 Quicknet and structural response validation without a BLS verification claim;
 - public endpoints are best-effort and can disconnect slow consumers.
 
-- [ ] **Step 2: Scan fixtures and code for forbidden retained fields**
+- [x] **Step 2: Scan fixtures and code for forbidden retained fields**
 
 ```bash
 rtk rg -n 'did|handle|text|uri|cid|prefix|peer|wallet|account|transaction|response_body' test/support/fixtures/feeds lib/worldloom/signals
@@ -292,7 +292,7 @@ rtk rg -n 'did|handle|text|uri|cid|prefix|peer|wallet|account|transaction|respon
 
 Review every match. Synthetic input-only fixture keys are acceptable; output structs, stored payload expectations, logs, and telemetry are not.
 
-- [ ] **Step 3: Complete phase verification**
+- [x] **Step 3: Complete phase verification**
 
 ```bash
 rtk mix precommit
@@ -301,7 +301,7 @@ rtk git diff --check master...HEAD
 rtk mix hex.audit
 ```
 
-- [ ] **Step 4: Commit documentation**
+- [x] **Step 4: Commit documentation**
 
 ```bash
 rtk git add docs/data-sources.md docs/privacy.md test/support/fixtures/feeds/README.md
@@ -310,9 +310,9 @@ rtk git commit -m "Document qualified public signal boundaries"
 
 ## Phase 3 completion gate
 
-- [ ] All four pure boundaries are deterministic, bounded, and deny-by-default.
-- [ ] Decoded counters and sets have explicit caps.
-- [ ] Provider time versus server receipt time matches the specification.
-- [ ] The SHA-256 digest of the decoded drand signature affects render seed; the signature and digest are not persisted.
-- [ ] No provider worker or production enablement exists.
-- [ ] Solana has no production URL decision hidden in code or configuration.
+- [x] All four pure boundaries are deterministic, bounded, and deny-by-default.
+- [x] Decoded counters and sets have explicit caps.
+- [x] Provider time versus server receipt time matches the specification.
+- [x] The SHA-256 digest of the decoded drand signature affects render seed; the signature and digest are not persisted.
+- [x] No provider worker or production enablement exists.
+- [x] Solana has no production URL decision hidden in code or configuration.
