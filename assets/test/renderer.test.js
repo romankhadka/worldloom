@@ -39,6 +39,28 @@ test("replaces live state from one complete snapshot envelope", () => {
   assert.deepEqual(renderer.ambient, balancedSnapshot.ambient)
 })
 
+test("reports a complete deterministic settled scene on the event-time axis", () => {
+  const renderer = new Renderer(null, {
+    width: 1_000,
+    height: 600,
+    reducedMotion: true,
+  })
+  renderer.setSnapshot(structuredClone(balancedSnapshot))
+
+  const firstDiagnostics = renderer.settledSceneDiagnostics()
+  renderer.resize(1_000, 600, 1)
+  const rebuiltDiagnostics = renderer.settledSceneDiagnostics()
+
+  assert.deepEqual(firstDiagnostics.axis, {
+    start: "2026-08-08T12:00:00.000Z",
+    end: balancedSnapshot.window_end,
+    durationSeconds: 60,
+  })
+  assert.equal(firstDiagnostics.paintCommands.length, renderer.commands.length)
+  assert.ok(firstDiagnostics.paintCommands.length > 0)
+  assert.deepEqual(firstDiagnostics, rebuiltDiagnostics)
+})
+
 test("passes every snapshot role to geometry as explicit scene input", () => {
   const projectedScenes = []
   const renderer = new Renderer(null, {
@@ -70,6 +92,25 @@ test("keeps contextual memory selectable in its quiet band", () => {
   assert.ok(trace)
   assert.equal(renderer.hitTest(trace.x, trace.y), memory.sequence)
   assert.equal(trace.occurredAt, memory.occurred_at)
+})
+
+test("excludes ambient weather from pointer and keyboard selection", () => {
+  const selected = []
+  const renderer = new Renderer(null, {
+    width: 1_000,
+    height: 600,
+    padding: 50,
+    onSelect: sequence => selected.push(sequence),
+  })
+  renderer.setSnapshot(structuredClone(balancedSnapshot))
+  const ambientCommand = renderer.commands.find(
+    command => command.type === "ambient",
+  )
+
+  assert.equal(renderer.hitTest(ambientCommand.x, ambientCommand.y), null)
+  assert.equal(renderer.selectNext(1), balancedSnapshot.memory_events[0].sequence)
+  renderer.activateSelection()
+  assert.deepEqual(selected, [balancedSnapshot.memory_events[0].sequence])
 })
 
 test("paints the contextual band and its restrained memory mark", () => {

@@ -506,6 +506,7 @@ export const Worldloom = {
     const resize = () => {
       const bounds = this.el.getBoundingClientRect()
       this.renderer.resize(bounds.width, bounds.height, globalThis.devicePixelRatio ?? 1)
+      this.syncRenderedSequence()
     }
 
     if (globalThis.ResizeObserver) {
@@ -532,6 +533,16 @@ export const Worldloom = {
       delete this.el.dataset.windowEnd
     } else {
       this.el.dataset.windowEnd = this.renderer.windowEnd
+    }
+    if (this.el.dataset.sceneDiagnosticsEnabled !== "true") {
+      delete this.el.dataset.sceneDiagnostics
+    } else {
+      const sceneDiagnostics = this.renderer.settledSceneDiagnostics?.()
+      if (sceneDiagnostics === undefined) {
+        delete this.el.dataset.sceneDiagnostics
+      } else {
+        this.el.dataset.sceneDiagnostics = canonicalJson(sceneDiagnostics)
+      }
     }
   },
 
@@ -614,4 +625,18 @@ function normalizedLane(encoded, fallback) {
   const lane = Number(encoded)
   if (!Number.isFinite(lane)) return fallback
   return Math.min(1, Math.max(0, lane))
+}
+
+function canonicalJson(value) {
+  return JSON.stringify(canonicalValue(value))
+}
+
+function canonicalValue(value) {
+  if (Array.isArray(value)) return value.map(canonicalValue)
+  if (value === null || typeof value !== "object") return value
+
+  return Object.keys(value).sort().reduce((canonical, key) => {
+    canonical[key] = canonicalValue(value[key])
+    return canonical
+  }, {})
 }

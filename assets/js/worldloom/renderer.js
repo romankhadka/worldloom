@@ -330,7 +330,7 @@ export class Renderer {
 
   hitTest(x, y) {
     const sceneX = x - this.viewTranslationX()
-    const candidates = this.commands.filter(item => {
+    const candidates = selectableCommands(this.commands).filter(item => {
       const hit = item.hit
       return hit && sceneX >= hit.x && sceneX <= hit.x + hit.width && y >= hit.y && y <= hit.y + hit.height
     })
@@ -348,7 +348,7 @@ export class Renderer {
   }
 
   selectNext(direction) {
-    const sequences = [...new Set(this.commands.filter(item => item.hit).map(item => item.sequence))]
+    const sequences = [...new Set(selectableCommands(this.commands).map(item => item.sequence))]
     if (sequences.length === 0) return null
 
     this.selectionIndex =
@@ -357,7 +357,7 @@ export class Renderer {
   }
 
   activateSelection() {
-    const sequences = [...new Set(this.commands.filter(item => item.hit).map(item => item.sequence))]
+    const sequences = [...new Set(selectableCommands(this.commands).map(item => item.sequence))]
     const sequence = sequences[this.selectionIndex]
     if (sequence !== undefined) this.onSelect(sequence)
   }
@@ -421,6 +421,37 @@ export class Renderer {
       spacing: this.spacing,
       padding: this.padding,
       panOffset: this.panOffset,
+    }
+  }
+
+  settledSceneDiagnostics() {
+    const windowEndMilliseconds = Date.parse(this.windowEnd)
+    const noActiveTransitions = new Map()
+    const axis = Number.isFinite(windowEndMilliseconds)
+      ? {
+          start: new Date(windowEndMilliseconds - 60_000).toISOString(),
+          end: this.windowEnd,
+          durationSeconds: 60,
+        }
+      : null
+
+    return {
+      snapshotVersion: this.snapshotVersion,
+      commitWatermark: this.commitWatermark,
+      axis,
+      viewport: {
+        width: this.width,
+        height: this.height,
+        dpr: this.dpr,
+        padding: this.padding,
+        spacing: this.spacing,
+      },
+      displaySequences: this.instructions.map(instruction => instruction.sequence),
+      memorySequences: this.memoryInstructions.map(instruction => instruction.sequence),
+      ambientSequence: this.ambient?.sequence ?? null,
+      paintCommands: this.commands
+        .map(command => settledCommand(command, noActiveTransitions))
+        .filter(command => command !== null),
     }
   }
 
@@ -502,6 +533,12 @@ export class Renderer {
     this.lastLiveEdge = liveEdge
     this.onViewportChange({atLiveEdge: liveEdge})
   }
+}
+
+function selectableCommands(commands) {
+  return commands.filter(command =>
+    command.type === "anchor-hit" || command.type === "memory-trace"
+  )
 }
 
 function drawCachedScene(context, cacheCanvas, width, height) {

@@ -12,6 +12,7 @@
       data-snapshot-version={@snapshot_version}
       data-window-end={@window_end}
       data-commit-watermark={@commit_watermark}
+      data-scene-diagnostics-enabled={@scene_diagnostics? && "true"}
       data-display-events={Jason.encode!(@display_events)}
       data-memory-events={Jason.encode!(@memory_events)}
       data-instructions={Jason.encode!(@instructions)}

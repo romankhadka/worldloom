@@ -129,6 +129,36 @@ test("replaces a server snapshot once without sequence-gap repair", t => {
   assert.equal(harness.el.dataset.windowEnd, "2026-08-08T12:01:00Z")
 })
 
+test("serializes settled scene diagnostics with canonical object keys", t => {
+  const harness = hookHarness(t)
+  harness.el.dataset.sceneDiagnosticsEnabled = "true"
+  harness.renderer.settledSceneDiagnostics = () => ({
+    paintCommands: [{type: "fiber", sequence: 3}],
+    axis: {end: "2026-08-08T12:01:00Z", start: "2026-08-08T12:00:00Z"},
+  })
+
+  harness.hook.syncRenderedSequence()
+
+  assert.equal(
+    harness.el.dataset.sceneDiagnostics,
+    '{"axis":{"end":"2026-08-08T12:01:00Z","start":"2026-08-08T12:00:00Z"},"paintCommands":[{"sequence":3,"type":"fiber"}]}',
+  )
+})
+
+test("does not build scene diagnostics outside the acceptance environment", t => {
+  const harness = hookHarness(t)
+  let diagnosticsBuilt = 0
+  harness.renderer.settledSceneDiagnostics = () => {
+    diagnosticsBuilt += 1
+    return {paintCommands: []}
+  }
+
+  harness.hook.syncRenderedSequence()
+
+  assert.equal(diagnosticsBuilt, 0)
+  assert.equal(harness.el.dataset.sceneDiagnostics, undefined)
+})
+
 test("forwards the renderer history cursor unchanged", t => {
   const harness = hookHarness(t)
 

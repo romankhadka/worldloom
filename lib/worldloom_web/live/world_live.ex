@@ -34,6 +34,10 @@ defmodule WorldloomWeb.WorldLive do
       |> assign(:snapshot_version, 1)
       |> assign(:window_end, nil)
       |> assign(:commit_watermark, 0)
+      |> assign(
+        :scene_diagnostics?,
+        Application.get_env(:worldloom, :acceptance_scene_diagnostics, false)
+      )
       |> assign(:display_events, [])
       |> assign(:memory_events, [])
       |> assign(:scaffold, [])

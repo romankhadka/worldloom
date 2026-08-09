@@ -3,6 +3,7 @@ import Config
 config :worldloom, Worldloom.Signals, enabled: false
 
 e2e? = System.get_env("WORLDLOOM_E2E") == "true"
+config :worldloom, :acceptance_scene_diagnostics, e2e?
 
 # Configure your database
 #
@@ -23,8 +24,7 @@ config :worldloom, Worldloom.Repo,
 config :worldloom, WorldloomWeb.Endpoint,
   url: [host: "localhost", port: 4002],
   http: [ip: {127, 0, 0, 1}, port: 4002],
-  secret_key_base: "CvUZrdJ8hBxL2+rKbevnebnowgVi6IMZO4mEPODfyexphR4GAAnaQcmMqMyN9SoY",
-  server: e2e?
+  secret_key_base: "CvUZrdJ8hBxL2+rKbevnebnowgVi6IMZO4mEPODfyexphR4GAAnaQcmMqMyN9SoY"
 
 # In test we don't send emails
 config :worldloom, Worldloom.Mailer, adapter: Swoosh.Adapters.Test

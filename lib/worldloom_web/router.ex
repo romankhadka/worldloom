@@ -30,6 +30,14 @@ defmodule WorldloomWeb.Router do
     get "/healthz", HealthController, :index
   end
 
+  if Mix.env() == :test do
+    scope "/__e2e__", WorldloomWeb do
+      pipe_through :api
+
+      post "/events/late", E2EController, :late
+    end
+  end
+
   # Other scopes may use custom stacks.
   # scope "/api", WorldloomWeb do
   #   pipe_through :api

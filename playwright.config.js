@@ -31,7 +31,7 @@ export default defineConfig({
           "env MIX_ENV=test WORLDLOOM_E2E=true WORLDLOOM_FEEDS_ENABLED=false mix assets.build && " +
           "env MIX_ENV=test WORLDLOOM_E2E=true WORLDLOOM_FEEDS_ENABLED=false mix phx.server",
         url: `${localBaseURL}/healthz`,
-        reuseExistingServer: !process.env.CI,
+        reuseExistingServer: false,
         timeout: 120_000,
       },
 })

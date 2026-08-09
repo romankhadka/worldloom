@@ -73,6 +73,106 @@ test("two visitors converge on a persisted gesture and reconstruct it after relo
   }
 })
 
+test("a settled live snapshot reconstructs the complete painted scene after reload", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    baseURL: process.env.WORLDLOOM_BASE_URL ?? "http://localhost:4002",
+    reducedMotion: "reduce",
+  })
+  const page = await context.newPage()
+  const browserFailures = monitorPage(page, "snapshot reconstruction")
+
+  try {
+    const canvas = await openWorldloom(page)
+    const beforeReload = await liveSceneDiagnostics(canvas)
+    expect(beforeReload.windowEnd).not.toBeNull()
+    expect(beforeReload.commitWatermark).toBeGreaterThan(0)
+    expect(beforeReload.scene.paintCommands.length).toBeGreaterThan(0)
+
+    await page.reload()
+    const afterReload = await liveSceneDiagnostics(canvas)
+
+    expect(afterReload).toEqual(beforeReload)
+    expect(browserFailures).toEqual([])
+  } finally {
+    await context.close()
+  }
+})
+
+test("contextual memory keeps its original occurrence time and permanent sequence link", async ({
+  page,
+}) => {
+  const browserFailures = monitorPage(page, "contextual memory")
+  const canvas = await openWorldloom(page)
+  const memoryEvents = JSON.parse(
+    (await canvas.getAttribute("data-memory-events")) ?? "[]",
+  )
+  const contextualMemory = memoryEvents.find(event => event.source === "visitor")
+  expect(contextualMemory).toBeDefined()
+
+  const memoryFormation = page.locator(`#formation-${contextualMemory.sequence}`)
+  await memoryFormation.focus()
+  await page.keyboard.press("Enter")
+
+  const permanentPath = `/chapters/${contextualMemory.occurred_at.slice(0, 10)}/${contextualMemory.sequence}`
+  await expect(page).toHaveURL(new RegExp(`${permanentPath}$`))
+  await expect(page.locator("#signal-detail .detail-meta")).toHaveText(
+    `${contextualMemory.source} · ${contextualMemory.occurred_at}`,
+  )
+  await expect(page.locator("#share-link")).toHaveValue(permanentPath)
+  expect(browserFailures).toEqual([])
+})
+
+test("a late commit advances the watermark without moving the event-time axis backward", async ({
+  page,
+}) => {
+  const browserFailures = monitorPage(page, "late commit")
+  const canvas = await openWorldloom(page)
+  const beforeCommit = await liveSceneDiagnostics(canvas)
+
+  const response = await page.request.post("/__e2e__/events/late")
+  expect(response.ok()).toBe(true)
+  const committedEvent = await response.json()
+  await expect
+    .poll(async () => Number(await canvas.getAttribute("data-commit-watermark")))
+    .toBe(committedEvent.sequence)
+
+  const afterCommit = await liveSceneDiagnostics(canvas)
+  expect(afterCommit.commitWatermark).toBeGreaterThan(beforeCommit.commitWatermark)
+  expect(Date.parse(afterCommit.windowEnd)).toBeGreaterThanOrEqual(
+    Date.parse(beforeCommit.windowEnd),
+  )
+  expect(Date.parse(afterCommit.scene.axis.start)).toBeGreaterThanOrEqual(
+    Date.parse(beforeCommit.scene.axis.start),
+  )
+  expect(afterCommit.scene.axis).toEqual(beforeCommit.scene.axis)
+  expect(afterCommit.scene.paintCommands).toEqual(
+    beforeCommit.scene.paintCommands,
+  )
+  expect(browserFailures).toEqual([])
+})
+
+test("the frozen live axis ignores browser time after deterministic activity stops", async ({
+  page,
+}) => {
+  await page.clock.install({time: new Date("2040-01-01T00:00:00Z")})
+  const browserFailures = monitorPage(page, "activity outage")
+  const canvas = await openWorldloom(page)
+  const stoppedActivity = await liveSceneDiagnostics(canvas)
+
+  await page.clock.setFixedTime(new Date("2050-01-01T00:00:00Z"))
+  await page.setViewportSize({width: 1279, height: 719})
+  await expect
+    .poll(async () => (await liveSceneDiagnostics(canvas)).scene.axis)
+    .toEqual(stoppedActivity.scene.axis)
+
+  const afterClockAdvance = await liveSceneDiagnostics(canvas)
+  expect(afterClockAdvance.windowEnd).toBe(stoppedActivity.windowEnd)
+  expect(afterClockAdvance.commitWatermark).toBe(stoppedActivity.commitWatermark)
+  expect(browserFailures).toEqual([])
+})
+
 test("the opening composition prioritizes unobstructed artwork", async ({page}) => {
   await page.goto("/")
   const introduction = page.locator("#worldloom-introduction")
@@ -272,7 +372,8 @@ test("pointer visitors place a seed on the live membrane before weaving", async 
   await expect
     .poll(async () => renderedSequence(canvas))
     .toBeGreaterThan(startingSequence)
-  await expect(page.locator("#accessible-formations button").last()).toContainText(
+  const committedSequence = await renderedSequence(canvas)
+  await expect(page.locator(`#formation-${committedSequence}`)).toContainText(
     /tugged the living edge/i,
   )
   await expect(canvas).toHaveAttribute("data-ready", "true")
@@ -357,8 +458,9 @@ test("Tug, Knot, and Illuminate commit distinct accessible formations", async ({
       await expect
         .poll(async () => renderedSequence(canvas))
         .toBeGreaterThan(startingSequence)
+      const committedSequence = await renderedSequence(canvas)
       await expect(
-        gesturePage.locator("#accessible-formations button").last(),
+        gesturePage.locator(`#formation-${committedSequence}`),
       ).toContainText(summary)
       await expect(canvas).toHaveAttribute("data-ready", "true")
       expect(browserFailures).toEqual([])
@@ -650,6 +752,19 @@ async function waitForCanvas(page) {
 
 async function renderedSequence(canvas) {
   return Number(await canvas.getAttribute("data-rendered-sequence"))
+}
+
+async function liveSceneDiagnostics(canvas) {
+  await expect(canvas).toHaveAttribute("data-ready", "true")
+  await expect(canvas).toHaveAttribute("data-scene-diagnostics", /"axis":/)
+
+  return {
+    windowEnd: await canvas.getAttribute("data-window-end"),
+    commitWatermark: Number(
+      await canvas.getAttribute("data-commit-watermark"),
+    ),
+    scene: JSON.parse(await canvas.getAttribute("data-scene-diagnostics")),
+  }
 }
 
 async function localContrastContract(page, containerSelector, textSelectors) {
