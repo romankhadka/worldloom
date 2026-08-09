@@ -85,6 +85,32 @@ defmodule Worldloom.Signals.RipeWindow do
     raise ArgumentError, "window time must be a DateTime"
   end
 
+  @spec authorize(t(), [String.t()]) :: t()
+  def authorize(%__MODULE__{} = window, approved_collectors) do
+    case validate_configured_collectors(approved_collectors) do
+      :ok ->
+        approved_fingerprints =
+          approved_collectors
+          |> Enum.map(&fingerprint/1)
+          |> MapSet.new()
+
+        pending =
+          case window.pending do
+            %__MODULE__{} = pending -> authorize(pending, approved_collectors)
+            nil -> nil
+          end
+
+        %{
+          window
+          | approved_collector_fingerprints: approved_fingerprints,
+            pending: pending
+        }
+
+      {:error, :invalid_collectors} ->
+        raise ArgumentError, "approved collectors must be one to four unique rrcNN names"
+    end
+  end
+
   @spec add(t(), map(), DateTime.t()) ::
           {:ok, t()} | {:close_required, t()} | {:drop, atom(), t()}
   def add(%__MODULE__{} = window, frame, %DateTime{} = receipt_at) when is_map(frame) do

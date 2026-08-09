@@ -137,6 +137,34 @@ defmodule Worldloom.Signals.RipeWindowTest do
     end
   end
 
+  test "reauthorizes current and pending windows without discarding aggregates" do
+    [first | _rest] = read_frames()
+    window = RipeWindow.new(~U[2026-08-08 16:00:02Z], ["rrc00", "rrc01"])
+    assert {:ok, current} = RipeWindow.add(window, first, @receipt_at)
+
+    pending_frame =
+      first
+      |> put_in(["data", "host"], "rrc01")
+      |> put_in(["data", "timestamp"], 1_786_204_806.0)
+
+    assert {:ok, with_pending} =
+             RipeWindow.add(current, pending_frame, ~U[2026-08-08 16:00:06.500000Z])
+
+    reauthorized = RipeWindow.authorize(with_pending, ["rrc00"])
+
+    assert RipeWindow.flush(reauthorized) == RipeWindow.flush(current)
+    assert MapSet.size(reauthorized.approved_collector_fingerprints) == 1
+    assert MapSet.size(reauthorized.pending.approved_collector_fingerprints) == 1
+    assert RipeWindow.flush(reauthorized.pending).announced == 3
+
+    assert {:drop, :unapproved_collector, ^reauthorized} =
+             RipeWindow.add(
+               reauthorized,
+               pending_frame,
+               ~U[2026-08-08 16:00:06.500000Z]
+             )
+  end
+
   test "aggregates official flat withdrawals and announcements by prefix occurrence" do
     [first, second | _rest] = read_frames()
     window = RipeWindow.new(~U[2026-08-08 16:00:02Z], ["rrc00", "rrc01"])

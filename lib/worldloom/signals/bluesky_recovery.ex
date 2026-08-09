@@ -57,6 +57,34 @@ defmodule Worldloom.Signals.BlueskyRecovery do
   def observe(%__MODULE__{} = recovery, _cursor, _identity_material),
     do: {:drop, :invalid_observation, recovery}
 
+  @spec commit(t(), non_neg_integer()) :: {:ok, t()} | {:error, :invalid_committed_cursor}
+  def commit(%__MODULE__{} = recovery, cursor) when is_integer(cursor) and cursor >= 0 do
+    if is_nil(recovery.committed_cursor) or cursor > recovery.committed_cursor do
+      {:ok, state(cursor)}
+    else
+      {:error, :invalid_committed_cursor}
+    end
+  end
+
+  def commit(%__MODULE__{}, _cursor), do: {:error, :invalid_committed_cursor}
+
+  @spec fork(t()) :: t()
+  def fork(%__MODULE__{} = recovery), do: state(recovery.committed_cursor)
+
+  @spec advance(t(), non_neg_integer()) :: {:ok, t()} | {:error, :invalid_committed_cursor}
+  def advance(%__MODULE__{} = recovery, cursor) when is_integer(cursor) and cursor >= 0 do
+    if is_nil(recovery.committed_cursor) or cursor > recovery.committed_cursor do
+      {:ok, %{recovery | committed_cursor: cursor}}
+    else
+      {:error, :invalid_committed_cursor}
+    end
+  end
+
+  def advance(%__MODULE__{}, _cursor), do: {:error, :invalid_committed_cursor}
+
+  @spec fingerprint_count(t()) :: non_neg_integer()
+  def fingerprint_count(%__MODULE__{} = recovery), do: MapSet.size(recovery.fingerprints)
+
   defp observe_fingerprint(recovery, fingerprint) do
     cond do
       MapSet.member?(recovery.fingerprints, fingerprint) ->

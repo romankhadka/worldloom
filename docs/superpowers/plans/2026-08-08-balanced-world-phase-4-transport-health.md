@@ -18,10 +18,17 @@
 - `lib/worldloom/signals/safe_endpoint.ex`
 - `lib/worldloom/signals/websocket_transport.ex`
 - `lib/worldloom/signals/bluesky_socket.ex`
+- `lib/worldloom/signals/bluesky_socket/state.ex`
 - `lib/worldloom/signals/ripe_socket.ex`
+- `lib/worldloom/signals/ripe_socket/state.ex`
 - `lib/worldloom/signals/solana_socket.ex`
+- `lib/worldloom/signals/solana_socket/state.ex`
 - `lib/worldloom/signals/drand_worker.ex`
+- `test/support/fake_websocket_transport.ex`
+- `test/support/signals_supervisor_probe.ex`
 - `test/support/websocket_fixture_server.ex`
+- `test/support/websocket_fixture_server/router.ex`
+- `test/support/websocket_fixture_server/socket.ex`
 - `test/support/fixtures/tls/localhost_ca.pem`
 - `test/support/fixtures/tls/localhost_certificate.pem`
 - `test/support/fixtures/tls/localhost_key.pem`
@@ -299,11 +306,11 @@ rtk git commit -m "Merge source pressure with associative summaries"
 
 ## Task 5: Implement bounded source-specific WebSocket processes
 
-- [ ] **Step 1: Create safe endpoint tests**
+- [x] **Step 1: Create safe endpoint tests**
 
 Create `test/worldloom/signals/safe_endpoint_test.exs`. Assert `SafeEndpoint.label/1` preserves scheme, host, port, and path but strips query, fragment, userinfo, and cursor. Reject non-`wss` production endpoints.
 
-- [ ] **Step 2: Build fake WebSocket edge tests first**
+- [x] **Step 2: Build fake WebSocket edge tests first**
 
 Create `test/support/websocket_fixture_server.ex` as a local Bandit/WebSock server. Put shared transport coverage in `websocket_transport_test.exs` so provider tests remain focused on subscriptions, aggregation, recovery, and end-to-end privacy markers. Prove:
 
@@ -321,13 +328,13 @@ Create `test/support/websocket_fixture_server.ex` as a local Bandit/WebSock serv
 - reconnect closes old state and ignores messages and request references from stale connections; and
 - errors containing frame, cursor, URL query, header, body, or provider-reason markers collapse to fixed atoms before logs, Worldloom telemetry, or health output.
 
-- [ ] **Step 3: Run and verify RED**
+- [x] **Step 3: Run and verify RED**
 
 ```bash
 rtk mix test test/worldloom/signals/safe_endpoint_test.exs test/worldloom/signals/websocket_transport_test.exs test/worldloom/signals/bluesky_socket_test.exs test/worldloom/signals/ripe_socket_test.exs test/worldloom/signals/solana_socket_test.exs
 ```
 
-- [ ] **Step 4: Implement the processless helper and three explicit source GenServers**
+- [x] **Step 4: Implement the processless helper and three explicit source GenServers**
 
 Create `WebSocketTransport` for connect, upgrade, stream/decode, encode/send, close, and fixed coarse error mapping. It owns no process or provider policy. Force HTTP/1 active mode (`active: :once` inside Mint), `log: false`, a 16 KiB response-header cap, finite connect/send/upgrade timeouts, peer verification, hostname/SNI, and operating-system certificate authorities. Never accept caller options that disable verification, enable logging, or weaken the caps.
 
@@ -347,11 +354,11 @@ For Bluesky overlap deduplication, the canonical fingerprint material is the JSO
 
 One source-local timer may call `handle_info(:flush_window, state)` once per second. It closes only windows past the one-second lateness grace; a non-empty window submits its one sanitized event and checkpoint, while an empty elapsed window submits `[]` and the checkpoint. RIPE and Solana call their explicit `close/2`, submit the completed aggregate and checkpoint synchronously, and install the returned next state only after successful durability. The Solana checkpoint is the last accepted slot represented by the completed transition, never a merely received slot. When either reducer's `add/3` returns `{:close_required, state}`, the same complete frame remains on the handler stack while this close/submit transition succeeds and is then retried with the same receipt time; it is never put in a process message. Timer messages are lifecycle control, not deferred raw-frame work.
 
-- [ ] **Step 5: Verify isolation and commit**
+- [x] **Step 5: Verify isolation and commit**
 
 ```bash
-rtk mix test test/worldloom/signals/safe_endpoint_test.exs test/worldloom/signals/websocket_transport_test.exs test/worldloom/signals/bluesky_socket_test.exs test/worldloom/signals/ripe_socket_test.exs test/worldloom/signals/solana_socket_test.exs test/worldloom/signals/supervisor_test.exs
-rtk git add lib/worldloom/signals/safe_endpoint.ex lib/worldloom/signals/websocket_transport.ex lib/worldloom/signals/bluesky_socket.ex lib/worldloom/signals/ripe_socket.ex lib/worldloom/signals/solana_socket.ex test/support/websocket_fixture_server.ex test/support/fixtures/tls/localhost_ca.pem test/support/fixtures/tls/localhost_certificate.pem test/support/fixtures/tls/localhost_key.pem test/worldloom/signals/safe_endpoint_test.exs test/worldloom/signals/websocket_transport_test.exs test/worldloom/signals/bluesky_socket_test.exs test/worldloom/signals/ripe_socket_test.exs test/worldloom/signals/solana_socket_test.exs test/worldloom/signals/supervisor_test.exs
+rtk mix test test/worldloom/signals/safe_endpoint_test.exs test/worldloom/signals/websocket_transport_test.exs test/worldloom/signals/bluesky_recovery_test.exs test/worldloom/signals/bluesky_socket_test.exs test/worldloom/signals/ripe_window_test.exs test/worldloom/signals/ripe_socket_test.exs test/worldloom/signals/solana_socket_test.exs test/worldloom/signals/socket_privacy_test.exs test/worldloom/signals/supervisor_test.exs
+rtk git add docs/data-sources.md docs/superpowers/plans/2026-08-08-balanced-world-phase-4-transport-health.md lib/worldloom/signals/safe_endpoint.ex lib/worldloom/signals/websocket_transport.ex lib/worldloom/signals/bluesky_recovery.ex lib/worldloom/signals/bluesky_socket.ex lib/worldloom/signals/bluesky_socket/state.ex lib/worldloom/signals/ripe_window.ex lib/worldloom/signals/ripe_socket.ex lib/worldloom/signals/ripe_socket/state.ex lib/worldloom/signals/solana_socket.ex lib/worldloom/signals/solana_socket/state.ex test/support/fake_websocket_transport.ex test/support/signals_supervisor_probe.ex test/support/websocket_fixture_server.ex test/support/websocket_fixture_server/router.ex test/support/websocket_fixture_server/socket.ex test/support/fixtures/tls/localhost_ca.pem test/support/fixtures/tls/localhost_certificate.pem test/support/fixtures/tls/localhost_key.pem test/worldloom/signals/safe_endpoint_test.exs test/worldloom/signals/websocket_transport_test.exs test/worldloom/signals/bluesky_recovery_test.exs test/worldloom/signals/bluesky_socket_test.exs test/worldloom/signals/ripe_window_test.exs test/worldloom/signals/ripe_socket_test.exs test/worldloom/signals/solana_socket_test.exs test/worldloom/signals/socket_privacy_test.exs test/worldloom/signals/supervisor_test.exs
 rtk git commit -m "Isolate bounded public WebSocket transports"
 ```
 

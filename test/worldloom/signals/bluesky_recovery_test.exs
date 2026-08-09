@@ -53,7 +53,7 @@ defmodule Worldloom.Signals.BlueskyRecoveryTest do
         next_recovery
       end)
 
-    assert MapSet.size(full_recovery.fingerprints) == 4_096
+    assert BlueskyRecovery.fingerprint_count(full_recovery) == 4_096
     assert Enum.all?(full_recovery.fingerprints, &(byte_size(&1) == 32))
 
     assert {:drop, :duplicate, ^full_recovery} =
@@ -87,6 +87,33 @@ defmodule Worldloom.Signals.BlueskyRecoveryTest do
 
     assert {:replay, ^replay_cursor, %BlueskyRecovery{}} =
              BlueskyRecovery.new(receipt_cursor - 60_000_000, receipt_at)
+  end
+
+  test "commits a durable cursor and clears its bounded overlap fingerprints" do
+    receipt_at = ~U[2026-08-08 16:00:30Z]
+    committed_cursor = DateTime.to_unix(receipt_at, :microsecond) - 10_000_000
+    assert {:replay, _cursor, recovery} = BlueskyRecovery.new(committed_cursor, receipt_at)
+
+    assert {:ok, observed} = BlueskyRecovery.observe(recovery, committed_cursor + 1, "identity")
+
+    assert {:ok, committed} = BlueskyRecovery.commit(observed, committed_cursor + 1)
+    assert committed.committed_cursor == committed_cursor + 1
+    assert committed.fingerprints == MapSet.new()
+
+    assert BlueskyRecovery.commit(committed, committed_cursor) ==
+             {:error, :invalid_committed_cursor}
+  end
+
+  test "forks a successor set and advances its commit boundary without clearing it" do
+    receipt_at = ~U[2026-08-08 16:00:30Z]
+    committed_cursor = DateTime.to_unix(receipt_at, :microsecond) - 10_000_000
+    assert {:replay, _cursor, recovery} = BlueskyRecovery.new(committed_cursor, receipt_at)
+    successor = BlueskyRecovery.fork(recovery)
+    assert {:ok, successor} = BlueskyRecovery.observe(successor, committed_cursor + 2, "next")
+
+    assert {:ok, advanced} = BlueskyRecovery.advance(successor, committed_cursor + 1)
+    assert advanced.committed_cursor == committed_cursor + 1
+    assert advanced.fingerprints == successor.fingerprints
   end
 
   test "inspection exposes neither raw cursors nor identity material" do

@@ -133,6 +133,17 @@ self-hosted secure endpoint is separately approved. No production Solana URL is
 hidden in Worldloom configuration, and the public development endpoints are not an
 approved production dependency.
 
+### WebSocket resource boundary
+
+Worldloom rejects any completed WebSocket application frame above 262,144 decoded
+bytes and any one socket delivery containing more than 100 completed frames before
+provider parsing. Fragmented messages are checked as soon as Mint finishes
+reassembly; this is necessarily a post-allocation limit for Mint's internal fragment
+buffer. The owning process's two-million-word heap limit and 100-message mailbox
+limit provide the surrounding failure boundary. A limit violation disconnects only
+that source process, and logs, telemetry, health, and process inspection retain only
+fixed coarse reasons rather than frames or endpoint credentials.
+
 ### drand Quicknet
 
 Sources: [drand Quicknet](https://docs.drand.love/blog/2023/10/16/quicknet-is-live/)
