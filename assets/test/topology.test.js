@@ -1,7 +1,42 @@
 import assert from "node:assert/strict"
+import {readFileSync} from "node:fs"
 import test from "node:test"
 
 import {buildTopology} from "../js/worldloom/topology.js"
+
+const versionTwoContract = JSON.parse(
+  readFileSync(
+    new URL("../../test/support/fixtures/render_contract_v2.json", import.meta.url),
+    "utf8",
+  ),
+)
+
+const assertFiniteTopology = topology => {
+  const visit = current => {
+    if (typeof current === "number") assert.ok(Number.isFinite(current))
+    if (Array.isArray(current)) current.forEach(visit)
+    if (current && typeof current === "object") Object.values(current).forEach(visit)
+  }
+
+  visit(topology)
+  for (const collection of [
+    topology.spine,
+    topology.anchors,
+    topology.edges,
+    topology.formations,
+    topology.fallbacks,
+  ]) {
+    assert.ok(collection.length <= 600)
+  }
+}
+
+const assertBoundedFallback = fallback => {
+  assert.ok(fallback.lane >= 0 && fallback.lane <= 1)
+  assert.ok(fallback.intensity >= 0 && fallback.intensity <= 1)
+  assert.ok(fallback.visual.spread >= 0 && fallback.visual.spread <= 1)
+  assert.ok(fallback.visual.bend >= -1 && fallback.visual.bend <= 1)
+  assert.ok(fallback.visual.pulse >= 0 && fallback.visual.pulse <= 1)
+}
 
 const sourceForKind = kind => {
   if (kind === "wikimedia") return "wikimedia"
@@ -149,6 +184,98 @@ test("keeps malformed and unsupported instructions as bounded fallbacks", () => 
 
   assert.equal(topology.fallbacks.length, 2)
   assert.equal(topology.anchors.length, 1)
+})
+
+test("preserves the legacy finite visual and intensity contract for version one", () => {
+  const legacyInstruction = instruction(1, "wikimedia", {
+    intensity: 3,
+    visual: {spread: 2, bend: -4, pulse: 5},
+  })
+
+  const topology = buildTopology([legacyInstruction])
+
+  assert.equal(topology.fallbacks.length, 0)
+  assert.equal(topology.spine.length, 1)
+  assert.equal(topology.anchors.length, 1)
+  assert.equal(topology.anchors[0].intensity, 3)
+  assert.deepEqual(topology.anchors[0].visual, legacyInstruction.visual)
+  assertFiniteTopology(topology)
+})
+
+test("renders every version two contract instruction as a deterministic neutral fiber fallback", () => {
+  for (const contractInstruction of versionTwoContract) {
+    const first = buildTopology([contractInstruction])
+    const second = buildTopology([structuredClone(contractInstruction)])
+
+    assert.deepEqual(second, first)
+    assert.equal(first.fallbacks.length, 1)
+    assert.equal(first.fallbacks[0].kind, contractInstruction.kind)
+    assert.equal(first.fallbacks[0].source, contractInstruction.source)
+    assertBoundedFallback(first.fallbacks[0])
+    assertFiniteTopology(first)
+  }
+})
+
+test("neutralizes mismatched or malformed version two contracts", () => {
+  const [bluesky, ripeRis, solana, drand] = versionTwoContract
+  const malformed = [
+    {...structuredClone(bluesky), source: "ripe_ris"},
+    {
+      ...structuredClone(bluesky),
+      metrics: {...bluesky.metrics, private_identifier: 1},
+    },
+    {
+      ...structuredClone(bluesky),
+      metrics: {...bluesky.metrics, truncated: "false"},
+    },
+    {
+      ...structuredClone(ripeRis),
+      metrics: {...ripeRis.metrics, window_span_seconds: 4},
+    },
+    {
+      ...structuredClone(solana),
+      metrics: {...solana.metrics, first_slot: solana.metrics.last_slot + 1},
+    },
+    {
+      ...structuredClone(drand),
+      metrics: {...drand.metrics, round: 0},
+    },
+    {
+      ...structuredClone(drand),
+      metrics: {...drand.metrics, round: 4_294_967_296},
+    },
+  ].map((contractInstruction, index) => ({
+    ...contractInstruction,
+    sequence: 300 + index,
+  }))
+
+  const topology = buildTopology(malformed)
+
+  assert.equal(topology.fallbacks.length, malformed.length)
+  for (const fallback of topology.fallbacks) {
+    assert.equal(fallback.kind, "fallback")
+    assert.equal(fallback.source, "visitor")
+    assertBoundedFallback(fallback)
+  }
+  assertFiniteTopology(topology)
+})
+
+test("keeps unsupported positive render versions as finite semantic fallbacks", () => {
+  const futureInstruction = {
+    ...structuredClone(versionTwoContract[0]),
+    render_version: 99,
+    lane: -20,
+    intensity: 40,
+    visual: {spread: 80, bend: -90, pulse: 100},
+  }
+
+  const topology = buildTopology([futureInstruction])
+  const [fallback] = topology.fallbacks
+
+  assert.equal(fallback.kind, futureInstruction.kind)
+  assert.equal(fallback.source, futureInstruction.source)
+  assertBoundedFallback(fallback)
+  assertFiniteTopology(topology)
 })
 
 test("caps topology at the newest six hundred instructions", () => {

@@ -1,8 +1,22 @@
-const supportedRenderVersion = 1
 const maximumInstructions = 600
 const laneReach = 0.34
 const maximumSequenceGap = 12
 const maximumSpineLaneDelta = 0.25
+const uint32Maximum = 4_294_967_295
+const versionOnePairs = new Set([
+  "wikimedia\0wikimedia",
+  "usgs\0earthquake",
+  "open_meteo\0weather",
+  "visitor\0tug",
+  "visitor\0knot",
+  "visitor\0illuminate",
+])
+const versionTwoPairs = new Set([
+  "bluesky\0public_activity",
+  "ripe_ris\0route_change",
+  "solana\0slot",
+  "drand\0randomness",
+])
 
 export function buildTopology(instructions) {
   const topology = {
@@ -15,8 +29,13 @@ export function buildTopology(instructions) {
   }
 
   for (const instruction of uniqueInstructions(instructions).slice(-maximumInstructions)) {
-    if (!validInstruction(instruction)) {
-      topology.fallbacks.push(fallbackFor(instruction))
+    const support = instructionSupport(instruction)
+    if (support === "invalid") {
+      topology.fallbacks.push(fallbackFor(instruction, false))
+      continue
+    }
+    if (support === "future") {
+      topology.fallbacks.push(fallbackFor(instruction, true))
       continue
     }
 
@@ -40,8 +59,14 @@ export function buildTopology(instructions) {
       case "illuminate":
         applyIlluminate(topology, instruction)
         break
+      case "public_activity":
+      case "route_change":
+      case "slot":
+      case "randomness":
+        topology.fallbacks.push(fallbackFor(instruction, true))
+        break
       default:
-        topology.fallbacks.push(fallbackFor(instruction))
+        topology.fallbacks.push(fallbackFor(instruction, false))
     }
   }
 
@@ -290,33 +315,141 @@ function edgeFor(from, to, branchId, role) {
   }
 }
 
-function validInstruction(instruction) {
-  return instruction &&
-    instruction.render_version === supportedRenderVersion &&
-    Number.isSafeInteger(instruction.sequence) &&
-    instruction.sequence > 0 &&
-    Number.isFinite(instruction.lane) &&
-    instruction.lane >= 0 &&
-    instruction.lane <= 1 &&
-    Number.isFinite(instruction.intensity) &&
-    instruction.visual &&
-    [instruction.visual.spread, instruction.visual.bend, instruction.visual.pulse].every(Number.isFinite)
+function instructionSupport(instruction) {
+  const pair = `${instruction?.source}\0${instruction?.kind}`
+  const knownPair = versionOnePairs.has(pair) || versionTwoPairs.has(pair)
+  if (Number.isSafeInteger(instruction?.render_version) &&
+      instruction.render_version > 2 && knownPair) return "future"
+
+  if (!validLegacyInstructionFields(instruction)) return "invalid"
+  if (instruction.render_version === 1 && versionOnePairs.has(pair)) return "supported"
+  if (instruction.render_version === 2 &&
+      versionTwoPairs.has(pair) &&
+      validVersionTwoInstructionFields(instruction) &&
+      validVersionTwoMetrics(instruction.source, instruction.metrics)) return "supported"
+
+  return "invalid"
 }
 
-function fallbackFor(instruction) {
-  return {
-    sequence: Number.isSafeInteger(instruction?.sequence) ? instruction.sequence : 0,
-    lane: Number.isFinite(instruction?.lane) ? instruction.lane : 0.5,
-    source: instruction?.source ?? "visitor",
-    intensity: Number.isFinite(instruction?.intensity) ? instruction.intensity : 0.5,
-    visual: validVisual(instruction?.visual)
-      ? instruction.visual
-      : {spread: 0.5, bend: 0, pulse: 0.5},
+function validLegacyInstructionFields(instruction) {
+  return instruction &&
+    Number.isSafeInteger(instruction.sequence) &&
+    instruction.sequence > 0 &&
+    boundedUnitNumber(instruction.lane) &&
+    Number.isFinite(instruction.intensity) &&
+    finiteVisual(instruction.visual)
+}
+
+function validVersionTwoInstructionFields(instruction) {
+  return boundedUnitNumber(instruction.intensity) && boundedVisual(instruction.visual)
+}
+
+function validVersionTwoMetrics(source, metrics) {
+  if (!metrics || typeof metrics !== "object" || Array.isArray(metrics)) return false
+
+  switch (source) {
+    case "bluesky":
+      return validWindowMetrics(
+        metrics,
+        [
+          "window_count",
+          "window_span_seconds",
+          "total_actions",
+          "original_posts",
+          "replies",
+          "reposts",
+          "creates",
+          "updates",
+          "deletes",
+        ],
+        ["truncated"],
+      )
+    case "ripe_ris":
+      return validWindowMetrics(
+        metrics,
+        [
+          "window_count",
+          "window_span_seconds",
+          "announced",
+          "withdrawn",
+          "ipv4",
+          "ipv6",
+          "collector_count",
+          "peer_count",
+        ],
+        ["truncated"],
+      )
+    case "solana":
+      return validWindowMetrics(
+        metrics,
+        [
+          "window_count",
+          "window_span_seconds",
+          "slot_count",
+          "first_slot",
+          "last_slot",
+          "gap_count",
+        ],
+      ) && metrics.first_slot <= metrics.last_slot
+    case "drand":
+      return exactKeys(metrics, ["round"]) && uint32(metrics.round) && metrics.round > 0
+    default:
+      return false
   }
 }
 
-function validVisual(visual) {
+function validWindowMetrics(metrics, numberKeys, booleanKeys = []) {
+  return exactKeys(metrics, [...numberKeys, ...booleanKeys]) &&
+    numberKeys.every(key => uint32(metrics[key])) &&
+    booleanKeys.every(key => typeof metrics[key] === "boolean") &&
+    metrics.window_count > 0 &&
+    metrics.window_span_seconds === metrics.window_count * 4
+}
+
+function exactKeys(object, expectedKeys) {
+  const actualKeys = Object.keys(object)
+  return actualKeys.length === expectedKeys.length &&
+    expectedKeys.every(key => Object.hasOwn(object, key))
+}
+
+function uint32(number) {
+  return Number.isInteger(number) && number >= 0 && number <= uint32Maximum
+}
+
+function fallbackFor(instruction, semantic) {
+  return {
+    sequence: Number.isSafeInteger(instruction?.sequence) && instruction.sequence > 0
+      ? instruction.sequence
+      : 0,
+    kind: semantic ? instruction.kind : "fallback",
+    lane: clampNumber(instruction?.lane, 0, 1, 0.5),
+    source: semantic ? instruction.source : "visitor",
+    intensity: clampNumber(instruction?.intensity, 0, 1, 0.5),
+    visual: {
+      spread: clampNumber(instruction?.visual?.spread, 0, 1, 0.5),
+      bend: clampNumber(instruction?.visual?.bend, -1, 1, 0),
+      pulse: clampNumber(instruction?.visual?.pulse, 0, 1, 0.5),
+    },
+  }
+}
+
+function finiteVisual(visual) {
   return visual && [visual.spread, visual.bend, visual.pulse].every(Number.isFinite)
+}
+
+function boundedVisual(visual) {
+  return visual &&
+    boundedUnitNumber(visual.spread) &&
+    Number.isFinite(visual.bend) && visual.bend >= -1 && visual.bend <= 1 &&
+    boundedUnitNumber(visual.pulse)
+}
+
+function boundedUnitNumber(number) {
+  return Number.isFinite(number) && number >= 0 && number <= 1
+}
+
+function clampNumber(number, minimum, maximum, fallback) {
+  return Number.isFinite(number) ? Math.min(maximum, Math.max(minimum, number)) : fallback
 }
 
 function uniqueInstructions(instructions) {
