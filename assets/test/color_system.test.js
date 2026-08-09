@@ -12,10 +12,42 @@ const expectedTokens = new Map([
   ["health-live", "#86d29d"], ["health-disconnected", "#f08268"],
   ["health-disabled", "#9f8c82"],
 ])
+const expectedRgbCompanions = new Map([
+  ["lacquer-deep-rgb", "18 7 8"], ["lacquer-rgb", "36 16 19"],
+  ["wine-rgb", "53 23 26"], ["wine-raised-rgb", "75 32 32"],
+  ["bone-rgb", "246 226 197"], ["parchment-rgb", "203 184 159"],
+  ["saffron-rgb", "227 165 58"], ["jade-rgb", "77 182 154"],
+  ["copper-rgb", "224 114 69"], ["olive-jade-rgb", "141 165 110"],
+])
+const expectedThemeMirrors = new Map([
+  ["lacquer", "#241013"], ["bone", "#f6e2c5"], ["jade", "#4db69a"],
+  ["copper", "#e07245"], ["olive-jade", "#8da56e"], ["saffron", "#e3a53a"],
+])
+
+function declarationBlock(selector) {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  const match = css.match(new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`))
+  assert.ok(match, `missing CSS declaration block for ${selector}`)
+  return match[1]
+}
 
 test("declares every approved Lacquered Gallery token", () => {
   for (const [name, color] of expectedTokens) {
     assert.match(css.toLowerCase(), new RegExp(`--loom-${name}:\\s*${color}`))
+  }
+})
+
+test("declares every approved RGB companion", () => {
+  for (const [name, channels] of expectedRgbCompanions) {
+    const channelPattern = channels.split(" ").join("\\s+")
+    assert.match(css, new RegExp(`--loom-${name}:\\s*${channelPattern}\\s*;`))
+  }
+})
+
+test("mirrors the approved foundation colors into the Tailwind theme", () => {
+  const theme = declarationBlock("@theme")
+  for (const [name, color] of expectedThemeMirrors) {
+    assert.match(theme.toLowerCase(), new RegExp(`--color-loom-${name}:\\s*${color}\\s*;`))
   }
 })
 
@@ -33,10 +65,12 @@ test("removes the previous foundation colors", () => {
 })
 
 test("routes component colors through semantic tokens", () => {
-  const componentRules = css.slice(css.indexOf("@property --cooldown-progress"))
+  const componentStart = css.indexOf("@property --cooldown-progress")
+  assert.ok(componentStart >= 0, "missing @property --cooldown-progress sentinel")
+  const componentRules = css.slice(componentStart)
   assert.equal(/#[0-9a-f]{3,8}/i.test(componentRules), false)
-  assert.match(css, /\.worldloom-shell\s*\{[\s\S]*var\(--loom-lacquer-deep\)/)
-  assert.match(css, /\.gesture-button:hover\s*\{[\s\S]*var\(--loom-wine-raised\)/)
-  assert.match(css, /\[data-health-state="live"\][\s\S]*var\(--loom-health-live\)/)
-  assert.match(css, /\[data-shape="intervention"\][\s\S]*var\(--loom-visitor\)/)
+  assert.match(declarationBlock(".worldloom-shell"), /var\(--loom-lacquer-deep\)/)
+  assert.match(declarationBlock(".gesture-button:hover"), /var\(--loom-wine-raised\)/)
+  assert.match(declarationBlock('[data-health-state="live"] .legend-health'), /var\(--loom-health-live\)/)
+  assert.match(declarationBlock('[data-shape="intervention"]'), /var\(--loom-visitor\)/)
 })
