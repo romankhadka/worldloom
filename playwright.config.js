@@ -26,10 +26,10 @@ export default defineConfig({
     ? undefined
     : {
         command:
-          "env MIX_ENV=test WORLDLOOM_E2E=true WORLDLOOM_FEEDS_ENABLED=false mix ecto.reset && " +
-          "env MIX_ENV=test WORLDLOOM_E2E=true WORLDLOOM_FEEDS_ENABLED=false mix worldloom.seed_demo && " +
-          "env MIX_ENV=test WORLDLOOM_E2E=true WORLDLOOM_FEEDS_ENABLED=false mix assets.build && " +
-          "env MIX_ENV=test WORLDLOOM_E2E=true WORLDLOOM_FEEDS_ENABLED=false mix phx.server",
+          "env MIX_BUILD_PATH=_build/e2e MIX_ENV=test WORLDLOOM_E2E=true WORLDLOOM_FEEDS_ENABLED=false mix ecto.reset && " +
+          "env MIX_BUILD_PATH=_build/e2e MIX_ENV=test WORLDLOOM_E2E=true WORLDLOOM_FEEDS_ENABLED=false mix worldloom.seed_demo && " +
+          "env MIX_BUILD_PATH=_build/e2e MIX_ENV=test WORLDLOOM_E2E=true WORLDLOOM_FEEDS_ENABLED=false mix assets.build && " +
+          "env MIX_BUILD_PATH=_build/e2e MIX_ENV=test WORLDLOOM_E2E=true WORLDLOOM_FEEDS_ENABLED=false mix phx.server",
         url: `${localBaseURL}/healthz`,
         reuseExistingServer: false,
         timeout: 120_000,

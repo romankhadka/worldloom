@@ -46,7 +46,7 @@ export class Renderer {
     this.newerEventsDropped = false
     this.pointerX = null
     this.touchX = null
-    this.selectionIndex = -1
+    this.pendingSelectionSequence = null
     this.targetLane = 0.5
     this.selectedSequence = null
     this.viewerPulses = 0
@@ -195,6 +195,7 @@ export class Renderer {
       projectionInstructions: [...scaffoldOnly, ...this.events],
       hitInstructions: this.events,
     }).slice(-maximumCommands)
+    this.reconcilePendingSelection()
     const availableTransitions = transitionSequences(this.commands)
     for (const sequence of this.activeTransitions.keys()) {
       if (!availableTransitions.has(sequence)) this.activeTransitions.delete(sequence)
@@ -349,17 +350,36 @@ export class Renderer {
 
   selectNext(direction) {
     const sequences = [...new Set(selectableCommands(this.commands).map(item => item.sequence))]
-    if (sequences.length === 0) return null
+    if (sequences.length === 0) {
+      this.pendingSelectionSequence = null
+      return null
+    }
 
-    this.selectionIndex =
-      (this.selectionIndex + direction + sequences.length) % sequences.length
-    return sequences[this.selectionIndex]
+    const step = direction < 0 ? -1 : 1
+    const currentIndex = sequences.indexOf(this.pendingSelectionSequence)
+    const nextIndex = currentIndex === -1
+      ? (step === 1 ? 0 : sequences.length - 1)
+      : (currentIndex + step + sequences.length) % sequences.length
+    this.pendingSelectionSequence = sequences[nextIndex]
+    return this.pendingSelectionSequence
   }
 
   activateSelection() {
     const sequences = [...new Set(selectableCommands(this.commands).map(item => item.sequence))]
-    const sequence = sequences[this.selectionIndex]
-    if (sequence !== undefined) this.onSelect(sequence)
+    if (sequences.includes(this.pendingSelectionSequence)) {
+      this.onSelect(this.pendingSelectionSequence)
+    }
+  }
+
+  reconcilePendingSelection() {
+    if (this.pendingSelectionSequence === null) return
+
+    const selectableSequences = new Set(
+      selectableCommands(this.commands).map(command => command.sequence),
+    )
+    if (!selectableSequences.has(this.pendingSelectionSequence)) {
+      this.pendingSelectionSequence = null
+    }
   }
 
   setViewerCount(viewerCount) {
@@ -409,6 +429,7 @@ export class Renderer {
     this.historyInstructions = []
     this.scaffold = []
     this.liveScaffold = []
+    this.pendingSelectionSequence = null
     this.cacheCanvas = null
     this.cacheContext = null
   }

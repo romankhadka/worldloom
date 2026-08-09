@@ -509,6 +509,76 @@ test("supports hit testing and keyboard formation traversal", () => {
   assert.deepEqual(selected, [2])
 })
 
+test("does not activate a replacement row after the pending keyboard target disappears", () => {
+  const selected = []
+  const renderer = new Renderer(null, {
+    width: 800,
+    height: 600,
+    onSelect: sequence => selected.push(sequence),
+  })
+  renderer.setSnapshot(snapshotEnvelope([instruction(1), instruction(2)]))
+  assert.equal(renderer.selectNext(1), 1)
+
+  renderer.setSnapshot(snapshotEnvelope([instruction(2), instruction(3)]))
+  renderer.activateSelection()
+
+  assert.deepEqual(selected, [])
+  assert.equal(renderer.pendingSelectionSequence, null)
+})
+
+test("activates the same pending sequence when a snapshot inserts memory before it", () => {
+  const selected = []
+  const renderer = new Renderer(null, {
+    width: 800,
+    height: 600,
+    onSelect: sequence => selected.push(sequence),
+  })
+  const display = [instruction(1), instruction(2)]
+  renderer.setSnapshot(snapshotEnvelope(display))
+  assert.equal(renderer.selectNext(1), 1)
+
+  renderer.setSnapshot(snapshotEnvelope(display, {
+    memoryEvents: [{
+      ...instruction(99),
+      kind: "illuminate",
+      source: "visitor",
+      occurred_at: "2026-08-08T11:55:00Z",
+    }],
+  }))
+  renderer.activateSelection()
+
+  assert.deepEqual(selected, [1])
+})
+
+test("cycles through memory and history by identity and clears history on return live", () => {
+  const selected = []
+  const renderer = new Renderer(null, {
+    width: 800,
+    height: 600,
+    reducedMotion: true,
+    onSelect: sequence => selected.push(sequence),
+  })
+  renderer.setSnapshot(structuredClone(balancedSnapshot))
+  assert.equal(renderer.selectNext(1), balancedSnapshot.memory_events[0].sequence)
+  renderer.activateSelection()
+  assert.deepEqual(selected, [balancedSnapshot.memory_events[0].sequence])
+  selected.length = 0
+
+  const historical = {...instruction(800), occurred_at: "2026-08-08T11:59:00Z"}
+  renderer.panBy(100)
+  renderer.prependHistory([historical])
+  for (let attempt = 0; attempt < 10 && renderer.pendingSelectionSequence !== 800; attempt++) {
+    renderer.selectNext(1)
+  }
+  assert.equal(renderer.pendingSelectionSequence, 800)
+
+  renderer.returnLive()
+  renderer.activateSelection()
+
+  assert.equal(renderer.pendingSelectionSequence, null)
+  assert.deepEqual(selected, [])
+})
+
 test("keeps the living spine visible through a trailing visitor surge", () => {
   const selected = []
   const renderer = new Renderer(null, {

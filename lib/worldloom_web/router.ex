@@ -30,7 +30,7 @@ defmodule WorldloomWeb.Router do
     get "/healthz", HealthController, :index
   end
 
-  if Mix.env() == :test do
+  if Mix.env() == :test and Application.compile_env(:worldloom, :e2e_routes, false) do
     scope "/__e2e__", WorldloomWeb do
       pipe_through :api
 

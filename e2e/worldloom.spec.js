@@ -1,5 +1,10 @@
 import {expect, test} from "@playwright/test"
 
+const externalBaseURL = process.env.WORLDLOOM_BASE_URL
+const deterministicHarnessAvailable =
+  !externalBaseURL || process.env.WORLDLOOM_E2E_HARNESS === "true"
+const deterministicHarnessTest = deterministicHarnessAvailable ? test : test.skip
+
 test("two visitors converge on a persisted gesture and reconstruct it after reload", async ({
   browser,
 }) => {
@@ -73,7 +78,7 @@ test("two visitors converge on a persisted gesture and reconstruct it after relo
   }
 })
 
-test("a settled live snapshot reconstructs the complete painted scene after reload", async ({
+deterministicHarnessTest("a settled live snapshot reconstructs the complete painted scene after reload", async ({
   browser,
 }) => {
   const context = await browser.newContext({
@@ -100,7 +105,7 @@ test("a settled live snapshot reconstructs the complete painted scene after relo
   }
 })
 
-test("contextual memory keeps its original occurrence time and permanent sequence link", async ({
+deterministicHarnessTest("contextual memory keeps its original occurrence time and permanent sequence link", async ({
   page,
 }) => {
   const browserFailures = monitorPage(page, "contextual memory")
@@ -124,7 +129,7 @@ test("contextual memory keeps its original occurrence time and permanent sequenc
   expect(browserFailures).toEqual([])
 })
 
-test("a late commit advances the watermark without moving the event-time axis backward", async ({
+deterministicHarnessTest("a late commit advances the watermark without moving the event-time axis backward", async ({
   page,
 }) => {
   const browserFailures = monitorPage(page, "late commit")
@@ -153,23 +158,36 @@ test("a late commit advances the watermark without moving the event-time axis ba
   expect(browserFailures).toEqual([])
 })
 
-test("the frozen live axis ignores browser time after deterministic activity stops", async ({
+deterministicHarnessTest("the frozen live axis ignores browser time after deterministic activity stops", async ({
   page,
 }) => {
   await page.clock.install({time: new Date("2040-01-01T00:00:00Z")})
   const browserFailures = monitorPage(page, "activity outage")
   const canvas = await openWorldloom(page)
+  const beforeActivityWatermark = Number(
+    await canvas.getAttribute("data-commit-watermark"),
+  )
+  await page.getByRole("button", {name: "Illuminate", exact: true}).click()
+  await expect
+    .poll(async () => Number(await canvas.getAttribute("data-commit-watermark")))
+    .toBeGreaterThan(beforeActivityWatermark)
+
   const stoppedActivity = await liveSceneDiagnostics(canvas)
+  const originalViewport = page.viewportSize()
 
   await page.clock.setFixedTime(new Date("2050-01-01T00:00:00Z"))
-  await page.setViewportSize({width: 1279, height: 719})
+  await page.setViewportSize({
+    width: originalViewport.width - 1,
+    height: originalViewport.height - 1,
+  })
   await expect
-    .poll(async () => (await liveSceneDiagnostics(canvas)).scene.axis)
-    .toEqual(stoppedActivity.scene.axis)
+    .poll(async () => (await readLiveSceneDiagnostics(canvas)).scene.viewport)
+    .not.toEqual(stoppedActivity.scene.viewport)
+  await page.setViewportSize(originalViewport)
+  await expect
+    .poll(async () => readLiveSceneDiagnostics(canvas))
+    .toEqual(stoppedActivity)
 
-  const afterClockAdvance = await liveSceneDiagnostics(canvas)
-  expect(afterClockAdvance.windowEnd).toBe(stoppedActivity.windowEnd)
-  expect(afterClockAdvance.commitWatermark).toBe(stoppedActivity.commitWatermark)
   expect(browserFailures).toEqual([])
 })
 
@@ -758,6 +776,10 @@ async function liveSceneDiagnostics(canvas) {
   await expect(canvas).toHaveAttribute("data-ready", "true")
   await expect(canvas).toHaveAttribute("data-scene-diagnostics", /"axis":/)
 
+  return readLiveSceneDiagnostics(canvas)
+}
+
+async function readLiveSceneDiagnostics(canvas) {
   return {
     windowEnd: await canvas.getAttribute("data-window-end"),
     commitWatermark: Number(
