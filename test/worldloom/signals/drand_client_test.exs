@@ -90,7 +90,8 @@ defmodule Worldloom.Signals.DrandClientTest do
       [origins: ["https://example.com"]],
       [request: :req],
       [connect_timeout: 0],
-      [pool_timeout: -1],
+      [pool_timeout: 12],
+      [send_timeout: -1],
       [receive_timeout: :infinity],
       [task_timeout: 1.5],
       [unknown: true]
@@ -103,7 +104,7 @@ defmodule Worldloom.Signals.DrandClientTest do
     end
   end
 
-  test "sets bounded Req options and caps streamed bytes before manual decoding" do
+  test "sets bounded request options and caps streamed bytes before manual decoding" do
     owner = self()
     chain_info_body = fixture_body("drand_chain_info.json")
     round_body = fixture_round_body(42)
@@ -119,7 +120,7 @@ defmodule Worldloom.Signals.DrandClientTest do
                origins: [Enum.at(@origins, 0)],
                request: request,
                connect_timeout: 11,
-               pool_timeout: 12,
+               send_timeout: 12,
                receive_timeout: 13,
                task_timeout: 14
              )
@@ -128,8 +129,12 @@ defmodule Worldloom.Signals.DrandClientTest do
 
     for expected_url <- [Enum.at(@origins, 0) <> @info_path, Enum.at(@origins, 0) <> @round_path] do
       assert_receive {:options, ^expected_url, options}
-      assert Keyword.fetch!(options, :connect_options) == [timeout: 11]
-      assert Keyword.fetch!(options, :pool_timeout) == 12
+
+      assert Keyword.fetch!(options, :connect_options) == [
+               timeout: 11,
+               transport_opts: [send_timeout: 12]
+             ]
+
       assert Keyword.fetch!(options, :receive_timeout) == 13
       assert Keyword.fetch!(options, :retry) == false
       assert Keyword.fetch!(options, :redirect) == false

@@ -6,7 +6,7 @@
 
 **Architecture:** WebSocket sources use one source-specific WebSockex process each and synchronously reduce complete frames into bounded aggregate state. A health registry records coarse lifecycle observations. Buffer partitions isolate source pressure and drain round-robin. Source-specific associative reducers collapse scheduled summaries; drand preserves up to twenty ordered rounds and never merges.
 
-**Tech Stack:** Elixir 1.20, OTP supervisors, WebSockex 0.5.1, Req, Ecto, Phoenix PubSub, Telemetry, ExUnit.
+**Tech Stack:** Elixir 1.20, OTP supervisors, WebSockex 0.5.1, Req, Mint, Ecto, Phoenix PubSub, Telemetry, ExUnit.
 
 ---
 

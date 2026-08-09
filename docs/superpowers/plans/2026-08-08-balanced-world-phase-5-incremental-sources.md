@@ -6,7 +6,7 @@
 
 **Architecture:** A typed runtime configuration validates source flags and secure endpoints. Signals Supervisor builds children only for explicitly enabled sources. Each source lands in its own commit with deterministic tests, an external contract probe, operational evidence requirements, and a rollback switch. Enabling a production flag or deploying a canary is a separate authorized operational action, not an automatic side effect of merging code.
 
-**Tech Stack:** Elixir 1.20, Phoenix releases, WebSockex, Req, GitHub Actions, Fly.io-compatible runtime configuration.
+**Tech Stack:** Elixir 1.20, Phoenix releases, WebSockex, Req, Mint, GitHub Actions, Fly.io-compatible runtime configuration.
 
 ---
 

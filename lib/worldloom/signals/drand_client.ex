@@ -1,12 +1,14 @@
 defmodule Worldloom.Signals.DrandClient do
   @moduledoc false
 
+  alias Worldloom.Signals.DrandTransport
+
   @derive {Inspect, only: []}
   @enforce_keys [
     :origins,
     :request,
     :connect_timeout,
-    :pool_timeout,
+    :send_timeout,
     :receive_timeout,
     :task_timeout,
     :period,
@@ -23,7 +25,7 @@ defmodule Worldloom.Signals.DrandClient do
   @genesis_time_max 253_402_300_799
   @info_keys ~w(beacon_id chain_hash genesis_seed genesis_time period public_key scheme)
   @json_safe_max 9_007_199_254_740_991
-  @pool_timeout 5_000
+  @send_timeout 5_000
   @quicknet_chain_hash "52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971"
   @receive_timeout 5_000
   @relay_origins [
@@ -45,7 +47,7 @@ defmodule Worldloom.Signals.DrandClient do
         origins: configuration.origins,
         request: configuration.request,
         connect_timeout: configuration.connect_timeout,
-        pool_timeout: configuration.pool_timeout,
+        send_timeout: configuration.send_timeout,
         receive_timeout: configuration.receive_timeout,
         task_timeout: configuration.task_timeout,
         period: nil,
@@ -85,7 +87,7 @@ defmodule Worldloom.Signals.DrandClient do
         origins: @relay_origins,
         request: &default_request/2,
         connect_timeout: @connect_timeout,
-        pool_timeout: @pool_timeout,
+        send_timeout: @send_timeout,
         receive_timeout: @receive_timeout,
         task_timeout: @task_timeout
       )
@@ -94,7 +96,7 @@ defmodule Worldloom.Signals.DrandClient do
 
     if valid_origins?(configuration.origins) and is_function(configuration.request, 2) and
          positive_timeout?(configuration.connect_timeout) and
-         positive_timeout?(configuration.pool_timeout) and
+         positive_timeout?(configuration.send_timeout) and
          positive_timeout?(configuration.receive_timeout) and
          positive_timeout?(configuration.task_timeout) do
       configuration
@@ -173,8 +175,10 @@ defmodule Worldloom.Signals.DrandClient do
   defp request_options(client) do
     [
       headers: [{"user-agent", @user_agent}, {"accept", "application/json"}],
-      connect_options: [timeout: client.connect_timeout],
-      pool_timeout: client.pool_timeout,
+      connect_options: [
+        timeout: client.connect_timeout,
+        transport_opts: [send_timeout: client.send_timeout]
+      ],
       receive_timeout: client.receive_timeout,
       retry: false,
       redirect: false,
@@ -185,7 +189,7 @@ defmodule Worldloom.Signals.DrandClient do
     ]
   end
 
-  defp default_request(url, options), do: Req.get(url, options)
+  defp default_request(url, options), do: DrandTransport.get(url, options)
 
   defp accumulate_body({:data, chunk}, {request, response}) when is_binary(chunk) do
     accumulated = Req.Response.get_private(response, @body_private, "")

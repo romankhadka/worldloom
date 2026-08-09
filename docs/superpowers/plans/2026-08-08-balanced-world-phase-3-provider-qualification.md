@@ -4,9 +4,9 @@
 
 **Goal:** Prove bounded, privacy-safe contracts for Bluesky Jetstream, RIPE RIS Live, Solana slot notifications, and drand Quicknet before any source can start in production.
 
-**Architecture:** Each provider has a pure decoder/aggregator boundary that consumes one already-decoded frame and retains only approved aggregate state. Sanitized fixtures describe the minimum protocol surface. drand additionally has a bounded Req client with relay failover. Qualification code can be exercised against fake or development edges, but production configuration remains disabled.
+**Architecture:** Each provider has a pure decoder/aggregator boundary that consumes one already-decoded frame and retains only approved aggregate state. Sanitized fixtures describe the minimum protocol surface. drand additionally has a bounded direct-Mint client with relay failover and an injected `Req.Response`-compatible test seam. Qualification code can be exercised against fake or development edges, but production configuration remains disabled.
 
-**Tech Stack:** Elixir 1.20, Jason, Req 0.6, ExUnit, deterministic JSON fixtures.
+**Tech Stack:** Elixir 1.20, Jason, Mint 1.9, Req 0.6 response structs, ExUnit, deterministic JSON fixtures.
 
 ---
 
@@ -20,6 +20,7 @@
 - `lib/worldloom/signals/ripe_window.ex`
 - `lib/worldloom/signals/solana_slot_adapter.ex`
 - `lib/worldloom/signals/drand_client.ex`
+- `lib/worldloom/signals/drand_transport.ex`
 - matching tests under `test/worldloom/signals/`
 - sanitized fixtures under `test/support/fixtures/feeds/`
 - `docs/data-sources.md`
@@ -226,7 +227,7 @@ rtk git commit -m "Qualify Solana slot cadence against fixtures"
 
 ## Task 5: Qualify drand Quicknet relay failover
 
-- [ ] **Step 1: Write failing client tests around injected Req edges**
+- [ ] **Step 1: Write failing client tests around injected response and transport edges**
 
 Create `test/worldloom/signals/drand_client_test.exs`. Use the fixed Quicknet chain hash:
 
@@ -248,9 +249,9 @@ rtk mix test test/worldloom/signals/drand_client_test.exs
 
 - [ ] **Step 3: Implement bounded concurrent Req calls**
 
-Create `lib/worldloom/signals/drand_client.ex`. Accept one to three unique pinned relay origins, an injected request function or Req adapter, and finite timeout configuration through `new/1`; invalid configuration is a programming error. Derive `Inspect` without relays, request functions, URLs, response bodies, signatures, or render identities. Use one shared race helper for chain info and exact rounds with `Task.async_stream/3`, `ordered: false`, `max_concurrency: 3`, finite `timeout`, and `on_timeout: :kill_task`. Reduce until the first validated result and halt the stream so enumerable cleanup terminates outstanding tasks. Treat `{:exit, _}`, request exceptions, transport errors, non-200 responses, and invalid bodies identically; never return or log their reasons.
+Create `lib/worldloom/signals/drand_client.ex` and `lib/worldloom/signals/drand_transport.ex`. Accept one to three unique pinned relay origins, an injected `Req.Response`-compatible request function, and finite timeout configuration through `new/1`; invalid configuration is a programming error. Derive `Inspect` without relays, request functions, URLs, response bodies, signatures, or render identities. Use one shared race helper for chain info and exact rounds with `Task.async_stream/3`, `ordered: false`, `max_concurrency: 3`, finite `timeout`, and `on_timeout: :kill_task`. Reduce until the first validated result and halt the stream so enumerable cleanup terminates outstanding tasks. Treat `{:exit, _}`, request exceptions, transport errors, non-200 responses, and invalid bodies identically; never return or log their reasons.
 
-The default Req edge sets `retry: false`, `redirect: false`, `compressed: false`, `raw: true`, and `decode_body: false`, plus finite connect, pool, receive, and task timeouts. Stream into a 4,096-byte accumulator and halt immediately when the next chunk would cross the cap; do not trust `Content-Length`. This bounds retained response size even though the current transport chunk has already been allocated before the callback. Decode only a complete bounded body. Race `/info` during initialization and retain only validated `period` and `genesis_time`. Race exact requested rounds, decode the signature, derive `render_identity = SHA256(signature_bytes)` as lowercase hexadecimal, and discard the signature. Return only:
+The default edge uses a fresh passive-mode direct Mint HTTPS connection with system CA verification, a 16,384-byte response-header cap, finite connect, socket-send, receive, and task timeouts, and deterministic connection closure. It never retries, redirects, advertises compression, decompresses, or automatically decodes a body. This bypasses Finch's URL- and response-bearing request telemetry; attach to Finch request start/stop/exception events in a regression test and prove the default transport emits none. Stream into a 4,096-byte accumulator and halt immediately when the next chunk would cross the cap; do not trust `Content-Length`. This bounds retained response size even though the current transport chunk has already been allocated before the callback. Use one absolute monotonic receive deadline so partial or unexpected traffic cannot extend the timeout. Decode only a complete bounded body. Race `/info` during initialization and retain only validated `period` and `genesis_time`. Race exact requested rounds, decode the signature, derive `render_identity = SHA256(signature_bytes)` as lowercase hexadecimal, and discard the signature. Return only:
 
 ```elixir
 {:ok, %{round: round, render_identity: render_identity}}
@@ -267,7 +268,7 @@ Add `Normalizer.drand_round/2`. Require validated `%{period: 3, genesis_time: ge
 
 ```bash
 rtk mix test test/worldloom/signals/drand_client_test.exs test/worldloom/signals/normalizer_test.exs test/worldloom/loom/visual_parameters_test.exs
-rtk git add lib/worldloom/signals/drand_client.ex lib/worldloom/signals/normalizer.ex test/worldloom/signals/drand_client_test.exs test/worldloom/signals/normalizer_test.exs test/support/fixtures/feeds/drand_rounds.json
+rtk git add mix.exs lib/worldloom/signals/drand_client.ex lib/worldloom/signals/drand_transport.ex lib/worldloom/signals/normalizer.ex test/worldloom/signals/drand_client_test.exs test/worldloom/signals/drand_transport_test.exs test/worldloom/signals/normalizer_test.exs test/support/fixtures/feeds/drand_rounds.json
 rtk git commit -m "Qualify drand Quicknet relay failover"
 ```
 

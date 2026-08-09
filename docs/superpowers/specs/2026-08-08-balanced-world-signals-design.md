@@ -114,7 +114,7 @@ Source documentation: [Solana `slotSubscribe`](https://solana.com/docs/rpc/webso
 
 drand adds a pale crystalline pulse derived from public randomness. Quicknet publishes a new beacon round every three seconds. Worldloom pins drand API v2 and Quicknet chain hash `52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971`. At initialization it races chain-info requests across the three pinned `drand.sh` HTTPS origins and accepts the first structurally valid response: `beacon_id == "quicknet"`, the exact chain hash, `period == 3`, a positive UTC-representable `genesis_time`, a 64-character lowercase hexadecimal `genesis_seed`, a 192-character lowercase hexadecimal `public_key`, and `scheme == "bls-unchained-g1-rfc9380"`. It retains only period and genesis time.
 
-A v2 Quicknet round response contains exactly a positive JSON-safe integer `round` and a 96-character lowercase hexadecimal `signature`. Worldloom requires the returned round to equal the requested exact round, decodes the 48 signature bytes, computes SHA-256, and uses the lowercase 64-character hexadecimal digest only as ephemeral render identity. The signature and complete response are then discarded. Worldloom races bounded concurrent Req calls to the three current v2-capable `drand.sh` relays and accepts the first structurally valid response. Each response is streamed into a 4,096-byte accumulator before JSON decoding; retries, redirects, decompression, and automatic body decoding are disabled.
+A v2 Quicknet round response contains exactly a positive JSON-safe integer `round` and a 96-character lowercase hexadecimal `signature`. Worldloom requires the returned round to equal the requested exact round, decodes the 48 signature bytes, computes SHA-256, and uses the lowercase 64-character hexadecimal digest only as ephemeral render identity. The signature and complete response are then discarded. Worldloom races bounded concurrent HTTPS calls to the three current v2-capable `drand.sh` relays and accepts the first structurally valid response. The default edge uses passive direct Mint connections so generic Finch telemetry can never receive a provider URL, response, or signature; deterministic tests retain an injected `Req.Response`-compatible seam. Each response has a 16,384-byte header-section bound and is streamed into a 4,096-byte accumulator before JSON decoding; retries, redirects, decompression, and automatic body decoding are absent.
 
 The durable payload contains only the round number and fixed summary. `occurred_at` is computed as `genesis_time + (round - 1) * period`; the round is the external ID and provides natural idempotency. The fixed client contract identifies the source as Quicknet, so chain identity is not duplicated in every payload.
 
@@ -199,7 +199,7 @@ The worker:
 5. sends completed summaries and checkpoint metadata to the existing bounded buffer; and
 6. reports contact, activity, drops, truncation, retry, and recovery through existing health telemetry.
 
-drand uses a separate Req-based polling worker because it is an HTTP round feed, not a continuous WebSocket stream.
+drand uses a separate polling worker backed by the bounded Mint client because it is an HTTP round feed, not a continuous WebSocket stream.
 
 ### Persistence and broadcast
 
