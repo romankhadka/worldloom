@@ -113,14 +113,18 @@ Execute them in order. Every phase ends in working software, a focused review, a
 - [ ] `rtk mix hex.audit` reports no unapproved advisory.
 - [ ] GitHub CI passes on the exact integration commit.
 
-## Dependency-audit release blocker
+## Dependency-audit gate
 
-The current lock contains Postgrex 0.22.3 and `mix hex.audit` reports advisory `EEF-CVE-2026-66838` for the `:comment` option to `Postgrex.stream/4`.
+Postgrex 0.22.4 was released on 2026-08-07 with the fix for
+`EEF-CVE-2026-66838`. Worldloom upgraded its lock from 0.22.3 to 0.22.4 in the
+separate security commit `50002db`; `rtk mix precommit` passed 323 tests and
+`rtk mix hex.audit` reported no retired or advisory-bearing packages afterward.
 
-- [ ] At the start of each phase, run `rtk mix hex.audit` and record whether a fixed Postgrex release exists.
-- [ ] When a fixed version exists, update the dependency and lock in a separate commit, run `rtk mix precommit`, then rerun `rtk mix hex.audit`.
-- [ ] Until then, retain a test-backed non-reachability note showing Worldloom never calls `Postgrex.stream/4` or supplies its `:comment` option.
-- [ ] Do not call that note a fix and do not merge the public release while the advisory remains unapproved.
+- [x] Preserve the public-release block while the lock remained on vulnerable Postgrex 0.22.3.
+- [x] Recheck Hex for a fixed release at the Phase 3 boundary.
+- [x] Upgrade only Postgrex in a separate lockfile commit once 0.22.4 became available.
+- [x] Run the full backend gate and clear `rtk mix hex.audit` after the upgrade.
+- [ ] Re-run `rtk mix hex.audit` on the exact final integration commit before release.
 
 ## Commit map
 

@@ -409,7 +409,7 @@ This work is too broad for one coupled implementation gate. It is divided into i
 
 Every phase receives its own red-green tests, diff review, and clean `mix precommit`. Public source enablement additionally requires its privacy, reconnect, drift-smoke, and canary evidence.
 
-The release gate adds `mix hex.audit`. The current lock reports the medium-severity Postgrex `:comment` advisory; implementation planning must either upgrade to a fixed release or document and verify a temporary non-reachability mitigation. The advisory cannot be silently accepted for a public release.
+The release gate includes `mix hex.audit`. At the Phase 3 boundary Worldloom upgraded Postgrex from vulnerable 0.22.3 to fixed 0.22.4 in a lockfile-only commit, then passed the full backend suite and a clean audit. The audit must run again on the exact final integration commit; a new or reintroduced advisory cannot be silently accepted for a public release.
 
 ## Acceptance criteria
 
