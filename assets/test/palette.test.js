@@ -26,6 +26,17 @@ test("defines the approved Canvas interface materials", () => {
   })
 })
 
+test("freezes the signal palette and every signal material", () => {
+  assert.equal(Object.isFrozen(signalPalette), true)
+  for (const material of Object.values(signalPalette)) {
+    assert.equal(Object.isFrozen(material), true)
+  }
+})
+
+test("freezes the Canvas interface materials", () => {
+  assert.equal(Object.isFrozen(canvasPalette), true)
+})
+
 test("geometry and renderer contain no private color literals", async () => {
   const sources = await Promise.all([
     readFile(new URL("../js/worldloom/geometry.js", import.meta.url), "utf8"),

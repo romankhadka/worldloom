@@ -3,7 +3,7 @@ import {readFileSync} from "node:fs"
 import test from "node:test"
 
 import {commandsForScene, eventTimeToX} from "../js/worldloom/geometry.js"
-import {signalPalette} from "../js/worldloom/palette.js"
+import {canvasPalette, signalPalette} from "../js/worldloom/palette.js"
 import {Renderer} from "../js/worldloom/renderer.js"
 import {balanced} from "./fixtures/balanced_snapshots.js"
 
@@ -1160,6 +1160,28 @@ test("reduced motion paints the same settled source roles without a continuing s
   assert.equal(motionFrameRequests, 1)
 })
 
+test("paints colorless commands with the Canvas fallback material", () => {
+  const canvas = fakeCanvas()
+  const renderer = new Renderer(canvas, {
+    width: 100,
+    height: 60,
+    reducedMotion: true,
+    projectScene: () => [{type: "fallback", sequence: 2, x: 50, y: 30, intensity: 0.5}],
+  })
+  renderer.setEvents([instruction(1), instruction(2)])
+  renderer.panBy(10)
+  canvas.calls.length = 0
+
+  renderer.draw()
+
+  assert.ok(canvas.calls.some(([name, color]) =>
+    name === "strokeStyle" && color === canvasPalette.fallback
+  ))
+  assert.ok(canvas.calls.some(([name, color]) =>
+    name === "fillStyle" && color === canvasPalette.fallback
+  ))
+})
+
 test("draws a bounded lane seed and selected-formation halo", () => {
   const canvas = fakeCanvas()
   const renderer = new Renderer(canvas, {width: 800, height: 600, reducedMotion: true})
@@ -1171,10 +1193,33 @@ test("draws a bounded lane seed and selected-formation halo", () => {
   renderer.draw()
 
   const arcs = canvas.calls.filter(([name]) => name === "arc")
-  assert.ok(arcs.some(([_name, x, y]) => x === 786 && y === 170))
+  const targetSeedArcIndex = canvas.calls.findIndex(
+    ([name, x, y, radius]) => name === "arc" && x === 786 && y === 170 && radius === 3.5,
+  )
+  assert.ok(targetSeedArcIndex >= 0)
+  const targetSeedFill = canvas.calls
+    .slice(0, targetSeedArcIndex)
+    .findLast(([name]) => name === "fillStyle")
   assert.ok(arcs.length >= 2)
+  assert.equal(targetSeedFill?.[1], canvasPalette.targetSeed)
+  assert.ok(canvas.calls.some(([name, color]) =>
+    name === "strokeStyle" && color === canvasPalette.selectionHalo
+  ))
   assert.equal(renderer.targetLane, 0.25)
   assert.equal(renderer.selectedSequence, 2)
+})
+
+test("paints viewer pulses with the Canvas viewer material", () => {
+  const canvas = fakeCanvas()
+  const renderer = new Renderer(canvas, {width: 100, height: 60})
+  renderer.setViewerCount(3)
+  canvas.calls.length = 0
+
+  renderer.draw()
+
+  assert.ok(canvas.calls.some(([name, color]) =>
+    name === "fillStyle" && color === canvasPalette.viewerPulse
+  ))
 })
 
 test("bounds active transitions and settles the oldest when a ninth arrives", () => {
