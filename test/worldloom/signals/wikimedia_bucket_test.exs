@@ -32,8 +32,21 @@ defmodule Worldloom.Signals.WikimediaBucketTest do
              cursor: "cursor-3",
              count: 3,
              total_absolute_byte_delta: 45,
-             languages: %{"de" => 1, "en" => 2},
-             edit_types: %{"edit" => 2, "new" => 1}
+             language_buckets: %{
+               "current_1" => 0,
+               "current_2" => 2,
+               "current_3" => 0,
+               "current_4" => 0,
+               "current_5" => 1
+             },
+             edit_types: %{
+               "categorize" => 0,
+               "edit" => 2,
+               "external" => 0,
+               "log" => 0,
+               "new" => 1
+             },
+             truncated: false
            }
   end
 
@@ -85,15 +98,45 @@ defmodule Worldloom.Signals.WikimediaBucketTest do
       WikimediaBucket.new(~U[2026-08-03 12:00:00Z])
       | count: @uint32_max,
         total_absolute_byte_delta: @uint32_max,
-        languages: %{"en" => @uint32_max},
-        edit_types: %{"edit" => @uint32_max}
+        language_buckets: %{
+          "current_1" => 0,
+          "current_2" => @uint32_max,
+          "current_3" => 0,
+          "current_4" => 0,
+          "current_5" => 0
+        },
+        edit_types: %{
+          "categorize" => 0,
+          "edit" => @uint32_max,
+          "external" => 0,
+          "log" => 0,
+          "new" => 0
+        }
     }
 
     assert {:ok, saturated} = WikimediaBucket.add(bucket, frame("cursor-max", first))
     assert saturated.count == @uint32_max
     assert saturated.total_absolute_byte_delta == @uint32_max
-    assert saturated.languages["en"] == @uint32_max
+    assert saturated.language_buckets["current_2"] == @uint32_max
     assert saturated.edit_types["edit"] == @uint32_max
+    assert saturated.truncated
+  end
+
+  test "marks a single oversized byte delta as truncated before aggregation" do
+    [first | _rest] = read_frames()
+
+    oversized_delta =
+      first
+      |> put_in(["length", "old"], 0)
+      |> put_in(["length", "new"], @uint32_max + 1)
+
+    bucket = WikimediaBucket.new(~U[2026-08-03 12:00:00Z])
+
+    assert {:ok, saturated} =
+             WikimediaBucket.add(bucket, frame("cursor-oversized", oversized_delta))
+
+    assert saturated.total_absolute_byte_delta == @uint32_max
+    assert saturated.truncated
   end
 
   test "heartbeat contact advances a non-empty cursor without creating an event" do

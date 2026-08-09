@@ -1,26 +1,32 @@
 defmodule Worldloom.Signals.WikimediaBucket do
+  @language_buckets ~w(current_1 current_2 current_3 current_4 current_5)
+  @edit_types ~w(categorize edit external log new)
+  @empty_language_buckets Map.new(@language_buckets, &{&1, 0})
+  @empty_edit_types Map.new(@edit_types, &{&1, 0})
+
   @enforce_keys [:window_start]
   defstruct window_start: nil,
             cursor: nil,
             count: 0,
             total_absolute_byte_delta: 0,
-            languages: %{},
-            edit_types: %{}
+            language_buckets: @empty_language_buckets,
+            edit_types: @empty_edit_types,
+            truncated: false
 
   @type t :: %__MODULE__{
           window_start: DateTime.t(),
           cursor: String.t() | nil,
           count: non_neg_integer(),
           total_absolute_byte_delta: non_neg_integer(),
-          languages: %{String.t() => non_neg_integer()},
-          edit_types: %{String.t() => non_neg_integer()}
+          language_buckets: %{String.t() => non_neg_integer()},
+          edit_types: %{String.t() => non_neg_integer()},
+          truncated: boolean()
         }
 
   @window_seconds 4
   @offset_seconds 0
   @lateness_seconds 1
   @uint32_max 4_294_967_295
-  @edit_types ~w(edit new log categorize external)
 
   @spec new(DateTime.t()) :: t()
   def new(%DateTime{} = observed_at) do
@@ -97,8 +103,9 @@ defmodule Worldloom.Signals.WikimediaBucket do
       cursor: bucket.cursor,
       count: bucket.count,
       total_absolute_byte_delta: bucket.total_absolute_byte_delta,
-      languages: bucket.languages,
-      edit_types: bucket.edit_types
+      language_buckets: bucket.language_buckets,
+      edit_types: bucket.edit_types,
+      truncated: bucket.truncated
     }
   end
 
@@ -123,9 +130,10 @@ defmodule Worldloom.Signals.WikimediaBucket do
       {:ok,
        %{
          occurred_at: utc_occurred_at,
-         language: language,
+         language_bucket: language_bucket(language),
          edit_type: edit_type,
-         absolute_byte_delta: min(abs(new_length - old_length), @uint32_max)
+         absolute_byte_delta: min(abs(new_length - old_length), @uint32_max),
+         byte_delta_truncated?: abs(new_length - old_length) > @uint32_max
        }}
     else
       _invalid -> {:error, :invalid_event}
@@ -142,21 +150,46 @@ defmodule Worldloom.Signals.WikimediaBucket do
   end
 
   defp aggregate(bucket, sanitized_event, cursor) do
+    {count, count_truncated?} = saturated_add(bucket.count, 1)
+
+    {total_absolute_byte_delta, bytes_truncated?} =
+      saturated_add(bucket.total_absolute_byte_delta, sanitized_event.absolute_byte_delta)
+
+    {language_buckets, language_truncated?} =
+      increment(bucket.language_buckets, sanitized_event.language_bucket)
+
+    {edit_types, edit_type_truncated?} = increment(bucket.edit_types, sanitized_event.edit_type)
+
     %{
       bucket
       | cursor: next_cursor(bucket.cursor, cursor),
-        count: saturated_add(bucket.count, 1),
-        total_absolute_byte_delta:
-          saturated_add(bucket.total_absolute_byte_delta, sanitized_event.absolute_byte_delta),
-        languages: increment(bucket.languages, sanitized_event.language),
-        edit_types: increment(bucket.edit_types, sanitized_event.edit_type)
+        count: count,
+        total_absolute_byte_delta: total_absolute_byte_delta,
+        language_buckets: language_buckets,
+        edit_types: edit_types,
+        truncated:
+          bucket.truncated or sanitized_event.byte_delta_truncated? or count_truncated? or
+            bytes_truncated? or language_truncated? or edit_type_truncated?
     }
   end
 
-  defp increment(counters, key),
-    do: Map.update(counters, key, 1, &saturated_add(&1, 1))
+  # The first unsigned SHA-256 word modulo five is stable across VM versions and
+  # bounds arbitrary Wikimedia language codes before they enter aggregate state.
+  defp language_bucket(language) do
+    <<digest_word::unsigned-big-32, _rest::binary>> = :crypto.hash(:sha256, language)
+    Enum.at(@language_buckets, rem(digest_word, length(@language_buckets)))
+  end
 
-  defp saturated_add(left, right), do: min(left + right, @uint32_max)
+  defp increment(counters, key) do
+    {count, truncated?} = counters |> Map.fetch!(key) |> saturated_add(1)
+    {Map.put(counters, key, count), truncated?}
+  end
+
+  defp saturated_add(left, right) do
+    sum = left + right
+    {min(sum, @uint32_max), sum > @uint32_max}
+  end
+
   defp advance_cursor(bucket, cursor), do: %{bucket | cursor: next_cursor(bucket.cursor, cursor)}
   defp next_cursor(_existing_cursor, cursor) when is_binary(cursor) and cursor != "", do: cursor
   defp next_cursor(existing_cursor, _cursor), do: existing_cursor

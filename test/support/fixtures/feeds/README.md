@@ -9,10 +9,11 @@ test expectations contain only the sanitized outputs listed below.
 ## Current-source fixtures
 
 - `wikimedia_frames.json` contains representative synthetic timestamps,
-  language-family codes, edit types, and byte lengths. It was stripped of `user`,
+  language codes, edit types, and byte lengths. It was stripped of `user`,
   `user_text`, IP address, title, comment, revision, server URL, URI, and numeric edit
   IDs. Its sanitized output is a four-second aggregate containing counts, byte delta,
-  bounded language counts, and dominant edit type.
+  five fixed deterministic language-current counts, all allow-listed edit-type
+  counts, and the derived dominant edit type.
 - `usgs.json` keeps the public-feed shape for synthetic feature IDs, magnitudes,
   places, timestamps, and coordinates. Its sanitized output contains those approved
   public earthquake fields and a server-authored summary.
@@ -33,8 +34,10 @@ These fixtures qualify boundaries only. No corresponding provider worker is acti
 - `ripe_frames.json` includes documentation-range collectors, peers, ASNs, message
   IDs, next hops, prefixes, paths, communities, and a synthetic raw marker. These are
   input-only. The accepted output contains only announced/withdrawn prefix-occurrence
-  counts, IPv4/IPv6 counts, distinct collector/peer counts, and truncation; bounded
-  worker-local fingerprints are omitted from inspection and output.
+  counts, IPv4/IPv6 counts, per-window collector/peer observations, and truncation;
+  pressure summaries sum those observations without claiming cross-window
+  distinctness, and bounded worker-local fingerprints are omitted from inspection
+  and output.
 - `solana_slot_frames.json` includes synthetic subscription IDs, parent/root
   positions, account, transaction, wallet, program, and token fields. The accepted
   output contains only slot count, first/last slot, gap count, window fields, and

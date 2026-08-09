@@ -58,7 +58,7 @@ This violates Worldloom's intended experience: public signals are meant to remai
 
 Wikimedia remains the cool-cyan connective backbone. It continues to consume the public `recentchange` EventStream, but summarizes activity in four-second windows instead of emitting a durable row every second.
 
-Each event retains only the existing aggregate concepts: total accepted changes, total absolute byte delta, up to five language-family counts, dominant edit type, window time, and a generated summary. The raw upstream event and all identity or page-level fields are discarded.
+Each event retains only bounded aggregate concepts: total accepted changes, total absolute byte delta, five deterministic language-current counts, all five allow-listed edit-type counts, their derived dominant edit type, window time, and a generated summary. A language current is an honest stable hash partition for the artwork, not a linguistic family or ranking. The raw upstream event and all identity or page-level fields are discarded.
 
 Source documentation: [Wikimedia EventStreams](https://www.mediawiki.org/wiki/EventStreams).
 
@@ -166,6 +166,17 @@ A zero-count window does not create a `loom_events` row. When a resumable stream
 
 Complete decoded text frames larger than 256 KiB are rejected before JSON decoding. This is an application parsing limit, not a transport-allocation guarantee: `Mint.WebSocket` has already assembled the frame. Category maps contain fixed allow-listed keys, numeric counters saturate at a 32-bit unsigned maximum, and RIPE's worker-local collector and peer sets stop accepting new members at 2,048 entries each. JSON traversal, process heaps, and message queues receive explicit tested bounds. A per-socket-message application-frame handling budget also prevents a burst of tiny frames from monopolizing a worker. When a limit is reached, the aggregate records a bounded `truncated` flag; it never grows the collection or logs the discarded source material.
 
+Wikimedia language codes are reduced at ingestion into five fixed deterministic
+language currents. Worldloom reads the first unsigned big-endian 32-bit word of the
+language code's SHA-256 digest, takes it modulo five, and maps results zero through
+four to `current_1` through `current_5`. Every current counter and every
+allow-listed edit-type counter is retained, so pressure compaction is bounded and
+exactly associative; the public aggregate does not claim that these currents are
+linguistic families or a top-language ranking. RIPE's per-window distinct
+collector and peer counts are published as `collector_observations` and
+`peer_observations`. A pressure event sums those observations and never presents
+them as cross-window distinct identities.
+
 ## Architecture and components
 
 The existing signal path remains authoritative:
@@ -209,7 +220,7 @@ All new summaries use `SourceEvent` and the existing Buffer, Coordinator, and St
 
 The Buffer changes from one retrying FIFO to fair per-source partitions drained round-robin within one global bound. A failing source can delay its own partition but cannot hold the head of every other source. No source worker writes directly to PostgreSQL or broadcasts directly to a LiveView.
 
-Under pressure, Wikimedia, Bluesky, RIPE, and Solana may combine adjacent pending summaries through source-specific associative reducers. The result declares its actual `window_count` and `window_span_seconds`; it is never mislabeled a normal four-second window. drand rounds never merge. They remain in a bounded twenty-round recovery queue, after which skipped rounds are reported honestly. Every new source receives an explicit `Merger` implementation so queue pressure cannot trigger the current unsupported-source pattern-match crash.
+Under pressure, Wikimedia, Bluesky, RIPE, and Solana may combine adjacent pending summaries through source-specific associative reducers. The result declares its actual `window_count` and `window_span_seconds`; it is never mislabeled a normal four-second window. If either field reaches its safe cap, `truncated` is true and the summary labels both values as lower bounds with “at least” rather than claiming exactness. More generally, a true `truncated` flag means one or more saturated statistics may be lower bounds. Reducers combine saturated integer sufficient statistics and then recompute visual lane and intensity from those final statistics, so regrouping cannot accumulate floating-point averaging error. Solana sums only gaps already observed by ingestion and takes the minimum and maximum slot endpoints; it never invents a gap between input summaries. drand rounds never merge. They remain in a bounded twenty-round recovery queue, after which skipped rounds are reported honestly. Every new source receives an explicit `Merger` implementation so queue pressure cannot trigger the current unsupported-source pattern-match crash.
 
 ## Checkpoints and recovery
 

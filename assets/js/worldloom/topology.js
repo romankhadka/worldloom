@@ -378,8 +378,8 @@ function validVersionTwoMetrics(source, metrics) {
           "withdrawn",
           "ipv4",
           "ipv6",
-          "collector_count",
-          "peer_count",
+          "collector_observations",
+          "peer_observations",
         ],
         ["truncated"],
       )
@@ -405,7 +405,9 @@ function validVersionTwoMetrics(source, metrics) {
         metrics.slot_count <= metrics.last_slot - metrics.first_slot + 1 &&
         typeof metrics.truncated === "boolean" &&
         (!metrics.truncated ||
-          metrics.slot_count === uint32Maximum || metrics.gap_count === uint32Maximum)
+          metrics.slot_count === uint32Maximum ||
+          metrics.gap_count === uint32Maximum ||
+          metrics.window_count === Math.floor(uint32Maximum / 4))
     case "drand":
       return exactKeys(metrics, ["round"]) &&
         nonNegativeSafeInteger(metrics.round) && metrics.round > 0

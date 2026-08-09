@@ -190,8 +190,8 @@ defmodule Worldloom.Loom.VisualParametersTest do
           "withdrawn" => 4,
           "ipv4" => 28,
           "ipv6" => 7,
-          "collector_count" => 2,
-          "peer_count" => 18,
+          "collector_observations" => 2,
+          "peer_observations" => 18,
           "truncated" => false
         }
       }),

@@ -6,7 +6,7 @@ defmodule Worldloom.Loom.InstructionMetrics do
     "bluesky" =>
       ~w(window_count window_span_seconds total_actions original_posts replies reposts creates updates deletes truncated),
     "ripe_ris" =>
-      ~w(window_count window_span_seconds announced withdrawn ipv4 ipv6 collector_count peer_count truncated),
+      ~w(window_count window_span_seconds announced withdrawn ipv4 ipv6 collector_observations peer_observations truncated),
     "solana" =>
       ~w(window_count window_span_seconds slot_count first_slot last_slot gap_count truncated),
     "drand" => ~w(round)
@@ -63,7 +63,8 @@ defmodule Worldloom.Loom.InstructionMetrics do
          true <- metrics["slot_count"] <= metrics["last_slot"] - metrics["first_slot"] + 1,
          true <-
            not metrics["truncated"] or metrics["slot_count"] == @uint32_max or
-             metrics["gap_count"] == @uint32_max do
+             metrics["gap_count"] == @uint32_max or
+             metrics["window_count"] == div(@uint32_max, 4) do
       :ok
     else
       _reason -> :error

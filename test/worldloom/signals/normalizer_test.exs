@@ -18,8 +18,21 @@ defmodule Worldloom.Signals.NormalizerTest do
       cursor: "opaque-stream-cursor",
       count: length(frames),
       total_absolute_byte_delta: 45,
-      languages: %{"en" => 2, "de" => 1},
-      edit_types: %{"edit" => 2, "new" => 1}
+      language_buckets: %{
+        "current_1" => 0,
+        "current_2" => 2,
+        "current_3" => 0,
+        "current_4" => 0,
+        "current_5" => 1
+      },
+      edit_types: %{
+        "categorize" => 0,
+        "edit" => 2,
+        "external" => 0,
+        "log" => 0,
+        "new" => 1
+      },
+      truncated: false
     }
 
     assert {:ok, %SourceEvent{} = event} = Normalizer.wikimedia_bucket(bucket)
@@ -31,13 +44,27 @@ defmodule Worldloom.Signals.NormalizerTest do
     assert event.intensity >= 0.0 and event.intensity <= 1.0
 
     assert event.payload == %{
-             "summary" => "3 edits moved through 2 languages",
+             "summary" => "3 edits moved through 2 language currents",
              "window_count" => 1,
              "window_span_seconds" => 4,
              "count" => 3,
              "total_absolute_byte_delta" => 45,
-             "languages" => %{"de" => 1, "en" => 2},
-             "dominant_edit_type" => "edit"
+             "language_buckets" => %{
+               "current_1" => 0,
+               "current_2" => 2,
+               "current_3" => 0,
+               "current_4" => 0,
+               "current_5" => 1
+             },
+             "edit_types" => %{
+               "categorize" => 0,
+               "edit" => 2,
+               "external" => 0,
+               "log" => 0,
+               "new" => 1
+             },
+             "dominant_edit_type" => "edit",
+             "truncated" => false
            }
 
     refute inspect(event) =~ "opaque-stream-cursor"
@@ -190,8 +217,8 @@ defmodule Worldloom.Signals.NormalizerTest do
              "withdrawn" => 3,
              "ipv4" => 4,
              "ipv6" => 3,
-             "collector_count" => 2,
-             "peer_count" => 2,
+             "collector_observations" => 2,
+             "peer_observations" => 2,
              "truncated" => false
            }
 

@@ -13,6 +13,10 @@ defmodule Worldloom.Signals.BufferTest do
     def merge(_events), do: raise("checkpoint-only entries must never enter Merger")
   end
 
+  defmodule NonCompactingMerger do
+    def merge(_events), do: {:error, :unsupported_source}
+  end
+
   defmodule FailingCoordinator do
     use GenServer
 
@@ -202,7 +206,11 @@ defmodule Worldloom.Signals.BufferTest do
     {:ok, coordinator} = ScriptedCoordinator.start_link(self())
 
     {buffer, _coordinator} =
-      start_buffer(coordinator: coordinator, health_registry: registry)
+      start_buffer(
+        coordinator: coordinator,
+        health_registry: registry,
+        merger: NonCompactingMerger
+      )
 
     submissions = [
       start_submission(
@@ -804,7 +812,7 @@ defmodule Worldloom.Signals.BufferTest do
   end
 
   defp signal_attributes(:wikimedia, index),
-    do: {:wikimedia, %{"summary" => "Wikimedia window #{index}"}, nil}
+    do: {:wikimedia, wikimedia_payload(index, "Wikimedia window #{index}"), nil}
 
   defp signal_attributes(:bluesky, _index) do
     {:public_activity,
@@ -833,8 +841,8 @@ defmodule Worldloom.Signals.BufferTest do
        "withdrawn" => 0,
        "ipv4" => 1,
        "ipv6" => 0,
-       "collector_count" => 1,
-       "peer_count" => 1,
+       "collector_observations" => 1,
+       "peer_observations" => 1,
        "truncated" => false
      }, nil}
   end
@@ -874,7 +882,7 @@ defmodule Worldloom.Signals.BufferTest do
       occurred_at: DateTime.add(~U[2026-08-03 12:00:00.000000Z], index, :second),
       lane: 0.4,
       intensity: 0.6,
-      payload: %{"summary" => "Buffered revision #{index} entered the weave"}
+      payload: wikimedia_payload(index, "Buffered revision #{index} entered the weave")
     })
   end
 
@@ -886,16 +894,34 @@ defmodule Worldloom.Signals.BufferTest do
       occurred_at: DateTime.add(~U[2026-08-03 12:00:00.000000Z], index, :second),
       lane: 0.4,
       intensity: 0.02,
-      payload: %{
-        "summary" => "One edit entered the weave",
-        "window_count" => 1,
-        "window_span_seconds" => 4,
-        "count" => 1,
-        "total_absolute_byte_delta" => index,
-        "languages" => %{"en" => 1},
-        "dominant_edit_type" => "edit"
-      }
+      payload: wikimedia_payload(index, "One edit entered the weave")
     })
+  end
+
+  defp wikimedia_payload(index, summary) do
+    %{
+      "summary" => summary,
+      "window_count" => 1,
+      "window_span_seconds" => 4,
+      "count" => 1,
+      "total_absolute_byte_delta" => index,
+      "language_buckets" => %{
+        "current_1" => 1,
+        "current_2" => 0,
+        "current_3" => 0,
+        "current_4" => 0,
+        "current_5" => 0
+      },
+      "edit_types" => %{
+        "categorize" => 0,
+        "edit" => 1,
+        "external" => 0,
+        "log" => 0,
+        "new" => 0
+      },
+      "dominant_edit_type" => "edit",
+      "truncated" => false
+    }
   end
 
   defp checkpoint(cursor), do: checkpoint(:wikimedia, cursor)

@@ -16,8 +16,13 @@ Source: [Wikimedia EventStreams](https://www.mediawiki.org/wiki/EventStreams), u
 the public `recentchange` server-sent event stream.
 
 Worldloom groups accepted changes into non-overlapping four-second UTC windows. It
-retains the window start, total change count, total absolute byte delta, up to five
-language-family counts, and the dominant edit type. It discards usernames, IP
+retains the window start, total change count, total absolute byte delta, five fixed
+language-current counts, all five allow-listed edit-type counts, and the derived
+dominant edit type. A language current is assigned by reading the first unsigned
+big-endian 32-bit word of the language code's SHA-256 digest, taking it modulo five,
+and mapping zero through four to `current_1` through `current_5`. It is an artwork
+partition, not a linguistic family or top-language ranking. This bounds arbitrary
+project codes before they enter aggregate state. Worldloom discards usernames, IP
 addresses, page titles, comments, revision identifiers, page/server URLs, and the raw
 event before persistence.
 
@@ -98,9 +103,12 @@ It emits one exact subscription per approved collector with `includeRaw: false`.
 empty intersection is a configuration failure: Worldloom never falls back to an
 unfiltered or full-firehose subscription.
 
-Four-second summaries contain only announced- and withdrawn-prefix occurrence
-counts, IPv4 and IPv6 counts, distinct collector count, distinct peer count, and a
-bounded truncation flag. Collector and peer values are reduced immediately to capped
+An ordinary four-second summary counts distinct collectors and peers inside that
+window. The durable fields are named `collector_observations` and
+`peer_observations` because a pressure summary sums those per-window observations;
+it does not claim cross-window distinctness. The payload also contains announced-
+and withdrawn-prefix occurrence counts, IPv4 and IPv6 counts, and a bounded
+truncation flag. Collector and peer values are reduced immediately to capped
 in-memory fingerprints; prefixes, peers, collectors, next hops, ASNs, paths,
 communities, message IDs, and raw payloads are discarded and never enter the public
 event.

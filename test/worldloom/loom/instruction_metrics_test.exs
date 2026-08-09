@@ -28,8 +28,8 @@ defmodule Worldloom.Loom.InstructionMetricsTest do
       "withdrawn" => 4,
       "ipv4" => 28,
       "ipv6" => 7,
-      "collector_count" => 2,
-      "peer_count" => 18,
+      "collector_observations" => 2,
+      "peer_observations" => 18,
       "truncated" => false
     },
     "solana" => %{
@@ -68,8 +68,8 @@ defmodule Worldloom.Loom.InstructionMetricsTest do
       "withdrawn" => 4,
       "ipv4" => 28,
       "ipv6" => 7,
-      "collector_count" => 2,
-      "peer_count" => 18,
+      "collector_observations" => 2,
+      "peer_observations" => 18,
       "truncated" => false
     },
     "solana" => %{
@@ -137,8 +137,8 @@ defmodule Worldloom.Loom.InstructionMetricsTest do
          "withdrawn" => @uint32_max,
          "ipv4" => @uint32_max,
          "ipv6" => @uint32_max,
-         "collector_count" => @uint32_max,
-         "peer_count" => @uint32_max,
+         "collector_observations" => @uint32_max,
+         "peer_observations" => @uint32_max,
          "truncated" => true
        })},
       {"solana",
@@ -164,7 +164,7 @@ defmodule Worldloom.Loom.InstructionMetricsTest do
       {"bluesky", Map.put(@payloads["bluesky"], "total_actions", @uint32_max + 1)},
       {"bluesky", Map.put(@payloads["bluesky"], "replies", 1.0)},
       {"bluesky", Map.put(@payloads["bluesky"], "truncated", "false")},
-      {"ripe_ris", Map.put(@payloads["ripe_ris"], "peer_count", nil)},
+      {"ripe_ris", Map.put(@payloads["ripe_ris"], "peer_observations", nil)},
       {"solana", Map.put(@payloads["solana"], "first_slot", %{"slot" => 101})},
       {"solana", Map.put(@payloads["solana"], "first_slot", @json_safe_max + 1)},
       {"solana", Map.put(@payloads["solana"], "gap_count", [1])},
@@ -236,6 +236,25 @@ defmodule Worldloom.Loom.InstructionMetricsTest do
     assert is_map(InstructionMetrics.from_payload("solana", one_slot_payload))
     assert is_map(InstructionMetrics.from_payload("solana", @payloads["solana"]))
     assert InstructionMetrics.from_payload("solana", malformed_one_slot_payload) == :error
+  end
+
+  test "accepts Solana window metadata saturation without weakening endpoint invariants" do
+    maximum_window_count = div(@uint32_max, 4)
+
+    window_capped =
+      @payloads["solana"]
+      |> Map.merge(%{
+        "window_count" => maximum_window_count,
+        "window_span_seconds" => maximum_window_count * 4,
+        "truncated" => true
+      })
+
+    impossible_pressure =
+      window_capped
+      |> Map.merge(%{"slot_count" => 6, "first_slot" => 101, "last_slot" => 105})
+
+    assert is_map(InstructionMetrics.from_payload("solana", window_capped))
+    assert InstructionMetrics.from_payload("solana", impossible_pressure) == :error
   end
 
   test "denies unsupported sources and non-map payloads without atomizing keys" do

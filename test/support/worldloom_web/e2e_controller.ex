@@ -46,10 +46,26 @@ defmodule WorldloomWeb.E2EController do
       intensity: 0.56,
       payload: %{
         "summary" => "A deterministic late edit reached the loom",
+        "window_count" => 1,
+        "window_span_seconds" => 4,
         "count" => 1,
         "total_absolute_byte_delta" => 137,
-        "languages" => %{"en" => 1},
-        "dominant_edit_type" => "edit"
+        "language_buckets" => %{
+          "current_1" => 1,
+          "current_2" => 0,
+          "current_3" => 0,
+          "current_4" => 0,
+          "current_5" => 0
+        },
+        "edit_types" => %{
+          "categorize" => 0,
+          "edit" => 1,
+          "external" => 0,
+          "log" => 0,
+          "new" => 0
+        },
+        "dominant_edit_type" => "edit",
+        "truncated" => false
       }
     })
   end

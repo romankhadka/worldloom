@@ -279,6 +279,32 @@ test("requires one Solana slot exactly when both endpoints are equal", () => {
   assert.equal(malformedTopology.fallbacks[0].source, "visitor")
 })
 
+test("accepts Solana window-cap truncation without accepting impossible endpoints", () => {
+  const solana = structuredClone(versionTwoContract[2])
+  const maximumWindowCount = Math.floor(0xFFFFFFFF / 4)
+  const windowCapped = {
+    ...solana,
+    metrics: {
+      ...solana.metrics,
+      window_count: maximumWindowCount,
+      window_span_seconds: maximumWindowCount * 4,
+      truncated: true,
+    },
+  }
+  const impossible = {
+    ...windowCapped,
+    metrics: {...windowCapped.metrics, slot_count: 6, first_slot: 101, last_slot: 105},
+  }
+
+  const validTopology = buildTopology([windowCapped])
+  const invalidTopology = buildTopology([impossible])
+
+  assert.equal(validTopology.fallbacks[0].kind, "slot")
+  assert.equal(validTopology.fallbacks[0].source, "solana")
+  assert.equal(invalidTopology.fallbacks[0].kind, "fallback")
+  assert.equal(invalidTopology.fallbacks[0].source, "visitor")
+})
+
 test("neutralizes mismatched or malformed version two contracts", () => {
   const [bluesky, ripeRis, solana, drand] = versionTwoContract
   const malformed = [

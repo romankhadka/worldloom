@@ -131,7 +131,7 @@ defmodule Worldloom.Loom.SourceEventTest do
       bluesky:
         ~w(summary window_count window_span_seconds total_actions original_posts replies reposts creates updates deletes truncated),
       ripe_ris:
-        ~w(summary window_count window_span_seconds announced withdrawn ipv4 ipv6 collector_count peer_count truncated),
+        ~w(summary window_count window_span_seconds announced withdrawn ipv4 ipv6 collector_observations peer_observations truncated),
       solana:
         ~w(summary window_count window_span_seconds slot_count first_slot last_slot gap_count truncated),
       drand: ~w(summary round)
@@ -176,6 +176,7 @@ defmodule Worldloom.Loom.SourceEventTest do
         "window_count" => 3,
         "window_span_seconds" => 12,
         "announced" => 4_294_967_295,
+        "ipv4" => 4_294_967_295,
         "truncated" => true
       })
 
@@ -202,6 +203,22 @@ defmodule Worldloom.Loom.SourceEventTest do
     end)
   end
 
+  test "does not treat an exact Bluesky uint32 total as an overflow lower bound" do
+    malformed =
+      valid_payload(:bluesky)
+      |> Map.merge(%{
+        "total_actions" => 4_294_967_295,
+        "original_posts" => 4_294_967_295,
+        "creates" => 4_294_967_295,
+        "updates" => 4_294_967_295,
+        "deletes" => 0,
+        "truncated" => false
+      })
+
+    assert {:error, {:payload, :invalid_shape}} =
+             SourceEvent.new(valid_attributes(:public_activity, :bluesky, %{payload: malformed}))
+  end
+
   test "rejects malformed optional Wikimedia window counters" do
     base_payload = %{"summary" => "A bounded public aggregate"}
 
@@ -220,8 +237,94 @@ defmodule Worldloom.Loom.SourceEventTest do
     end)
   end
 
+  test "accepts only complete canonical Wikimedia pressure statistics" do
+    payload = valid_wikimedia_pressure_payload()
+
+    assert {:ok, event} =
+             SourceEvent.new(valid_attributes(:wikimedia, :wikimedia, %{payload: payload}))
+
+    assert event.payload == payload
+
+    invalid_payloads = [
+      Map.delete(payload, "edit_types"),
+      put_in(payload, ["language_buckets", "current_5"], -1),
+      put_in(payload, ["language_buckets", "future"], 0),
+      put_in(payload, ["edit_types", "new"], 2),
+      Map.put(payload, "dominant_edit_type", "new"),
+      Map.put(payload, "truncated", "false")
+    ]
+
+    Enum.each(invalid_payloads, fn malformed ->
+      assert {:error, _reason} =
+               SourceEvent.new(valid_attributes(:wikimedia, :wikimedia, %{payload: malformed}))
+    end)
+  end
+
+  test "does not treat an exact Wikimedia uint32 total as an overflow lower bound" do
+    exact =
+      valid_wikimedia_pressure_payload()
+      |> Map.merge(%{
+        "count" => 4_294_967_295,
+        "language_buckets" => %{
+          "current_1" => 4_294_967_295,
+          "current_2" => 0,
+          "current_3" => 0,
+          "current_4" => 0,
+          "current_5" => 0
+        },
+        "edit_types" => %{
+          "categorize" => 0,
+          "edit" => 4_294_967_295,
+          "external" => 0,
+          "log" => 0,
+          "new" => 0
+        }
+      })
+
+    assert {:ok, _event} =
+             SourceEvent.new(valid_attributes(:wikimedia, :wikimedia, %{payload: exact}))
+
+    malformed = put_in(exact, ["language_buckets", "current_2"], 1)
+
+    assert {:error, {:payload, :invalid_shape}} =
+             SourceEvent.new(valid_attributes(:wikimedia, :wikimedia, %{payload: malformed}))
+  end
+
+  test "accepts exact RIPE totals at uint32 without treating equality as overflow" do
+    payload =
+      valid_payload(:ripe_ris)
+      |> Map.merge(%{
+        "announced" => 4_294_967_295,
+        "withdrawn" => 0,
+        "ipv4" => 4_294_967_294,
+        "ipv6" => 1,
+        "collector_observations" => 1,
+        "peer_observations" => 1,
+        "truncated" => false
+      })
+
+    assert {:ok, _event} =
+             SourceEvent.new(valid_attributes(:route_change, :ripe_ris, %{payload: payload}))
+  end
+
+  test "rejects pressure summaries without RIPE collector or peer observations" do
+    pressure_payload =
+      valid_payload(:ripe_ris)
+      |> Map.merge(%{
+        "window_count" => 2,
+        "window_span_seconds" => 8
+      })
+
+    for observation <- ~w(collector_observations peer_observations) do
+      payload = Map.put(pressure_payload, observation, 0)
+
+      assert {:error, {:payload, :invalid_shape}} =
+               SourceEvent.new(valid_attributes(:route_change, :ripe_ris, %{payload: payload}))
+    end
+  end
+
   test "requires complete new-source payloads" do
-    payload = Map.delete(valid_payload(:ripe_ris), "peer_count")
+    payload = Map.delete(valid_payload(:ripe_ris), "peer_observations")
 
     assert {:error, {:payload, :invalid_keys}} =
              SourceEvent.new(valid_attributes(:route_change, :ripe_ris, %{payload: payload}))
@@ -281,6 +384,34 @@ defmodule Worldloom.Loom.SourceEventTest do
              SourceEvent.new(
                valid_attributes(:slot, :solana, %{payload: malformed_one_slot_payload})
              )
+  end
+
+  test "accepts window-cap truncation but keeps Solana pressure endpoints internally possible" do
+    maximum_window_count = div(4_294_967_295, 4)
+
+    window_capped =
+      valid_payload(:solana)
+      |> Map.merge(%{
+        "window_count" => maximum_window_count,
+        "window_span_seconds" => maximum_window_count * 4,
+        "truncated" => true
+      })
+
+    impossible_pressure =
+      valid_payload(:solana)
+      |> Map.merge(%{
+        "window_count" => 2,
+        "window_span_seconds" => 8,
+        "slot_count" => 6,
+        "first_slot" => 101,
+        "last_slot" => 105
+      })
+
+    assert {:ok, _event} =
+             SourceEvent.new(valid_attributes(:slot, :solana, %{payload: window_capped}))
+
+    assert {:error, {:payload, :invalid_shape}} =
+             SourceEvent.new(valid_attributes(:slot, :solana, %{payload: impossible_pressure}))
   end
 
   test "bounds each Solana slot endpoint to an exact JSON-safe integer" do
@@ -476,8 +607,8 @@ defmodule Worldloom.Loom.SourceEventTest do
       "withdrawn" => 4,
       "ipv4" => 28,
       "ipv6" => 7,
-      "collector_count" => 2,
-      "peer_count" => 18,
+      "collector_observations" => 2,
+      "peer_observations" => 18,
       "truncated" => false
     }
   end
@@ -500,4 +631,30 @@ defmodule Worldloom.Loom.SourceEventTest do
   end
 
   defp valid_payload(_source), do: %{"summary" => "A public signal entered the weave"}
+
+  defp valid_wikimedia_pressure_payload do
+    %{
+      "summary" => "Three edits crossed two language currents",
+      "window_count" => 1,
+      "window_span_seconds" => 4,
+      "count" => 3,
+      "total_absolute_byte_delta" => 45,
+      "language_buckets" => %{
+        "current_1" => 2,
+        "current_2" => 1,
+        "current_3" => 0,
+        "current_4" => 0,
+        "current_5" => 0
+      },
+      "edit_types" => %{
+        "categorize" => 0,
+        "edit" => 2,
+        "external" => 0,
+        "log" => 0,
+        "new" => 1
+      },
+      "dominant_edit_type" => "edit",
+      "truncated" => false
+    }
+  end
 end

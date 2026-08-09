@@ -62,7 +62,7 @@ defmodule Worldloom.Loom.SourceEvent do
   }
   @payload_keys %{
     wikimedia:
-      ~w(summary window_count window_span_seconds count total_absolute_byte_delta languages dominant_edit_type),
+      ~w(summary window_count window_span_seconds count total_absolute_byte_delta languages language_buckets edit_types dominant_edit_type truncated),
     usgs: ~w(summary magnitude place coordinates additional_count places),
     open_meteo:
       ~w(summary temperature_range precipitation_coverage mean_wind day_night_ratio cities),
@@ -70,12 +70,15 @@ defmodule Worldloom.Loom.SourceEvent do
     bluesky:
       ~w(summary window_count window_span_seconds total_actions original_posts replies reposts creates updates deletes truncated),
     ripe_ris:
-      ~w(summary window_count window_span_seconds announced withdrawn ipv4 ipv6 collector_count peer_count truncated),
+      ~w(summary window_count window_span_seconds announced withdrawn ipv4 ipv6 collector_observations peer_observations truncated),
     solana:
       ~w(summary window_count window_span_seconds slot_count first_slot last_slot gap_count truncated),
     drand: ~w(summary round)
   }
   @exact_payload_sources [:bluesky, :ripe_ris, :solana, :drand]
+  @wikimedia_pressure_keys ~w(summary window_count window_span_seconds count total_absolute_byte_delta language_buckets edit_types dominant_edit_type truncated)
+  @wikimedia_language_buckets ~w(current_1 current_2 current_3 current_4 current_5)
+  @wikimedia_edit_types ~w(categorize edit external log new)
   @json_safe_max 9_007_199_254_740_991
   @uint32_max 4_294_967_295
 
@@ -225,7 +228,7 @@ defmodule Worldloom.Loom.SourceEvent do
       validate_window_payload(
         payload,
         ~w(total_actions original_posts replies reposts creates updates deletes)
-      ) and boolean?(payload["truncated"])
+      ) and boolean?(payload["truncated"]) and valid_bluesky_totals?(payload)
 
     boolean_result(valid?)
   end
@@ -234,25 +237,22 @@ defmodule Worldloom.Loom.SourceEvent do
     valid? =
       validate_window_payload(
         payload,
-        ~w(announced withdrawn ipv4 ipv6 collector_count peer_count)
-      ) and boolean?(payload["truncated"])
+        ~w(announced withdrawn ipv4 ipv6 collector_observations peer_observations)
+      ) and boolean?(payload["truncated"]) and valid_ripe_totals?(payload) and
+        valid_ripe_observations?(payload)
 
     boolean_result(valid?)
   end
 
   defp validate_payload_shape(payload, :solana) do
-    valid? =
+    common_valid? =
       validate_window_payload(payload, ~w(slot_count gap_count)) and
         json_safe_integer?(payload["first_slot"]) and
         json_safe_integer?(payload["last_slot"]) and
         payload["first_slot"] <= payload["last_slot"] and
-        payload["slot_count"] > 0 and
-        payload["slot_count"] == 1 ==
-          (payload["first_slot"] == payload["last_slot"]) and
-        payload["slot_count"] <= payload["last_slot"] - payload["first_slot"] + 1 and
-        boolean?(payload["truncated"]) and
-        (not payload["truncated"] or payload["slot_count"] == @uint32_max or
-           payload["gap_count"] == @uint32_max)
+        payload["slot_count"] > 0 and boolean?(payload["truncated"])
+
+    valid? = common_valid? and valid_solana_summary?(payload)
 
     boolean_result(valid?)
   end
@@ -262,13 +262,23 @@ defmodule Worldloom.Loom.SourceEvent do
   end
 
   defp validate_payload_shape(payload, :wikimedia) do
-    window_count = payload["window_count"]
-    window_span_seconds = payload["window_span_seconds"]
+    pressure_payload? =
+      Enum.any?(~w(language_buckets edit_types truncated), &Map.has_key?(payload, &1))
 
     valid? =
-      optional_positive_uint32?(payload["count"]) and
-        optional_uint32?(payload["total_absolute_byte_delta"]) and
-        valid_optional_window?(window_count, window_span_seconds)
+      if pressure_payload? do
+        Map.keys(payload) |> Enum.sort() == Enum.sort(@wikimedia_pressure_keys) and
+          validate_window_payload(payload, ~w(count total_absolute_byte_delta)) and
+          payload["count"] > 0 and boolean?(payload["truncated"]) and
+          fixed_count_map?(payload["language_buckets"], @wikimedia_language_buckets) and
+          fixed_count_map?(payload["edit_types"], @wikimedia_edit_types) and
+          valid_wikimedia_totals?(payload) and
+          payload["dominant_edit_type"] == dominant_key(payload["edit_types"])
+      else
+        optional_positive_uint32?(payload["count"]) and
+          optional_uint32?(payload["total_absolute_byte_delta"]) and
+          valid_optional_window?(payload["window_count"], payload["window_span_seconds"])
+      end
 
     boolean_result(valid?)
   end
@@ -283,6 +293,82 @@ defmodule Worldloom.Loom.SourceEvent do
       window_span_seconds == window_count * 4 and
       Enum.all?(counter_keys, &uint32?(payload[&1]))
   end
+
+  defp valid_bluesky_totals?(payload) do
+    operation_total = payload["creates"] + payload["updates"] + payload["deletes"]
+    category_total = payload["original_posts"] + payload["replies"] + payload["reposts"]
+
+    if payload["truncated"] and payload["total_actions"] == @uint32_max do
+      operation_total >= @uint32_max
+    else
+      operation_total == payload["total_actions"] and category_total <= payload["total_actions"]
+    end
+  end
+
+  defp valid_ripe_totals?(payload) do
+    if payload["truncated"] do
+      direction_range = possible_total_range(payload["announced"], payload["withdrawn"])
+      family_range = possible_total_range(payload["ipv4"], payload["ipv6"])
+      ranges_intersect?(direction_range, family_range)
+    else
+      payload["announced"] + payload["withdrawn"] == payload["ipv4"] + payload["ipv6"]
+    end
+  end
+
+  defp valid_ripe_observations?(payload) do
+    direction_total = payload["announced"] + payload["withdrawn"]
+    family_total = payload["ipv4"] + payload["ipv6"]
+
+    payload["collector_observations"] > 0 and payload["peer_observations"] > 0 and
+      payload["collector_observations"] <= min(direction_total, family_total) and
+      payload["peer_observations"] <= min(direction_total, family_total) and
+      (payload["window_count"] > 1 or
+         (payload["collector_observations"] in 1..4 and
+            payload["peer_observations"] in 1..2_048))
+  end
+
+  defp valid_solana_summary?(payload) do
+    payload["slot_count"] == 1 == (payload["first_slot"] == payload["last_slot"]) and
+      payload["slot_count"] <= payload["last_slot"] - payload["first_slot"] + 1 and
+      (not payload["truncated"] or payload["slot_count"] == @uint32_max or
+         payload["gap_count"] == @uint32_max or
+         payload["window_count"] == div(@uint32_max, 4))
+  end
+
+  defp fixed_count_map?(counts, keys) when is_map(counts) do
+    Map.keys(counts) |> Enum.sort() == keys and
+      Enum.all?(counts, fn {_key, count} -> uint32?(count) end)
+  end
+
+  defp fixed_count_map?(_counts, _keys), do: false
+
+  defp valid_wikimedia_totals?(payload) do
+    count = payload["count"]
+    language_total = payload["language_buckets"] |> Map.values() |> Enum.sum()
+    edit_type_total = payload["edit_types"] |> Map.values() |> Enum.sum()
+
+    if payload["truncated"] and count == @uint32_max do
+      language_total >= @uint32_max and edit_type_total >= @uint32_max
+    else
+      language_total == count and edit_type_total == count
+    end
+  end
+
+  defp dominant_key(counts) do
+    counts
+    |> Enum.max_by(fn {key, count} -> {count, key} end)
+    |> elem(0)
+  end
+
+  defp possible_total_range(first, second) when first == @uint32_max or second == @uint32_max,
+    do: {:at_least, first + second}
+
+  defp possible_total_range(first, second), do: {:exact, first + second}
+
+  defp ranges_intersect?({:exact, first}, {:exact, second}), do: first == second
+  defp ranges_intersect?({:exact, exact}, {:at_least, minimum}), do: exact >= minimum
+  defp ranges_intersect?({:at_least, minimum}, {:exact, exact}), do: exact >= minimum
+  defp ranges_intersect?({:at_least, _first}, {:at_least, _second}), do: true
 
   defp valid_optional_window?(nil, nil), do: true
 

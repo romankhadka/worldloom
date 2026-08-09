@@ -3,7 +3,8 @@ defmodule Worldloom.Signals.Normalizer do
 
   @json_safe_max 9_007_199_254_740_991
   @maximum_unix_second 253_402_300_799
-  @maximum_languages 5
+  @wikimedia_language_buckets ~w(current_1 current_2 current_3 current_4 current_5)
+  @wikimedia_edit_types ~w(categorize edit external log new)
   @uint32_max 4_294_967_295
 
   @spec wikimedia_bucket(map()) :: {:ok, SourceEvent.t()} | {:error, atom()}
@@ -11,33 +12,42 @@ defmodule Worldloom.Signals.Normalizer do
         window_start: %DateTime{} = window_start,
         count: count,
         total_absolute_byte_delta: total_absolute_byte_delta,
-        languages: languages,
-        edit_types: edit_types
+        language_buckets: language_buckets,
+        edit_types: edit_types,
+        truncated: truncated
       })
       when is_integer(count) and count > 0 and is_integer(total_absolute_byte_delta) and
-             total_absolute_byte_delta >= 0 and is_map(languages) and is_map(edit_types) do
+             total_absolute_byte_delta >= 0 and is_map(language_buckets) and is_map(edit_types) and
+             is_boolean(truncated) do
     with {:ok, utc_window_start} <- DateTime.shift_zone(window_start, "Etc/UTC"),
-         {:ok, public_languages} <- normalize_count_map(languages, @maximum_languages),
-         {:ok, public_edit_types} <- normalize_count_map(edit_types, map_size(edit_types)) do
+         {:ok, public_language_buckets} <-
+           normalize_fixed_count_map(language_buckets, @wikimedia_language_buckets),
+         {:ok, public_edit_types} <- normalize_fixed_count_map(edit_types, @wikimedia_edit_types) do
       dominant_edit_type = dominant_key(public_edit_types, "edit")
-      language_count = map_size(public_languages)
+      active_currents = Enum.count(public_language_buckets, fn {_bucket, value} -> value > 0 end)
+
+      payload = %{
+        "summary" => "#{count} edits moved through #{active_currents} language currents",
+        "window_count" => 1,
+        "window_span_seconds" => 4,
+        "count" => count,
+        "total_absolute_byte_delta" => total_absolute_byte_delta,
+        "language_buckets" => public_language_buckets,
+        "edit_types" => public_edit_types,
+        "dominant_edit_type" => dominant_edit_type,
+        "truncated" => truncated
+      }
+
+      {:ok, visual} = derive_lane_and_intensity(:wikimedia, payload)
 
       SourceEvent.new(%{
         kind: :wikimedia,
         source: :wikimedia,
         external_id: "wikimedia-window:#{DateTime.to_unix(utc_window_start, :second)}:4",
         occurred_at: utc_window_start,
-        lane: stable_lane(public_languages),
-        intensity: clamp_unit(count / 20 + min(total_absolute_byte_delta / 50_000, 0.5)),
-        payload: %{
-          "summary" => "#{count} edits moved through #{language_count} languages",
-          "window_count" => 1,
-          "window_span_seconds" => 4,
-          "count" => count,
-          "total_absolute_byte_delta" => total_absolute_byte_delta,
-          "languages" => public_languages,
-          "dominant_edit_type" => dominant_edit_type
-        }
+        lane: visual.lane,
+        intensity: visual.intensity,
+        payload: payload
       })
     else
       _invalid -> {:error, :invalid_bucket}
@@ -73,27 +83,17 @@ defmodule Worldloom.Signals.Normalizer do
          true <- is_boolean(truncated),
          true <- valid_bluesky_totals?(counters, truncated),
          {:ok, utc_window_start} <- DateTime.shift_zone(window_start, "Etc/UTC"),
+         payload <- bluesky_payload(counters, truncated),
+         {:ok, visual} <- derive_lane_and_intensity(:bluesky, payload),
          {:ok, event} <-
            SourceEvent.new(%{
              kind: :public_activity,
              source: :bluesky,
              external_id: "bluesky-window:#{DateTime.to_unix(utc_window_start, :second)}:4",
              occurred_at: utc_window_start,
-             lane: stable_lane(counters),
-             intensity: clamp_unit(total_actions / 40),
-             payload: %{
-               "summary" => "#{total_actions} public Bluesky actions moved through the weave",
-               "window_count" => 1,
-               "window_span_seconds" => 4,
-               "total_actions" => total_actions,
-               "original_posts" => original_posts,
-               "replies" => replies,
-               "reposts" => reposts,
-               "creates" => creates,
-               "updates" => updates,
-               "deletes" => deletes,
-               "truncated" => truncated
-             }
+             lane: visual.lane,
+             intensity: visual.intensity,
+             payload: payload
            }) do
       {:ok, event}
     else
@@ -102,6 +102,22 @@ defmodule Worldloom.Signals.Normalizer do
   end
 
   def bluesky_window(_window), do: {:error, :invalid_window}
+
+  defp bluesky_payload(counters, truncated) do
+    %{
+      "summary" => "#{counters.total_actions} public Bluesky actions moved through the weave",
+      "window_count" => 1,
+      "window_span_seconds" => 4,
+      "total_actions" => counters.total_actions,
+      "original_posts" => counters.original_posts,
+      "replies" => counters.replies,
+      "reposts" => counters.reposts,
+      "creates" => counters.creates,
+      "updates" => counters.updates,
+      "deletes" => counters.deletes,
+      "truncated" => truncated
+    }
+  end
 
   @spec ripe_window(map()) :: {:ok, SourceEvent.t()} | {:error, atom()}
   def ripe_window(%{
@@ -133,26 +149,17 @@ defmodule Worldloom.Signals.Normalizer do
          true <- distinct_counts_fit?(collector_count, peer_count, prefix_total, family_total),
          true <- valid_ripe_totals?(counters, truncated),
          {:ok, utc_window_start} <- DateTime.shift_zone(window_start, "Etc/UTC"),
+         payload <- ripe_payload(counters, prefix_total, truncated),
+         {:ok, visual} <- derive_lane_and_intensity(:ripe_ris, payload),
          {:ok, event} <-
            SourceEvent.new(%{
              kind: :route_change,
              source: :ripe_ris,
              external_id: "ripe-window:#{DateTime.to_unix(utc_window_start, :second)}:4",
              occurred_at: utc_window_start,
-             lane: stable_lane(counters),
-             intensity: clamp_unit(prefix_total / 80),
-             payload: %{
-               "summary" => "#{prefix_total} RIPE route changes moved through the weave",
-               "window_count" => 1,
-               "window_span_seconds" => 4,
-               "announced" => announced,
-               "withdrawn" => withdrawn,
-               "ipv4" => ipv4,
-               "ipv6" => ipv6,
-               "collector_count" => collector_count,
-               "peer_count" => peer_count,
-               "truncated" => truncated
-             }
+             lane: visual.lane,
+             intensity: visual.intensity,
+             payload: payload
            }) do
       {:ok, event}
     else
@@ -161,6 +168,21 @@ defmodule Worldloom.Signals.Normalizer do
   end
 
   def ripe_window(_window), do: {:error, :invalid_window}
+
+  defp ripe_payload(counters, prefix_total, truncated) do
+    %{
+      "summary" => "#{prefix_total} RIPE route changes moved through the weave",
+      "window_count" => 1,
+      "window_span_seconds" => 4,
+      "announced" => counters.announced,
+      "withdrawn" => counters.withdrawn,
+      "ipv4" => counters.ipv4,
+      "ipv6" => counters.ipv6,
+      "collector_observations" => counters.collector_count,
+      "peer_observations" => counters.peer_count,
+      "truncated" => truncated
+    }
+  end
 
   @spec solana_window(map()) :: {:ok, SourceEvent.t()} | {:error, atom()}
   def solana_window(
@@ -174,13 +196,6 @@ defmodule Worldloom.Signals.Normalizer do
         } = window
       ) do
     continuity_anchor = Map.get(window, :continuity_anchor)
-
-    approved_metrics = %{
-      slot_count: slot_count,
-      first_slot: first_slot,
-      last_slot: last_slot,
-      gap_count: gap_count
-    }
 
     with true <- uint32?(slot_count),
          true <- slot_count > 0,
@@ -203,24 +218,17 @@ defmodule Worldloom.Signals.Normalizer do
              public_width
            ),
          {:ok, utc_window_start} <- DateTime.shift_zone(window_start, "Etc/UTC"),
+         payload <- solana_payload(slot_count, first_slot, last_slot, gap_count, truncated),
+         {:ok, visual} <- derive_lane_and_intensity(:solana, payload),
          {:ok, event} <-
            SourceEvent.new(%{
              kind: :slot,
              source: :solana,
              external_id: "solana-window:#{DateTime.to_unix(utc_window_start, :second)}:4",
              occurred_at: utc_window_start,
-             lane: stable_lane(approved_metrics),
-             intensity: clamp_unit(slot_count / 40 + min(gap_count / 40, 0.5)),
-             payload: %{
-               "summary" => "#{slot_count} Solana slots advanced with #{gap_count} gaps",
-               "window_count" => 1,
-               "window_span_seconds" => 4,
-               "slot_count" => slot_count,
-               "first_slot" => first_slot,
-               "last_slot" => last_slot,
-               "gap_count" => gap_count,
-               "truncated" => truncated
-             }
+             lane: visual.lane,
+             intensity: visual.intensity,
+             payload: payload
            }) do
       {:ok, event}
     else
@@ -229,6 +237,76 @@ defmodule Worldloom.Signals.Normalizer do
   end
 
   def solana_window(_window), do: {:error, :invalid_window}
+
+  defp solana_payload(slot_count, first_slot, last_slot, gap_count, truncated) do
+    %{
+      "summary" => "#{slot_count} Solana slots advanced with #{gap_count} gaps",
+      "window_count" => 1,
+      "window_span_seconds" => 4,
+      "slot_count" => slot_count,
+      "first_slot" => first_slot,
+      "last_slot" => last_slot,
+      "gap_count" => gap_count,
+      "truncated" => truncated
+    }
+  end
+
+  @spec derive_lane_and_intensity(SourceEvent.source(), map()) ::
+          {:ok, %{lane: float(), intensity: float()}} | {:error, :invalid_metrics}
+  def derive_lane_and_intensity(:wikimedia, %{
+        "count" => count,
+        "total_absolute_byte_delta" => byte_delta,
+        "language_buckets" => language_buckets
+      })
+      when is_integer(count) and count >= 0 and is_integer(byte_delta) and byte_delta >= 0 and
+             is_map(language_buckets) do
+    {:ok,
+     %{
+       lane: stable_lane(language_buckets),
+       intensity: clamp_unit(count / 20 + min(byte_delta / 50_000, 0.5))
+     }}
+  end
+
+  def derive_lane_and_intensity(:bluesky, metrics) when is_map(metrics) do
+    with {:ok, counters} <-
+           fetch_integer_counters(
+             metrics,
+             ~w(total_actions original_posts replies reposts creates updates deletes)
+           ) do
+      {:ok,
+       %{
+         lane: stable_lane(atom_keyed(counters)),
+         intensity: clamp_unit(counters["total_actions"] / 40)
+       }}
+    end
+  end
+
+  def derive_lane_and_intensity(:ripe_ris, metrics) when is_map(metrics) do
+    with {:ok, counters} <-
+           fetch_integer_counters(
+             metrics,
+             ~w(announced withdrawn ipv4 ipv6 collector_observations peer_observations)
+           ) do
+      {:ok,
+       %{
+         lane: stable_lane(atom_keyed(counters)),
+         intensity: clamp_unit((counters["announced"] + counters["withdrawn"]) / 80)
+       }}
+    end
+  end
+
+  def derive_lane_and_intensity(:solana, metrics) when is_map(metrics) do
+    with {:ok, counters} <-
+           fetch_integer_counters(metrics, ~w(slot_count first_slot last_slot gap_count)) do
+      {:ok,
+       %{
+         lane: stable_lane(atom_keyed(counters)),
+         intensity: clamp_unit(counters["slot_count"] / 40 + min(counters["gap_count"] / 40, 0.5))
+       }}
+    end
+  end
+
+  def derive_lane_and_intensity(_source, _metrics), do: {:error, :invalid_metrics}
 
   @spec drand_round(map(), map()) :: {:ok, SourceEvent.t()} | {:error, :invalid_round}
   def drand_round(
@@ -458,27 +536,12 @@ defmodule Worldloom.Signals.Normalizer do
 
   defp normalize_minute_precision(encoded_time), do: encoded_time
 
-  defp normalize_count_map(counts, maximum_size) when maximum_size >= 0 do
-    counts
-    |> Enum.reduce_while([], fn
-      {key, count}, normalized when is_binary(key) and is_integer(count) and count >= 0 ->
-        {:cont, [{key, count} | normalized]}
-
-      _entry, _normalized ->
-        {:halt, :invalid}
-    end)
-    |> case do
-      :invalid ->
-        {:error, :invalid_counts}
-
-      normalized ->
-        public_counts =
-          normalized
-          |> Enum.sort_by(fn {key, count} -> {-count, key} end)
-          |> Enum.take(maximum_size)
-          |> Map.new()
-
-        {:ok, public_counts}
+  defp normalize_fixed_count_map(counts, keys) do
+    if Map.keys(counts) |> Enum.sort() == keys and
+         Enum.all?(counts, fn {_key, count} -> uint32?(count) end) do
+      {:ok, counts}
+    else
+      {:error, :invalid_counts}
     end
   end
 
@@ -491,6 +554,39 @@ defmodule Worldloom.Signals.Normalizer do
   end
 
   defp stable_lane(public_shape), do: :erlang.phash2(public_shape, 10_001) / 10_000
+
+  defp fetch_integer_counters(metrics, keys) do
+    counters = Map.take(metrics, keys)
+
+    if map_size(counters) == length(keys) and
+         Enum.all?(counters, fn {_key, count} -> is_integer(count) and count >= 0 end) do
+      {:ok, counters}
+    else
+      {:error, :invalid_metrics}
+    end
+  end
+
+  defp atom_keyed(counters) do
+    Map.new(counters, fn
+      {"total_actions", value} -> {:total_actions, value}
+      {"original_posts", value} -> {:original_posts, value}
+      {"replies", value} -> {:replies, value}
+      {"reposts", value} -> {:reposts, value}
+      {"creates", value} -> {:creates, value}
+      {"updates", value} -> {:updates, value}
+      {"deletes", value} -> {:deletes, value}
+      {"announced", value} -> {:announced, value}
+      {"withdrawn", value} -> {:withdrawn, value}
+      {"ipv4", value} -> {:ipv4, value}
+      {"ipv6", value} -> {:ipv6, value}
+      {"collector_observations", value} -> {:collector_observations, value}
+      {"peer_observations", value} -> {:peer_observations, value}
+      {"slot_count", value} -> {:slot_count, value}
+      {"first_slot", value} -> {:first_slot, value}
+      {"last_slot", value} -> {:last_slot, value}
+      {"gap_count", value} -> {:gap_count, value}
+    end)
+  end
 
   defp valid_bluesky_totals?(counters, false) do
     operation_total = counters.creates + counters.updates + counters.deletes

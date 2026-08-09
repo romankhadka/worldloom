@@ -229,7 +229,32 @@ rtk git commit -m "Drain signal persistence fairly by source"
 
 ## Task 4: Make pressure reducers associative and source-specific
 
-- [ ] **Step 1: Write grouping-invariance tests**
+- [x] **Step 1: Define the bounded merge algebra at ingestion and projection boundaries**
+
+Wikimedia's current top-five language projection and dominant-edit label are not
+sufficient statistics: a child merge can discard a language or edit type that
+would win after a later regrouping. Replace arbitrary language keys at ingestion
+with five fixed, deterministic, SHA-256-partitioned `language_buckets`, retain all
+five fixed edit-type counters, derive `dominant_edit_type`, and propagate an
+explicit `truncated` flag. This also bounds the worker's previously open-ended
+language map before normalization.
+
+RIPE `collector_count` and `peer_count` are distinct only inside one window and
+cannot be combined into cross-window distinct counts. Rename the durable metrics
+to `collector_observations` and `peer_observations`; a pressure summary sums those
+per-window observations and never claims global distinctness. Keep Solana's leaf
+invariants strict, but validate a multi-window pressure summary as an aggregate:
+sum its already-accounted `gap_count`, take the minimum and maximum slot endpoints,
+and never fabricate a boundary gap.
+
+The payload's bounded integers are the monoid. Every derived lane and intensity is
+recomputed through shared `Normalizer` formulas from the final integer statistics;
+never average an earlier event's floating-point lane or intensity. Saturating
+addition returns both the capped value and overflow state. `truncated` is true when
+any input was truncated or any counter/window total overflowed. Cap `window_count`
+at `floor(uint32_max / 4)` so `window_span_seconds = window_count * 4` remains valid.
+
+- [x] **Step 2: Write grouping-invariance tests**
 
 Extend `test/worldloom/signals/merger_test.exs` for Wikimedia, Bluesky, RIPE, and Solana. For each fixture list, assert:
 
@@ -241,25 +266,34 @@ Extend `test/worldloom/signals/merger_test.exs` for Wikimedia, Bluesky, RIPE, an
 assert regrouped == direct
 ```
 
-Assert merged payload has `window_count = sum`, `window_span_seconds = sum`, saturation/truncation propagation, deterministic external identity, and source-appropriate weighted lane/intensity. Assert `Merger.merge(drand_events) == {:error, :unsupported_source}`.
+Assert merged payload has `window_count = sum`, `window_span_seconds = sum`, saturation/truncation propagation, deterministic external identity, and source-appropriate lane/intensity derived from the final integer statistics. Assert `Merger.merge(drand_events) == {:error, :unsupported_source}`.
 
-- [ ] **Step 2: Run and verify RED**
+Compare the entire `SourceEvent`, not selected fields. Exercise every binary split,
+input permutation, and adversarial Wikimedia fixtures proving that complete fixed
+current and edit-type counters preserve totals and dominance. Cover saturation for every
+counter and the window cap, repeated RIPE peers/collectors as observations, and
+nonconsecutive Solana windows whose gaps were already charged at ingestion.
+
+- [x] **Step 3: Run and verify RED**
 
 ```bash
 rtk mix test test/worldloom/signals/merger_test.exs
 ```
 
-- [ ] **Step 3: Implement reducers using sufficient statistics**
+- [x] **Step 4: Implement reducers using sufficient statistics**
 
-Do not merge averages without their weights. Carry counts required to recompute lane/intensity exactly. Merge external IDs through the existing order-independent checksum. Label summaries as pressure summaries and disclose both `window_count` and `window_span_seconds`.
+Merge external IDs through the existing order-independent checksum and use the
+latest `occurred_at`. Label summaries as pressure summaries and disclose both
+`window_count` and `window_span_seconds`. Wikimedia, Bluesky, RIPE, and Solana each
+get an explicit reducer; drand remains unsupported.
 
-- [ ] **Step 4: Verify randomized grouping and commit**
+- [x] **Step 5: Verify randomized grouping and commit**
 
 Run each deterministic grouping case with shuffled input 100 times; output must be identical.
 
 ```bash
 rtk mix test test/worldloom/signals/merger_test.exs --repeat-until-failure 100 --max-failures 1
-rtk git add lib/worldloom/signals/merger.ex test/worldloom/signals/merger_test.exs
+rtk git add assets/js/worldloom/topology.js assets/test/topology.test.js docs/data-sources.md docs/superpowers/plans/2026-08-08-balanced-world-phase-4-transport-health.md docs/superpowers/specs/2026-08-08-balanced-world-signals-design.md lib/mix/tasks/worldloom.seed_demo.ex lib/worldloom/loom/instruction_metrics.ex lib/worldloom/loom/source_event.ex lib/worldloom/signals/merger.ex lib/worldloom/signals/normalizer.ex lib/worldloom/signals/wikimedia_bucket.ex test/support/fixtures/feeds/README.md test/support/fixtures/render_contract_v2.json test/support/worldloom_web/e2e_controller.ex test/worldloom/loom/instruction_metrics_test.exs test/worldloom/loom/instruction_test.exs test/worldloom/loom/source_event_test.exs test/worldloom/loom/visual_parameters_test.exs test/worldloom/signals/buffer_test.exs test/worldloom/signals/merger_test.exs test/worldloom/signals/normalizer_test.exs test/worldloom/signals/wikimedia_bucket_test.exs
 rtk git commit -m "Merge source pressure with associative summaries"
 ```
 

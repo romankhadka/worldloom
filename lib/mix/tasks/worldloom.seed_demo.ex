@@ -71,10 +71,20 @@ defmodule Mix.Tasks.Worldloom.SeedDemo do
 
     %{
       "summary" => "#{count} demo edits moved through the weave",
+      "window_count" => 1,
+      "window_span_seconds" => 4,
       "count" => count,
       "total_absolute_byte_delta" => count * 137,
-      "languages" => %{"en" => div(count + 1, 2), "es" => div(count, 2)},
-      "dominant_edit_type" => if(rem(index, 8) == 0, do: "new", else: "edit")
+      "language_buckets" => %{
+        "current_1" => div(count + 1, 2),
+        "current_2" => div(count, 2),
+        "current_3" => 0,
+        "current_4" => 0,
+        "current_5" => 0
+      },
+      "edit_types" => demo_edit_types(index, count),
+      "dominant_edit_type" => if(rem(index, 8) == 0, do: "new", else: "edit"),
+      "truncated" => false
     }
   end
 
@@ -106,6 +116,26 @@ defmodule Mix.Tasks.Worldloom.SeedDemo do
   defp payload(:visitor, index) do
     gesture = kind(:visitor, index)
     %{"summary" => "A demo visitor added a #{gesture} to the living edge"}
+  end
+
+  defp demo_edit_types(index, count) when rem(index, 8) == 0 do
+    %{
+      "categorize" => 0,
+      "edit" => 0,
+      "external" => 0,
+      "log" => 0,
+      "new" => count
+    }
+  end
+
+  defp demo_edit_types(_index, count) do
+    %{
+      "categorize" => 0,
+      "edit" => count,
+      "external" => 0,
+      "log" => 0,
+      "new" => 0
+    }
   end
 
   defp commit!(%SourceEvent{source: :visitor} = event) do
