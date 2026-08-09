@@ -1646,12 +1646,13 @@ Inspect the generated image at original resolution. Reject and correct the build
 - [ ] **Step 5: Verify public text and commit**
 
 ```bash
-rtk rg -n "WORLDLOOM_PUBLIC_URL|hello_phoenix|HelloPhoenix" . -g '!deps/**' -g '!_build/**' -g '!assets/node_modules/**'
+rtk rg -n "WORLDLOOM_PUBLIC_URL" . -g '!deps/**' -g '!_build/**' -g '!assets/node_modules/**'
 rtk git add README.md docs/release-notes/v1.0.0.md priv/static/images/worldloom-social-preview.png
 rtk git commit -m "Polish Worldloom's public presentation"
 ```
 
-Expected: `rg` returns no matches; the commit contains the current verified screenshot, not a concept image.
+Expected: no legacy scaffold identifiers remain; the commit contains the current
+verified screenshot, not a concept image.
 
 ## Task 12: Verify, integrate, and publish the completed pass
 
