@@ -64,7 +64,7 @@ Use these config keys and defaults in `config/config.exs`:
 
 ```elixir
 drand_enabled: false,
-drand_relays: ["https://api.drand.sh/v2", "https://api2.drand.sh/v2", "https://api3.drand.sh/v2"],
+drand_relays: ["https://api.drand.sh", "https://api2.drand.sh", "https://api3.drand.sh"],
 bluesky_enabled: false,
 bluesky_url: "wss://jetstream2.us-west.bsky.network/subscribe",
 ripe_enabled: false,

@@ -234,7 +234,11 @@ Create `test/worldloom/signals/drand_client_test.exs`. Use the fixed Quicknet ch
 @quicknet_chain_hash "52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971"
 ```
 
-Assert concurrent requests to the bounded v2-capable relay list return the first structurally valid response containing the requested positive round and exactly one 96-character lowercase hexadecimal `signature`. Reject a `randomness`-only response, malformed signature, wrong round, invalid JSON, timeout, and HTTP failure. Assert SHA-256 of the decoded 48 signature bytes becomes a 64-character lowercase render identity and that neither the signature, response body, nor URL appears in payloads, inspection, logs, or telemetry. Add a chain-info fixture and require the exact Quicknet hash, `beacon_id == "quicknet"`, `period == 3`, a positive integer `genesis_time`, a 64-character hexadecimal `genesis_seed`, a 192-character hexadecimal `public_key`, and `scheme == "bls-unchained-g1-rfc9380"` before accepting round scheduling.
+Pin the three production relay origins to `https://api.drand.sh`, `https://api2.drand.sh`, and `https://api3.drand.sh`. Assert exact requests to `/v2/chains/<quicknet-hash>/info` and `/v2/chains/<quicknet-hash>/rounds/<requested-round>`; never use `rounds/latest`. Require HTTP 200, an `application/json` media type, and a body no larger than 4,096 streamed bytes before manual JSON decoding. Round bodies must contain exactly a matching round in `1..9_007_199_254_740_991` and one 96-character lowercase hexadecimal `signature`; reject `randomness`, `previous_signature`, unknown keys, malformed signature, wrong round, invalid JSON, timeout, oversized body, wrong content type, and HTTP failure.
+
+Assert SHA-256 of the decoded 48 signature bytes becomes a 64-character lowercase render identity and that neither signature, render identity, response body, URL, chain metadata, nor external failure reason appears in client inspection, logs, telemetry, or public errors. Add a chain-info fixture and race it across the same relay list. An invalid HTTP success must not end the race. Require exactly the pinned lowercase Quicknet hash, `beacon_id == "quicknet"`, `period == 3`, `genesis_time` in `1..253_402_300_799`, a 64-character lowercase hexadecimal `genesis_seed`, a 192-character lowercase hexadecimal `public_key`, and `scheme == "bls-unchained-g1-rfc9380"`; retain only period and genesis time.
+
+Inject the request edge and timeout configuration without weakening production origin validation. Assert first-valid rather than first-completed behavior, chain-info failover, at most three concurrent tasks, timeout without caller exit, and that halting the race terminates every losing task without delayed results. Raised or exiting request functions collapse to the same unavailable outcome. Live relay smoke tests remain scheduled outside deterministic CI.
 
 - [ ] **Step 2: Run and verify RED**
 
@@ -244,18 +248,20 @@ rtk mix test test/worldloom/signals/drand_client_test.exs
 
 - [ ] **Step 3: Implement bounded concurrent Req calls**
 
-Create `lib/worldloom/signals/drand_client.ex`. Accept `relays`, `request`, and timeout through the initializer/options, rejecting more than three relay bases. Production defaults are exactly the three current v2-capable bases `https://api.drand.sh`, `https://api2.drand.sh`, and `https://api3.drand.sh`; tests may inject bounded local relay URLs. Use `Task.async_stream/3` with `ordered: false`, `max_concurrency: 3`, and a finite timeout to race `/v2/chains/<quicknet-hash>/...` requests, halting after the first valid `%{"round" => positive_integer, "signature" => signature_96_hex}`. Decode the signature, derive `render_identity = SHA256(signature_bytes)` as lowercase hexadecimal, and discard the signature. Fetch `/v2/chains/<quicknet-hash>/info` at initialization and retain only validated `period` and `genesis_time`. Return only:
+Create `lib/worldloom/signals/drand_client.ex`. Accept one to three unique pinned relay origins, an injected request function or Req adapter, and finite timeout configuration through `new/1`; invalid configuration is a programming error. Derive `Inspect` without relays, request functions, URLs, response bodies, signatures, or render identities. Use one shared race helper for chain info and exact rounds with `Task.async_stream/3`, `ordered: false`, `max_concurrency: 3`, finite `timeout`, and `on_timeout: :kill_task`. Reduce until the first validated result and halt the stream so enumerable cleanup terminates outstanding tasks. Treat `{:exit, _}`, request exceptions, transport errors, non-200 responses, and invalid bodies identically; never return or log their reasons.
+
+The default Req edge sets `retry: false`, `redirect: false`, `compressed: false`, `raw: true`, and `decode_body: false`, plus finite connect, pool, receive, and task timeouts. Stream into a 4,096-byte accumulator and halt immediately when the next chunk would cross the cap; do not trust `Content-Length`. This bounds retained response size even though the current transport chunk has already been allocated before the callback. Decode only a complete bounded body. Race `/info` during initialization and retain only validated `period` and `genesis_time`. Race exact requested rounds, decode the signature, derive `render_identity = SHA256(signature_bytes)` as lowercase hexadecimal, and discard the signature. Return only:
 
 ```elixir
 {:ok, %{round: round, render_identity: render_identity}}
 {:error, :unavailable}
 ```
 
-This is HTTPS structural validation and first-valid-response failover, not BLS signature verification or relay consensus.
+This is HTTPS structural validation and first-valid-response failover, not BLS signature verification, chain-identity recomputation, or relay consensus. Coarse telemetry may contain outcome atoms, duration, and relay count only.
 
 - [ ] **Step 4: Normalize without persisting beacon output**
 
-Add `Normalizer.drand_round/2`. Pass `render_identity` ephemerally to `SourceEvent`; durable payload remains exactly `%{"summary" => "drand Quicknet round #{round}", "round" => round}`. Identity is `drand-round:<round>` and occurrence time is `genesis_time + (round - 1) * period`, not local receipt time.
+Add `Normalizer.drand_round/2`. Require validated `%{period: 3, genesis_time: genesis_time}` and `%{round: round, render_identity: identity}`. Compute `unix_second = genesis_time + (round - 1) * 3`, require it in `0..253_402_300_799`, and construct UTC time with `DateTime.from_unix/2`. Return `{:error, :invalid_round}` for an unsafe round, invalid identity, or out-of-range timestamp. Pass `render_identity` ephemerally to `SourceEvent`; durable payload remains exactly `%{"summary" => "drand Quicknet round #{round}", "round" => round}`. Identity is exactly `drand-round:<round>` and occurrence time never uses local receipt time. Update SourceEvent, InstructionMetrics, browser validation, and their fixtures/tests so drand rounds use the positive JSON-safe range rather than uint32. Add boundaries for round one, maximum JSON-safe input, timestamp overflow, mismatched requested round, and repeated deterministic normalization.
 
 - [ ] **Step 5: Verify and commit**
 
