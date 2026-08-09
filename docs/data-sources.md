@@ -164,6 +164,17 @@ This is HTTPS failover plus structural validation. Worldloom does not verify the
 signature, recompute chain identity, compare relay consensus, or describe the result
 as verified randomness. Failed or malformed relays collapse to source unavailability.
 
+The qualified worker remains production-disabled until its independent source flag is
+introduced. It maps UTC to the exact Quicknet round using the published genesis and
+three-second period, persists each accepted round through the shared Buffer, and
+advances its checkpoint only after that durable submission succeeds. A restart
+recovers no more than twenty missing rounds in ascending order. If the durable cursor
+is farther behind, the worker requests the current exact round, records the skipped
+round count in checkpoint metadata, and reports a coarse replay gap instead of
+fabricating or merging pulses. A missing or future cursor resumes from the current
+round. Source-local capped backoff keeps relay or persistence failures from delaying
+other feeds.
+
 ## Best-effort source behavior
 
 Every public endpoint above is operated outside Worldloom and may throttle, delay,

@@ -24,6 +24,8 @@
 - `lib/worldloom/signals/solana_socket.ex`
 - `lib/worldloom/signals/solana_socket/state.ex`
 - `lib/worldloom/signals/drand_worker.ex`
+- `lib/worldloom/signals/drand_worker/state.ex`
+- `test/support/fake_drand_client.ex`
 - `test/support/fake_websocket_transport.ex`
 - `test/support/signals_supervisor_probe.ex`
 - `test/support/websocket_fixture_server.ex`
@@ -364,25 +366,25 @@ rtk git commit -m "Isolate bounded public WebSocket transports"
 
 ## Task 6: Implement bounded drand polling and recovery
 
-- [ ] **Step 1: Write worker recovery tests**
+- [x] **Step 1: Write worker recovery tests**
 
 Create `test/worldloom/signals/drand_worker_test.exs`. With injected client, clock, timer, and buffer, assert one poll per expected three-second round, ordered catch-up, maximum 20 missed rounds, duplicate round idempotence, no merge, independent backoff, and stale health after 12 seconds.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 ```bash
 rtk mix test test/worldloom/signals/drand_worker_test.exs
 ```
 
-- [ ] **Step 3: Implement the poll worker**
+- [x] **Step 3: Implement the poll worker**
 
 Create `lib/worldloom/signals/drand_worker.ex`. On each scheduled tick, derive expected round, ask `DrandClient` for exact rounds, normalize, and submit in ascending order. Stop catch-up after twenty rounds and record the remaining interval as a gap. Use its own capped backoff state; never block or restart a WebSocket sibling.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 ```bash
 rtk mix test test/worldloom/signals/drand_worker_test.exs test/worldloom/signals/drand_client_test.exs
-rtk git add lib/worldloom/signals/drand_worker.ex test/worldloom/signals/drand_worker_test.exs
+rtk git add docs/data-sources.md docs/superpowers/plans/2026-08-08-balanced-world-phase-4-transport-health.md lib/worldloom/signals/drand_worker.ex lib/worldloom/signals/drand_worker/state.ex test/support/fake_drand_client.ex test/worldloom/signals/drand_worker_test.exs
 rtk git commit -m "Recover bounded drand rounds in order"
 ```
 
