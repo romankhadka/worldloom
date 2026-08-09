@@ -4,6 +4,7 @@ defmodule Mix.Tasks.Worldloom.SeedDemo do
   alias Worldloom.Loom.Coordinator
   alias Worldloom.Loom.SourceEvent
   alias Worldloom.Loom.Store
+  alias Worldloom.Signals.Config
 
   @requirements ["app.config"]
   @shortdoc "Creates one deterministic hour of Worldloom demo signals"
@@ -188,10 +189,16 @@ defmodule Mix.Tasks.Worldloom.SeedDemo do
   defp disable_feed_startup do
     signal_configuration = Application.fetch_env!(:worldloom, Worldloom.Signals)
 
+    disabled_configuration =
+      case signal_configuration do
+        %Config{} = config -> %{config | enabled: false}
+        config when is_list(config) -> Keyword.put(config, :enabled, false)
+      end
+
     Application.put_env(
       :worldloom,
       Worldloom.Signals,
-      Keyword.put(signal_configuration, :enabled, false)
+      disabled_configuration
     )
   end
 end

@@ -40,9 +40,10 @@ defmodule Worldloom.Application do
   end
 
   defp signal_ingestion_enabled? do
-    :worldloom
-    |> Application.fetch_env!(Worldloom.Signals)
-    |> Keyword.get(:enabled, true)
+    case Application.fetch_env!(:worldloom, Worldloom.Signals) do
+      %Worldloom.Signals.Config{} = config -> config.enabled
+      config when is_list(config) -> Keyword.get(config, :enabled, true)
+    end
   end
 
   defp configured_options(module), do: Application.get_env(:worldloom, module, [])

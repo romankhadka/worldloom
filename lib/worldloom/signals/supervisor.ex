@@ -1,6 +1,7 @@
 defmodule Worldloom.Signals.Supervisor do
   use Supervisor
 
+  alias Worldloom.Signals.Config
   alias Worldloom.Signals.EarthquakeWorker
   alias Worldloom.Signals.WeatherWorker
   alias Worldloom.Signals.WikimediaWorker
@@ -23,18 +24,18 @@ defmodule Worldloom.Signals.Supervisor do
   end
 
   defp configured_children(config) do
-    if Keyword.get(config, :enabled, true) do
+    if configured?(config, :enabled, true) do
       [
         {Task.Supervisor, name: Worldloom.Signals.StreamSupervisor},
         {WikimediaWorker,
-         url: Keyword.fetch!(config, :wikimedia_url),
+         url: fetch_config!(config, :wikimedia_url),
          task_supervisor: Worldloom.Signals.StreamSupervisor},
         {EarthquakeWorker,
-         url: Keyword.fetch!(config, :usgs_url),
-         interval_ms: Keyword.fetch!(config, :earthquake_interval_ms)},
+         url: fetch_config!(config, :usgs_url),
+         interval_ms: fetch_config!(config, :earthquake_interval_ms)},
         {WeatherWorker,
-         url: Keyword.fetch!(config, :open_meteo_url),
-         interval_ms: Keyword.fetch!(config, :weather_interval_ms)}
+         url: fetch_config!(config, :open_meteo_url),
+         interval_ms: fetch_config!(config, :weather_interval_ms)}
       ]
     else
       []
@@ -42,6 +43,10 @@ defmodule Worldloom.Signals.Supervisor do
   end
 
   defp signal_config, do: Application.fetch_env!(:worldloom, Worldloom.Signals)
+  defp configured?(%Config{} = config, setting, _default), do: Map.fetch!(config, setting)
+  defp configured?(config, setting, default), do: Keyword.get(config, setting, default)
+  defp fetch_config!(%Config{} = config, setting), do: Map.fetch!(config, setting)
+  defp fetch_config!(config, setting), do: Keyword.fetch!(config, setting)
   defp registration_options(nil), do: []
   defp registration_options(name), do: [name: name]
 end

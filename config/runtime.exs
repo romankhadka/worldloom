@@ -23,16 +23,44 @@ end
 signal_config = Application.fetch_env!(:worldloom, Worldloom.Signals)
 
 signal_config =
-  case System.get_env("WORLDLOOM_FEEDS_ENABLED") do
-    nil ->
-      signal_config
+  case signal_config do
+    %Worldloom.Signals.Config{} = configured_signals ->
+      configured_signals |> Map.from_struct() |> Map.to_list()
 
-    enabled when enabled in ["true", "false"] ->
-      Keyword.put(signal_config, :enabled, enabled == "true")
-
-    _invalid ->
-      raise "environment variable WORLDLOOM_FEEDS_ENABLED must be true or false"
+    configured_signals when is_list(configured_signals) ->
+      configured_signals
   end
+
+signal_environment = [
+  enabled: System.get_env("WORLDLOOM_FEEDS_ENABLED"),
+  drand_enabled: System.get_env("WORLDLOOM_DRAND_ENABLED"),
+  drand_relays: System.get_env("WORLDLOOM_DRAND_RELAYS"),
+  bluesky_enabled: System.get_env("WORLDLOOM_BLUESKY_ENABLED"),
+  bluesky_url: System.get_env("WORLDLOOM_BLUESKY_URL"),
+  ripe_enabled: System.get_env("WORLDLOOM_RIPE_ENABLED"),
+  ripe_url: System.get_env("WORLDLOOM_RIPE_URL"),
+  ripe_collectors: System.get_env("WORLDLOOM_RIPE_COLLECTORS"),
+  solana_enabled: System.get_env("WORLDLOOM_SOLANA_ENABLED")
+]
+
+signal_environment =
+  if config_env() == :prod do
+    signal_environment ++
+      [
+        wikimedia_url: System.get_env("WORLDLOOM_WIKIMEDIA_URL"),
+        usgs_url: System.get_env("WORLDLOOM_USGS_URL"),
+        open_meteo_url: System.get_env("WORLDLOOM_OPEN_METEO_URL")
+      ]
+  else
+    signal_environment
+  end
+
+signal_overrides = Enum.reject(signal_environment, fn {_key, setting} -> is_nil(setting) end)
+
+signal_config =
+  signal_config
+  |> Keyword.merge(signal_overrides)
+  |> Worldloom.Signals.Config.from_keyword!(config_env())
 
 config :worldloom, Worldloom.Signals, signal_config
 
@@ -42,30 +70,6 @@ if config_env() == :prod do
       raise "environment variable WORLDLOOM_RATE_LIMIT_SALT is missing"
 
   config :worldloom, :rate_limit_salt, rate_limit_salt
-
-  signal_config =
-    [
-      wikimedia_url: "WORLDLOOM_WIKIMEDIA_URL",
-      usgs_url: "WORLDLOOM_USGS_URL",
-      open_meteo_url: "WORLDLOOM_OPEN_METEO_URL"
-    ]
-    |> Enum.reduce(signal_config, fn {config_key, environment_key}, configured_signals ->
-      case System.get_env(environment_key) do
-        nil ->
-          configured_signals
-
-        override_url ->
-          case URI.parse(override_url) do
-            %URI{scheme: "https", host: host} when is_binary(host) and host != "" ->
-              Keyword.put(configured_signals, config_key, override_url)
-
-            _invalid_url ->
-              raise "environment variable #{environment_key} must be an HTTPS URL"
-          end
-      end
-    end)
-
-  config :worldloom, Worldloom.Signals, signal_config
 
   database_url =
     System.get_env("DATABASE_URL") ||

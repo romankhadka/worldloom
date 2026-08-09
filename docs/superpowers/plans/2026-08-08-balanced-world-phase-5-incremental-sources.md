@@ -34,7 +34,7 @@
 
 ## Task 1: Make source configuration explicit and fail closed
 
-- [ ] **Step 1: Write runtime parsing tests**
+- [x] **Step 1: Write runtime parsing tests**
 
 Create `test/worldloom/signals/config_test.exs`. Assert defaults:
 
@@ -50,13 +50,13 @@ Assert only literal `"true"` and `"false"` parse, invalid booleans raise with th
 
 Assert `WORLDLOOM_FEEDS_ENABLED=false` overrides every per-source flag.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 ```bash
 rtk mix test test/worldloom/signals/config_test.exs test/worldloom/runtime_config_test.exs
 ```
 
-- [ ] **Step 3: Create the typed config boundary**
+- [x] **Step 3: Create the typed config boundary**
 
 Create `lib/worldloom/signals/config.ex` with a struct and pure `from_keyword!/2`. Keep `System.get_env/1` in `config/runtime.exs`; pass strings into the pure parser for tests.
 
@@ -76,7 +76,7 @@ solana_url: nil
 
 Environment keys are `WORLDLOOM_DRAND_ENABLED`, `WORLDLOOM_DRAND_RELAYS`, `WORLDLOOM_BLUESKY_ENABLED`, `WORLDLOOM_BLUESKY_URL`, `WORLDLOOM_RIPE_ENABLED`, `WORLDLOOM_RIPE_URL`, `WORLDLOOM_RIPE_COLLECTORS`, and `WORLDLOOM_SOLANA_ENABLED`. Reject `WORLDLOOM_SOLANA_ENABLED=true` in production with a message that a production endpoint decision is required.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 ```bash
 rtk mix test test/worldloom/signals/config_test.exs test/worldloom/runtime_config_test.exs

@@ -1,6 +1,11 @@
 import Config
 
-config :worldloom, Worldloom.Signals, enabled: false
+config :worldloom, Worldloom.Signals,
+  enabled: false,
+  drand_enabled: false,
+  bluesky_enabled: false,
+  ripe_enabled: false,
+  solana_enabled: false
 
 e2e? = System.get_env("WORLDLOOM_E2E") == "true"
 config :worldloom, :acceptance_scene_diagnostics, e2e?
