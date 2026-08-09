@@ -219,7 +219,7 @@ On persistence failure, put the entry back at the front of its source partition 
 
 Emit `[:worldloom, :signals, :buffer, :depth]` after every affected partition mutation, including source depth zero, with measurements `%{depth: total_depth, source_depth: source_depth, observed_at: monotonic_milliseconds}` and metadata `%{source: fixed_source_atom}`. Never attach event, checkpoint, cursor, URL, or provider failure. Record `{:merge, count}` using queue slots eliminated (`inputs - 1`) and `{:retry, 1}` for each scheduled retry through `HealthRegistry`; retry telemetry separately retains the attempt ordinal from one through three.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 ```bash
 rtk mix test test/worldloom/signals/buffer_test.exs test/worldloom/loom/coordinator_test.exs test/worldloom_web/telemetry_test.exs
