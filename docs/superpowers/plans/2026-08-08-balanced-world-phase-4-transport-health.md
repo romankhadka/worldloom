@@ -86,7 +86,7 @@ rtk mix hex.audit
 rtk mix deps.get --check-locked
 ```
 
-- [ ] **Step 4: Commit dependency and policy together**
+- [x] **Step 4: Commit dependency and policy together**
 
 ```bash
 rtk git add mix.exs mix.lock test/worldloom/signals/supervisor_test.exs test/worldloom_web/telemetry_test.exs docs/superpowers/plans/2026-08-08-balanced-world-phase-4-transport-health.md
