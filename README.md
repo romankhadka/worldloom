@@ -25,7 +25,11 @@ committed artifact and a restart reconstructs it from PostgreSQL.
 
 - Watch seven public signals become distinct strands, fans, forks, beads, crystals,
   rupture rings, and atmospheric shifts.
-- Add a **Tug**, **Knot**, or **Illuminate** gesture at the live edge.
+- Move between **1m**, **5m**, and **15m** UTC scales. **Now** stays pinned at the
+  live edge, while panned history and selected chapters keep their center as the
+  scale changes.
+- Add a visitor gesture in two steps: touch or adjust the vertical lane, then press
+  **Tug**, **Knot**, or **Illuminate**.
 - Inspect a formation with pointer, touch, or keyboard and share its permanent link.
 - Browse earlier UTC chapters without changing their history.
 - Use reduced motion and the screen-reader formation summary without losing controls.
@@ -126,9 +130,11 @@ npm run test:e2e
 ```
 
 The gates cover source normalization, transactional persistence, retry and checkpoint
-behavior, LiveView interaction, deterministic rendering, keyboard/touch operation,
-reduced motion, two-browser convergence, and reload reconstruction. The browser suite
-uses an isolated `worldloom_e2e` database and deterministic feed-disabled data.
+behavior, bounded and balanced timeline projection, trusted chapter-anchor preservation,
+LiveView interaction, deterministic rendering, keyboard operation, real mobile tap and
+touch-drag submission, overlay scrolling, reduced motion, two-browser convergence, and
+reload reconstruction. The browser suite uses an isolated `worldloom_e2e` database and
+deterministic feed-disabled data.
 
 The explicit launch-capacity proof adds 100 independent Chromium contexts, real
 LiveView snapshot progress, WebSocket stability, aggregate Presence cleanup, and one
