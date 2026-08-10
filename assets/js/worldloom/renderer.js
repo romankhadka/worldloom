@@ -193,6 +193,9 @@ export class Renderer {
       ...this.events.slice(-topologyCapacity),
     ]
     this.commands = this.projectScene(topologyInstructions, viewport, {
+      axis: this.windowEnd === null
+        ? null
+        : {end: this.windowEnd, durationMilliseconds: 60_000},
       windowEnd: this.windowEnd,
       displayInstructions: this.instructions,
       memoryInstructions: this.memoryInstructions,

@@ -3,7 +3,6 @@ import {xorshift32} from "./random.js"
 import {buildTopology} from "./topology.js"
 
 const supportedRenderVersion = 1
-const liveWindowMilliseconds = 60_000
 const defaultSpacing = 28
 const maximumVisitorBandSpan = 8
 const maximumDurableDisplayStep = 8
@@ -42,18 +41,20 @@ export function sequenceToX(sequence, viewport) {
 
 export function eventTimeToX(
   occurredAt,
-  windowEnd,
+  axis,
   viewport,
   {clampToWindow = true} = {},
 ) {
   const padding = viewport.padding ?? 40
   const usableWidth = Math.max(0, viewport.width - padding * 2)
-  const windowEndMilliseconds = Date.parse(windowEnd)
+  const windowEndMilliseconds = Date.parse(axis?.end)
+  const durationMilliseconds = Number(axis?.durationMilliseconds)
   const occurredAtMilliseconds = Date.parse(occurredAt)
-  if (![windowEndMilliseconds, occurredAtMilliseconds].every(Number.isFinite)) return padding
+  if (![windowEndMilliseconds, durationMilliseconds, occurredAtMilliseconds]
+    .every(Number.isFinite) || durationMilliseconds <= 0) return padding
 
-  const windowStartMilliseconds = windowEndMilliseconds - liveWindowMilliseconds
-  const rawRatio = (occurredAtMilliseconds - windowStartMilliseconds) / liveWindowMilliseconds
+  const windowStartMilliseconds = windowEndMilliseconds - durationMilliseconds
+  const rawRatio = (occurredAtMilliseconds - windowStartMilliseconds) / durationMilliseconds
   const ratio = clampToWindow ? Math.min(1, Math.max(0, rawRatio)) : rawRatio
   return padding + ratio * usableWidth
 }
@@ -128,16 +129,16 @@ export function commandsForScene(
     ambient = null,
     projectionInstructions = instructions,
     hitInstructions = instructions,
-    windowEnd = null,
+    axis = null,
     displayInstructions = instructions,
     memoryInstructions = [],
     historyInstructions = [],
     scaffoldInstructions = [],
   } = {},
 ) {
-  const currentDisplayInstructions = windowEnd === null
-    ? displayInstructions
-    : displayInstructions.filter(instruction => withinLiveWindow(instruction, windowEnd))
+  const currentDisplayInstructions = validTimeAxis(axis)
+    ? displayInstructions.filter(instruction => withinTimeAxis(instruction, axis))
+    : displayInstructions
   const currentDisplaySequences = new Set(
     currentDisplayInstructions.map(instruction => instruction.sequence),
   )
@@ -157,15 +158,15 @@ export function commandsForScene(
     ...viewport,
     maxSequence,
     displayPositions: displayPositionsFor(projectionOrdered, viewport),
-    eventTimePositions: windowEnd === null
-      ? null
-      : eventTimePositionsFor(
+    eventTimePositions: validTimeAxis(axis)
+      ? eventTimePositionsFor(
           currentDisplayInstructions,
           historyInstructions,
           scaffoldInstructions,
-          windowEnd,
+          axis,
           viewport,
-        ),
+        )
+      : null,
   }
   const topology = buildTopology(ordered)
   const topologySequences = new Set(ordered.map(instruction => instruction.sequence))
@@ -234,13 +235,20 @@ function contextualMemoryCommands(instructions, viewport) {
   }, ...traces]
 }
 
-function withinLiveWindow(instruction, windowEnd) {
+function validTimeAxis(axis) {
+  return Number.isFinite(Date.parse(axis?.end)) &&
+    Number.isFinite(Number(axis?.durationMilliseconds)) &&
+    Number(axis.durationMilliseconds) > 0
+}
+
+function withinTimeAxis(instruction, axis) {
   const occurredAtMilliseconds = Date.parse(instruction?.occurred_at)
-  const windowEndMilliseconds = Date.parse(windowEnd)
+  const windowEndMilliseconds = Date.parse(axis.end)
+  const durationMilliseconds = Number(axis.durationMilliseconds)
   if (![occurredAtMilliseconds, windowEndMilliseconds].every(Number.isFinite)) return false
   const occurredAtSecond = Math.floor(occurredAtMilliseconds / 1000) * 1000
   const windowEndSecond = Math.floor(windowEndMilliseconds / 1000) * 1000
-  return occurredAtSecond >= windowEndSecond - liveWindowMilliseconds &&
+  return occurredAtSecond >= windowEndSecond - durationMilliseconds &&
     occurredAtSecond <= windowEndSecond
 }
 
@@ -248,17 +256,17 @@ function eventTimePositionsFor(
   displayInstructions,
   historyInstructions,
   scaffoldInstructions,
-  windowEnd,
+  axis,
   viewport,
 ) {
   const positions = new Map()
   for (const instruction of displayInstructions) {
-    positions.set(instruction.sequence, eventTimeToX(instruction.occurred_at, windowEnd, viewport))
+    positions.set(instruction.sequence, eventTimeToX(instruction.occurred_at, axis, viewport))
   }
   for (const instruction of [...historyInstructions, ...scaffoldInstructions]) {
     positions.set(
       instruction.sequence,
-      eventTimeToX(instruction.occurred_at, windowEnd, viewport, {clampToWindow: false}),
+      eventTimeToX(instruction.occurred_at, axis, viewport, {clampToWindow: false}),
     )
   }
   return positions

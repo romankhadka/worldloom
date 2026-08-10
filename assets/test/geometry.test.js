@@ -28,11 +28,55 @@ const versionTwoContract = JSON.parse(
 
 const viewport = {width: 1000, height: 600, maxSequence: 106, spacing: 40, padding: 50}
 
+test("projects one five and fifteen minute axes exactly across the drawable width", () => {
+  const projectionViewport = {width: 800, height: 600, padding: 40}
+
+  for (const durationMilliseconds of [60_000, 300_000, 900_000]) {
+    const axis = {
+      end: "2026-08-09T12:15:00.000Z",
+      durationMilliseconds,
+    }
+    const start = new Date(Date.parse(axis.end) - durationMilliseconds).toISOString()
+
+    assert.equal(eventTimeToX(start, axis, projectionViewport), projectionViewport.padding)
+    assert.equal(
+      eventTimeToX(axis.end, axis, projectionViewport),
+      projectionViewport.width - projectionViewport.padding,
+    )
+  }
+})
+
+test("uses one fifteen-minute axis for structural and hit geometry", () => {
+  const instruction = {
+    ...structuredClone(versionTwoContract[0]),
+    sequence: 90_001,
+    occurred_at: "2026-08-09T12:07:30.000Z",
+  }
+  const axis = {
+    end: "2026-08-09T12:15:00.000Z",
+    durationMilliseconds: 900_000,
+  }
+  const commands = commandsForScene([instruction], viewport, {
+    axis,
+    displayInstructions: [instruction],
+    projectionInstructions: [instruction],
+    hitInstructions: [instruction],
+  })
+  const formation = commands.find(command => command.sequence === instruction.sequence &&
+    command.type !== "anchor-hit")
+  const hit = commands.find(command => command.sequence === instruction.sequence &&
+    command.type === "anchor-hit")
+
+  assert.equal(formation.x, viewport.width / 2)
+  assert.equal(hit.x, formation.x)
+  assert.equal(hit.hit.x + hit.hit.width / 2, formation.x)
+})
+
 test("projects the snapshot minute exactly across the drawable width", () => {
   const projectionViewport = {width: 1001, height: 600, padding: 50}
   const xFor = occurredAt => eventTimeToX(
     occurredAt,
-    balancedSnapshot.window_end,
+    timelineAxis(balancedSnapshot.window_end),
     projectionViewport,
   )
 
@@ -75,11 +119,11 @@ test("projects every valid version two topology formation into one visible struc
     ["solana", "slot-braid"],
     ["drand", "public-pulse"],
   ])
-  const windowEnd = "2026-08-03T12:01:03.000Z"
+  const axis = timelineAxis("2026-08-03T12:01:03.000Z")
 
   for (const instruction of versionTwoContract) {
     const commands = commandsForScene([instruction], viewport, {
-      windowEnd,
+      axis,
       displayInstructions: [instruction],
       projectionInstructions: [instruction],
       hitInstructions: [instruction],
@@ -93,7 +137,7 @@ test("projects every valid version two topology formation into one visible struc
     assert.equal(structural[0].source, instruction.source)
     assert.equal(
       structural[0].x,
-      eventTimeToX(instruction.occurred_at, windowEnd, viewport),
+      eventTimeToX(instruction.occurred_at, axis, viewport),
     )
     assert.ok(projectedPoints(structural[0]).length > 0)
     assert.equal(commands.filter(command => command.type === "anchor-hit").length, 1)
@@ -103,7 +147,7 @@ test("projects every valid version two topology formation into one visible struc
 test("derives each source material from its bounded grammar width", () => {
   for (const instruction of versionTwoContract) {
     const commands = commandsForScene([instruction], viewport, {
-      windowEnd: "2026-08-03T12:01:03.000Z",
+      axis: timelineAxis("2026-08-03T12:01:03.000Z"),
       displayInstructions: [instruction],
       projectionInstructions: [instruction],
       hitInstructions: [instruction],
@@ -135,7 +179,11 @@ test("separates equal-time source families without leaving the shared event-time
     instructions.some(instruction => instruction.sequence === command.sequence) &&
       command.type !== "anchor-hit"
   )
-  const expectedX = eventTimeToX(occurredAt, balancedSnapshot.window_end, viewport)
+  const expectedX = eventTimeToX(
+    occurredAt,
+    timelineAxis(balancedSnapshot.window_end),
+    viewport,
+  )
 
   assert.equal(structural.length, instructions.length)
   assert.ok(structural.every(command => command.x === expectedX))
@@ -396,7 +444,7 @@ test("renders a loaded memory event once in its real historical position", () =>
   assert.equal(formation.occurredAt, memory.occurred_at)
   assert.equal(
     formation.x,
-    eventTimeToX(memory.occurred_at, balancedSnapshot.window_end, viewport, {
+    eventTimeToX(memory.occurred_at, timelineAxis(balancedSnapshot.window_end), viewport, {
       clampToWindow: false,
     }),
   )
@@ -524,7 +572,7 @@ test("projects live scaffold context on its actual event-time coordinate", () =>
     },
   ]
   const commands = commandsForScene(scaffold, viewport, {
-    windowEnd: balancedSnapshot.window_end,
+    axis: timelineAxis(balancedSnapshot.window_end),
     displayInstructions: [],
     memoryInstructions: [],
     ambient: null,
@@ -1042,7 +1090,7 @@ function balancedSceneCommands({
   ]
 
   return commandsForScene(topologyInstructions, projectionViewport, {
-    windowEnd: balancedSnapshot.window_end,
+    axis: timelineAxis(balancedSnapshot.window_end),
     displayInstructions,
     memoryInstructions,
     ambient,
@@ -1051,6 +1099,10 @@ function balancedSceneCommands({
     projectionInstructions: topologyInstructions,
     hitInstructions: [...historyInstructions, ...displayInstructions],
   })
+}
+
+function timelineAxis(end, durationMilliseconds = 60_000) {
+  return {end, durationMilliseconds}
 }
 
 function assertCanvasSafeNumbers(commands) {

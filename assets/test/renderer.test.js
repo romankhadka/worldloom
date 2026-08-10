@@ -1628,11 +1628,19 @@ function assertEventTimeScaffold(renderer, scaffold, windowEnd) {
   assert.ok(spine)
   assert.equal(
     spine.segments[0].curve.from.x,
-    eventTimeToX(scaffold[0].occurred_at, windowEnd, renderer.viewport()),
+    eventTimeToX(
+      scaffold[0].occurred_at,
+      {end: windowEnd, durationMilliseconds: 60_000},
+      renderer.viewport(),
+    ),
   )
   assert.equal(
     spine.segments.at(-1).curve.to.x,
-    eventTimeToX(scaffold.at(-1).occurred_at, windowEnd, renderer.viewport()),
+    eventTimeToX(
+      scaffold.at(-1).occurred_at,
+      {end: windowEnd, durationMilliseconds: 60_000},
+      renderer.viewport(),
+    ),
   )
 }
 
