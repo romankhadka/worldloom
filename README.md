@@ -174,6 +174,7 @@ recovery, metrics, and incident procedures live in [docs/operations.md](docs/ope
 
 ## Project links
 
+- [Agent guide](docs/agent-guide.md)
 - [Architecture](ARCHITECTURE.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
