@@ -234,6 +234,67 @@ test("the opening composition prioritizes unobstructed artwork", async ({page}) 
   )
 })
 
+test("Lacquered Gallery reaches the rendered interface and interaction states", async ({
+  page,
+}) => {
+  const browserFailures = monitorPage(page, "Lacquered Gallery")
+  await openWorldloom(page)
+
+  const palette = await page.evaluate(() => {
+    const root = getComputedStyle(document.documentElement)
+    const tokens = [
+      "lacquer-deep",
+      "lacquer",
+      "wine",
+      "wine-raised",
+      "bone",
+      "parchment",
+      "saffron",
+      "jade",
+      "copper",
+      "health-live",
+      "health-disconnected",
+    ]
+
+    return Object.fromEntries(
+      tokens.map(token => [
+        token,
+        root.getPropertyValue(`--loom-${token}`).trim().toLowerCase(),
+      ]),
+    )
+  })
+  expect(palette).toEqual({
+    "lacquer-deep": "#120708",
+    lacquer: "#241013",
+    wine: "#35171a",
+    "wine-raised": "#4b2020",
+    bone: "#f6e2c5",
+    parchment: "#cbb89f",
+    saffron: "#e3a53a",
+    jade: "#4db69a",
+    copper: "#e07245",
+    "health-live": "#86d29d",
+    "health-disconnected": "#f08268",
+  })
+
+  const illuminate = page.getByRole("button", {
+    name: "Illuminate",
+    exact: true,
+  })
+  await illuminate.hover()
+  expect(
+    await compositedContrastContract(
+      page,
+      '.gesture-button[data-gesture="illuminate"]',
+    ),
+  ).toBeGreaterThanOrEqual(4.5)
+
+  await illuminate.focus()
+  await expect(illuminate).toBeFocused()
+  await expect(illuminate).toHaveCSS("outline-color", "rgb(227, 165, 58)")
+  expect(browserFailures).toEqual([])
+})
+
 test("quiet labels retain localized contrast over weather", async ({browser}) => {
   const baseURL = process.env.WORLDLOOM_BASE_URL ?? "http://localhost:4002"
   const contrastContracts = [
@@ -293,7 +354,7 @@ test("quiet labels retain localized contrast over weather", async ({browser}) =>
         const contractName = `${viewport.name} ${selectors.container}`
 
         expect.soft(contract.backgroundImage, contractName).toBe("none")
-        expect.soft(contract.backingColor.rgb, contractName).toEqual([3, 8, 6])
+        expect.soft(contract.backingColor.rgb, contractName).toEqual([18, 7, 8])
         expect.soft(contract.backingColor.alpha, contractName).toBeGreaterThanOrEqual(0.72)
         expect.soft(contract.position, contractName).toBe("absolute")
         expect.soft(contract.pointerEvents, contractName).toBe("none")
@@ -1170,7 +1231,7 @@ async function localContrastContract(page, containerSelector, textSelectors) {
         element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden",
       )
       const containerBounds = container.getBoundingClientRect()
-      const worstWeather = [139, 132, 82]
+      const worstWeather = [141, 165, 110]
       const backedWeather = blend(
         backingColor.rgb,
         worstWeather,
@@ -1233,6 +1294,98 @@ async function localContrastContract(page, containerSelector, textSelectors) {
     },
     {containerSelector, textSelectors},
   )
+}
+
+async function compositedContrastContract(page, targetSelector) {
+  return page.evaluate(targetSelector => {
+    const target = document.querySelector(targetSelector)
+    if (!target) throw new Error(`contrast target is unavailable: ${targetSelector}`)
+
+    const gestureDock = target.closest("#gesture-dock")
+    if (!gestureDock) {
+      throw new Error(`contrast target has no #gesture-dock: ${targetSelector}`)
+    }
+
+    const rootStyle = getComputedStyle(document.documentElement)
+    const targetStyle = getComputedStyle(target)
+    const dockStyle = getComputedStyle(gestureDock)
+    const worstFoundation = parseColor(
+      rootStyle.getPropertyValue("--loom-wine-raised"),
+    )
+    const dockSurface = composite(
+      parseColor(dockStyle.backgroundColor),
+      worstFoundation,
+    )
+    const targetSurface = composite(
+      parseColor(targetStyle.backgroundColor),
+      dockSurface,
+    )
+    const renderedText = composite(parseColor(targetStyle.color), targetSurface)
+
+    return contrast(renderedText.rgb, targetSurface.rgb)
+
+    function parseColor(color) {
+      const normalized = color.trim().toLowerCase()
+      const hex = normalized.match(/^#([0-9a-f]{6})([0-9a-f]{2})?$/)
+      if (hex) {
+        return {
+          rgb: [0, 2, 4].map(offset =>
+            Number.parseInt(hex[1].slice(offset, offset + 2), 16),
+          ),
+          alpha: hex[2] ? Number.parseInt(hex[2], 16) / 255 : 1,
+        }
+      }
+
+      const functional = normalized.match(/^rgba?\((.+)\)$/)
+      if (functional) {
+        const channels = functional[1]
+          .replace("/", " ")
+          .split(/[\s,]+/)
+          .filter(Boolean)
+          .map(Number)
+        if (
+          (channels.length === 3 || channels.length === 4) &&
+          channels.every(Number.isFinite)
+        ) {
+          return {rgb: channels.slice(0, 3), alpha: channels[3] ?? 1}
+        }
+      }
+
+      throw new Error(`unsupported contrast color: ${color}`)
+    }
+
+    function composite(foreground, background) {
+      const alpha =
+        foreground.alpha + background.alpha * (1 - foreground.alpha)
+      if (alpha === 0) throw new Error("cannot composite two transparent colors")
+
+      return {
+        rgb: foreground.rgb.map((channel, index) =>
+          (channel * foreground.alpha +
+            background.rgb[index] * background.alpha *
+              (1 - foreground.alpha)) /
+          alpha,
+        ),
+        alpha,
+      }
+    }
+
+    function contrast(first, second) {
+      const brighter = Math.max(luminance(first), luminance(second))
+      const darker = Math.min(luminance(first), luminance(second))
+      return (brighter + 0.05) / (darker + 0.05)
+    }
+
+    function luminance(color) {
+      const [red, green, blue] = color.map(channel => {
+        const normalized = channel / 255
+        return normalized <= 0.04045
+          ? normalized / 12.92
+          : ((normalized + 0.055) / 1.055) ** 2.4
+      })
+      return red * 0.2126 + green * 0.7152 + blue * 0.0722
+    }
+  }, targetSelector)
 }
 
 async function tapVisibleFormation(page, canvas, gestureDock, detailSheet) {

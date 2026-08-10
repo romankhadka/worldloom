@@ -697,6 +697,10 @@ a.legend-name:focus-visible {
   background: rgb(var(--loom-saffron-rgb) / 13%);
 }
 
+.gesture-button[data-gesture="illuminate"]:focus-visible {
+  outline-color: var(--loom-saffron);
+}
+
 .gesture-button:disabled { cursor: not-allowed; opacity: .4; }
 .gesture-form.phx-submit-loading .gesture-button { pointer-events: none; opacity: .4; }
 
