@@ -29,7 +29,7 @@ const sourceMaterialRoles = new Set([
 export function sequenceToX(sequence, viewport) {
   const panOffset = viewport.panOffset ?? 0
   const eventTimePosition = viewport.eventTimePositions?.get(sequence)
-  if (Number.isFinite(eventTimePosition)) return eventTimePosition + panOffset
+  if (Number.isFinite(eventTimePosition)) return eventTimePosition
 
   const padding = viewport.padding ?? 40
   const spacing = viewport.spacing ?? defaultSpacing

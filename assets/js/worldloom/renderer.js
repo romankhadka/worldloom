@@ -8,6 +8,7 @@ const maximumViewerPulses = 12
 const maximumActiveTransitions = 8
 const maximumScaffoldEvents = 12
 const defaultSpacing = 28
+const supportedTimelineDurations = new Set([60_000, 300_000, 900_000])
 const animatedKinds = new Set(["wikimedia", "earthquake", "tug", "knot", "illuminate"])
 const sourceMaterialRoles = new Set([
   "conversation-fan",
@@ -34,6 +35,10 @@ export class Renderer {
     this.onViewportChange = options.onViewportChange ?? (() => {})
     this.onSelect = options.onSelect ?? (() => {})
     this.onReloadRequest = options.onReloadRequest ?? (() => {})
+    this.onTimelineRequest = options.onTimelineRequest ?? (() => {})
+    this.scheduleTimeout = options.scheduleTimeout ?? ((callback, delay) =>
+      globalThis.setTimeout(callback, delay))
+    this.cancelTimeout = options.cancelTimeout ?? (timer => globalThis.clearTimeout(timer))
     this.events = []
     this.instructions = []
     this.memoryInstructions = []
@@ -48,6 +53,14 @@ export class Renderer {
     this.commitWatermark = 0
     this.snapshotVersion = null
     this.windowEnd = null
+    this.liveMode = options.liveMode ?? true
+    this.timelineDurationMilliseconds = 60_000
+    this.viewLagMilliseconds = 0
+    this.chapterAnchorMilliseconds = null
+    this.timelineRequestInFlight = null
+    this.latestTimelineIntent = null
+    this.timelineRetryTimer = null
+    this.archiveStartMilliseconds = null
     this.historyInFlight = false
     this.archiveStart = false
     this.newerEventsDropped = false
@@ -95,6 +108,9 @@ export class Renderer {
 
   setSnapshot(envelope) {
     const snapshot = validatedSnapshot(envelope)
+    const historicalCenter = this.viewLagMilliseconds > 1
+      ? this.timelineAxis()?.centerMilliseconds ?? null
+      : null
     const instructions = snapshot.displayEvents.slice(0, maximumEvents)
     const memoryInstructions = snapshot.memoryEvents.slice(0, maximumMemoryEvents)
     const events = this.atLiveEdge()
@@ -139,10 +155,116 @@ export class Renderer {
     this.watermark = snapshot.commitWatermark
     this.snapshotVersion = snapshot.snapshotVersion
     this.windowEnd = snapshot.windowEnd
+    if (historicalCenter !== null) {
+      this.viewLagMilliseconds = this.lagForCenter(historicalCenter)
+    }
     this.selectedSequence = selectedSequence
     this.activeTransitions = activeTransitions
     this.newerEventsDropped = false
     this.rebuild()
+  }
+
+  setTimelineDuration(durationMilliseconds) {
+    const duration = Number(durationMilliseconds)
+    if (!supportedTimelineDurations.has(duration)) return false
+    if (duration === this.timelineDurationMilliseconds) return true
+
+    const wasAtLiveEdge = this.atLiveEdge()
+    const previousDuration = this.timelineDurationMilliseconds
+    if (this.liveMode && !wasAtLiveEdge) {
+      this.viewLagMilliseconds += (previousDuration - duration) / 2
+    }
+    this.timelineDurationMilliseconds = duration
+    this.viewLagMilliseconds = this.clampViewLag(this.viewLagMilliseconds)
+    this.activeTransitions.clear()
+    this.rebuild()
+    this.notifyViewport()
+    this.requestTimelineWindow()
+    return true
+  }
+
+  timelineAxis() {
+    const canonicalEnd = Date.parse(this.windowEnd)
+    const durationMilliseconds = this.timelineDurationMilliseconds
+    let endMilliseconds
+
+    if (this.liveMode && Number.isFinite(canonicalEnd)) {
+      endMilliseconds = canonicalEnd - this.viewLagMilliseconds
+    } else if (!this.liveMode && Number.isFinite(this.chapterAnchorMilliseconds)) {
+      const centerMilliseconds = this.chapterAnchorMilliseconds - this.viewLagMilliseconds
+      endMilliseconds = centerMilliseconds + durationMilliseconds / 2
+    } else {
+      return null
+    }
+
+    return {
+      start: new Date(endMilliseconds - durationMilliseconds).toISOString(),
+      end: this.liveMode && this.viewLagMilliseconds <= 1
+        ? this.windowEnd
+        : new Date(endMilliseconds).toISOString(),
+      durationMilliseconds,
+      durationSeconds: durationMilliseconds / 1000,
+      centerMilliseconds: endMilliseconds - durationMilliseconds / 2,
+    }
+  }
+
+  setChapterAnchor(anchorAt) {
+    if (!validUtcTimestamp(anchorAt)) return false
+    this.liveMode = false
+    this.chapterAnchorMilliseconds = Date.parse(anchorAt)
+    this.viewLagMilliseconds = 0
+    this.rebuild()
+    this.requestTimelineWindow()
+    return true
+  }
+
+  setTimelineWindow(payload) {
+    const timelineWindow = validatedTimelineWindow(payload)
+    this.instructions = timelineWindow.instructions.slice(0, maximumEvents)
+    this.historyInstructions = []
+    this.events = this.instructions
+    this.scaffold = scaffoldInstructions([
+      ...timelineWindow.scaffold,
+      ...this.instructions,
+    ])
+    if (this.liveMode && timelineWindow.endAt !== null) this.windowEnd = timelineWindow.endAt
+    this.ambient = timelineWindow.ambient
+    this.archiveStartMilliseconds = timelineWindow.archiveStartAt === null
+      ? null
+      : Date.parse(timelineWindow.archiveStartAt)
+    this.archiveStart = this.archiveStartMilliseconds !== null &&
+      Date.parse(timelineWindow.startAt) <= this.archiveStartMilliseconds
+    this.viewLagMilliseconds = this.clampViewLag(this.viewLagMilliseconds)
+    this.activeTransitions.clear()
+    this.rebuild()
+    this.notifyViewport()
+    return true
+  }
+
+  completeTimelineRequest(reply) {
+    const completedIntent = this.timelineRequestInFlight
+    if (completedIntent === null || !reply || typeof reply !== "object") return false
+
+    if (reply.status === "throttled") {
+      const retryAfterMilliseconds = Math.max(1, Math.min(500, Number(reply.retry_after_ms) || 1))
+      this.timelineRequestInFlight = null
+      if (this.timelineRetryTimer !== null) this.cancelTimeout(this.timelineRetryTimer)
+      this.timelineRetryTimer = this.scheduleTimeout(() => {
+        this.timelineRetryTimer = null
+        this.dispatchLatestTimelineIntent()
+      }, retryAfterMilliseconds)
+      return true
+    }
+
+    this.timelineRequestInFlight = null
+    const latestIntent = this.latestTimelineIntent
+    if (reply.status === "accepted" && latestIntent?.key === completedIntent.key) {
+      this.setTimelineWindow(reply)
+    }
+    if (latestIntent !== null && latestIntent.key !== completedIntent.key) {
+      this.dispatchLatestTimelineIntent()
+    }
+    return reply.status === "accepted" || reply.status === "invalid"
   }
 
   setTargetLane(lane) {
@@ -183,6 +305,7 @@ export class Renderer {
 
   rebuild() {
     const viewport = this.viewport()
+    const axis = this.timelineAxis()
     const eventSequences = new Set(this.events.map(instruction => instruction.sequence))
     const scaffoldOnly = this.scaffold.filter(
       instruction => !eventSequences.has(instruction.sequence),
@@ -193,10 +316,7 @@ export class Renderer {
       ...this.events.slice(-topologyCapacity),
     ]
     this.commands = this.projectScene(topologyInstructions, viewport, {
-      axis: this.windowEnd === null
-        ? null
-        : {end: this.windowEnd, durationMilliseconds: 60_000},
-      windowEnd: this.windowEnd,
+      axis,
       displayInstructions: this.instructions,
       memoryInstructions: this.memoryInstructions,
       ambient: this.ambient,
@@ -218,6 +338,7 @@ export class Renderer {
 
   reload(instructions, watermark = null, {ambient = this.ambient, scaffold = []} = {}) {
     this.panOffset = 0
+    this.viewLagMilliseconds = 0
     this.returningToLive = false
     this.setEvents(instructions, {ambient, scaffold})
     if (Number.isSafeInteger(watermark)) {
@@ -246,6 +367,20 @@ export class Renderer {
 
   panBy(delta) {
     this.activeTransitions.clear()
+    const axis = this.timelineAxis()
+    if (axis !== null) {
+      const usableWidth = Math.max(1, this.width - this.padding * 2)
+      const elapsedMilliseconds = Number(delta) *
+        this.timelineDurationMilliseconds / usableWidth
+      this.viewLagMilliseconds = this.clampViewLag(
+        this.viewLagMilliseconds + elapsedMilliseconds,
+      )
+      this.rebuild()
+      this.notifyViewport()
+      this.requestTimelineWindow()
+      return
+    }
+
     const hitPositions = this.commands
       .filter(command => command.type === "anchor-hit" && Number.isFinite(command.x))
       .map(command => command.x)
@@ -306,6 +441,27 @@ export class Renderer {
     }
   }
 
+  requestTimelineWindow() {
+    const axis = this.timelineAxis()
+    if (axis === null || this.timelineAtArchiveStart(axis)) return false
+
+    const intent = {
+      end_at: axis.end,
+      duration_seconds: axis.durationSeconds,
+    }
+    intent.key = `${intent.end_at}\0${intent.duration_seconds}`
+    this.latestTimelineIntent = intent
+    this.dispatchLatestTimelineIntent()
+    return true
+  }
+
+  dispatchLatestTimelineIntent() {
+    if (this.timelineRequestInFlight !== null || this.latestTimelineIntent === null) return
+    this.timelineRequestInFlight = this.latestTimelineIntent
+    const {end_at, duration_seconds} = this.timelineRequestInFlight
+    this.onTimelineRequest({end_at, duration_seconds})
+  }
+
   returnLive() {
     if (this.newerEventsDropped) this.onReloadRequest()
     const hadTransitions = this.activeTransitions.size > 0
@@ -319,6 +475,7 @@ export class Renderer {
     this.historyInstructions = []
     this.historyInFlight = false
     this.archiveStart = false
+    this.archiveStartMilliseconds = null
     const liveSequences = new Set(
       [...this.instructions, ...this.memoryInstructions].map(instruction => instruction.sequence),
     )
@@ -327,8 +484,10 @@ export class Renderer {
 
     if (this.reducedMotion) {
       this.panOffset = 0
+      this.viewLagMilliseconds = 0
       this.rebuild()
       this.notifyViewport()
+      if (this.timelineDurationMilliseconds > 60_000) this.requestTimelineWindow()
     } else {
       if (showingHistory) this.rebuild()
       this.returningToLive = true
@@ -336,7 +495,32 @@ export class Renderer {
   }
 
   atLiveEdge() {
-    return this.panOffset <= 1
+    return this.panOffset <= 1 && this.viewLagMilliseconds <= 1
+  }
+
+  lagForCenter(centerMilliseconds) {
+    const canonicalEnd = Date.parse(this.windowEnd)
+    if (!Number.isFinite(canonicalEnd)) return this.viewLagMilliseconds
+    return this.clampViewLag(
+      canonicalEnd - centerMilliseconds - this.timelineDurationMilliseconds / 2,
+    )
+  }
+
+  clampViewLag(lagMilliseconds) {
+    const lag = Math.max(0, Number(lagMilliseconds) || 0)
+    if (this.archiveStartMilliseconds === null || !this.liveMode) return lag
+    const canonicalEnd = Date.parse(this.windowEnd)
+    if (!Number.isFinite(canonicalEnd)) return lag
+    const maximumLag = Math.max(
+      0,
+      canonicalEnd - this.timelineDurationMilliseconds - this.archiveStartMilliseconds,
+    )
+    return Math.min(lag, maximumLag)
+  }
+
+  timelineAtArchiveStart(axis = this.timelineAxis()) {
+    return axis !== null && this.archiveStartMilliseconds !== null &&
+      Date.parse(axis.start) <= this.archiveStartMilliseconds
   }
 
   hitTest(x, y) {
@@ -413,11 +597,14 @@ export class Renderer {
 
     if (this.returningToLive) {
       this.panOffset *= 0.68
-      if (this.panOffset <= 1) {
+      this.viewLagMilliseconds *= 0.68
+      if (this.panOffset <= 1 && this.viewLagMilliseconds <= 1) {
         this.panOffset = 0
+        this.viewLagMilliseconds = 0
         this.returningToLive = false
         this.rebuild()
         this.notifyViewport()
+        if (this.timelineDurationMilliseconds > 60_000) this.requestTimelineWindow()
       }
     }
 
@@ -432,7 +619,9 @@ export class Renderer {
 
   destroy() {
     if (this.frameHandle !== null) this.cancelFrame(this.frameHandle)
+    if (this.timelineRetryTimer !== null) this.cancelTimeout(this.timelineRetryTimer)
     this.frameHandle = null
+    this.timelineRetryTimer = null
     this.activeTransitions.clear()
     this.instructions = []
     this.memoryInstructions = []
@@ -451,20 +640,18 @@ export class Renderer {
       maxSequence: this.events.at(-1)?.sequence ?? this.watermark,
       spacing: this.spacing,
       padding: this.padding,
-      panOffset: this.panOffset,
+      panOffset: this.timelineAxis() === null ? this.panOffset : 0,
     }
   }
 
   settledSceneDiagnostics() {
-    const windowEndMilliseconds = Date.parse(this.windowEnd)
     const noActiveTransitions = new Map()
-    const axis = Number.isFinite(windowEndMilliseconds)
-      ? {
-          start: new Date(windowEndMilliseconds - 60_000).toISOString(),
-          end: this.windowEnd,
-          durationSeconds: 60,
-        }
-      : null
+    const timelineAxis = this.timelineAxis()
+    const axis = timelineAxis === null ? null : {
+      start: timelineAxis.start,
+      end: timelineAxis.end,
+      durationSeconds: timelineAxis.durationSeconds,
+    }
 
     return {
       snapshotVersion: this.snapshotVersion,
@@ -487,6 +674,7 @@ export class Renderer {
   }
 
   viewTranslationX() {
+    if (this.timelineAxis() !== null) return 0
     return this.panOffset - this.projectedPanOffset
   }
 
@@ -768,6 +956,60 @@ function validatedSnapshot(envelope) {
     displayEvents: deepCloneSnapshotValue(envelope.display_events),
     memoryEvents: deepCloneSnapshotValue(envelope.memory_events),
     ambient: deepCloneSnapshotValue(envelope.ambient),
+  }
+}
+
+function validatedTimelineWindow(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new TypeError("timeline window must be an object")
+  }
+  const durationSeconds = Number(payload.axis?.duration_seconds)
+  if (!supportedTimelineDurations.has(durationSeconds * 1000)) {
+    throw new TypeError("timeline window duration must be supported")
+  }
+  if (!validUtcTimestamp(payload.axis?.end_at)) {
+    throw new TypeError("timeline window end_at must be canonical UTC")
+  }
+  const startAt = payload.axis?.start_at ?? new Date(
+    Date.parse(payload.axis.end_at) - durationSeconds * 1000,
+  ).toISOString()
+  if (!validUtcTimestamp(startAt)) {
+    throw new TypeError("timeline window start_at must be canonical UTC")
+  }
+  if (!Array.isArray(payload.instructions) || !Array.isArray(payload.scaffold)) {
+    throw new TypeError("timeline window instruction roles must be arrays")
+  }
+  if (payload.ambient !== null &&
+      (typeof payload.ambient !== "object" || Array.isArray(payload.ambient))) {
+    throw new TypeError("timeline window ambient must be an instruction or null")
+  }
+  if (payload.archive_start_at !== null && payload.archive_start_at !== undefined &&
+      !validUtcTimestamp(payload.archive_start_at)) {
+    throw new TypeError("timeline window archive_start_at must be canonical UTC or null")
+  }
+
+  const roles = [
+    ...payload.instructions,
+    ...payload.scaffold,
+    ...(payload.ambient === null ? [] : [payload.ambient]),
+  ]
+  for (const instruction of roles) {
+    if (!Number.isSafeInteger(instruction?.sequence) || instruction.sequence <= 0) {
+      throw new TypeError("timeline instruction sequence must be a positive safe integer")
+    }
+    if (!validUtcTimestamp(instruction.occurred_at)) {
+      throw new TypeError("timeline instruction occurred_at must be canonical UTC")
+    }
+  }
+
+  return {
+    startAt,
+    endAt: payload.axis.end_at,
+    durationSeconds,
+    instructions: deepCloneSnapshotValue(payload.instructions),
+    scaffold: deepCloneSnapshotValue(payload.scaffold),
+    ambient: deepCloneSnapshotValue(payload.ambient),
+    archiveStartAt: payload.archive_start_at ?? null,
   }
 }
 

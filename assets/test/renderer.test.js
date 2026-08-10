@@ -63,6 +63,102 @@ test("reports a complete deterministic settled scene on the event-time axis", ()
   assert.deepEqual(firstDiagnostics, rebuiltDiagnostics)
 })
 
+test("supports only bounded timeline scales and keeps Now pinned", () => {
+  const requests = []
+  const renderer = new Renderer(null, {
+    reducedMotion: true,
+    onTimelineRequest: request => requests.push(request),
+  })
+  renderer.setSnapshot(structuredClone(balancedSnapshot))
+
+  assert.equal(renderer.timelineDurationMilliseconds, 60_000)
+  assert.equal(renderer.setTimelineDuration(300_000), true)
+  assert.equal(renderer.timelineDurationMilliseconds, 300_000)
+  assert.equal(renderer.atLiveEdge(), true)
+  assert.equal(renderer.timelineAxis().end, balancedSnapshot.window_end)
+  assert.equal(renderer.setTimelineDuration(120_000), false)
+  assert.deepEqual(requests, [{
+    end_at: balancedSnapshot.window_end,
+    duration_seconds: 300,
+  }])
+})
+
+test("preserves a historical center through scale and snapshot changes", () => {
+  const renderer = new Renderer(null, {
+    width: 1_000,
+    height: 600,
+    reducedMotion: true,
+  })
+  renderer.setSnapshot(structuredClone(balancedSnapshot))
+  renderer.panBy(8_000)
+  const centerBefore = renderer.timelineAxis().centerMilliseconds
+
+  renderer.setTimelineDuration(900_000)
+  assert.equal(renderer.timelineAxis().centerMilliseconds, centerBefore)
+
+  const laterSnapshot = structuredClone(balancedSnapshot)
+  laterSnapshot.window_end = "2026-08-08T12:02:00.000Z"
+  laterSnapshot.commit_watermark += 1
+  renderer.setSnapshot(laterSnapshot)
+
+  assert.equal(renderer.timelineAxis().centerMilliseconds, centerBefore)
+})
+
+test("keeps a chapter anchor centered while its scale changes", () => {
+  const renderer = new Renderer(null, {liveMode: false, reducedMotion: true})
+
+  assert.equal(renderer.setChapterAnchor("2026-08-08T11:03:17.000Z"), true)
+  assert.equal(
+    renderer.timelineAxis().centerMilliseconds,
+    Date.parse("2026-08-08T11:03:17.000Z"),
+  )
+  assert.equal(renderer.setTimelineDuration(900_000), true)
+  assert.equal(
+    renderer.timelineAxis().centerMilliseconds,
+    Date.parse("2026-08-08T11:03:17.000Z"),
+  )
+})
+
+test("coalesces timeline requests and retries only the latest intent", () => {
+  const requests = []
+  const scheduled = []
+  const renderer = new Renderer(null, {
+    reducedMotion: true,
+    onTimelineRequest: request => requests.push(request),
+    scheduleTimeout: (callback, delay) => {
+      scheduled.push({callback, delay})
+      return scheduled.length
+    },
+    cancelTimeout() {},
+  })
+  renderer.setSnapshot(structuredClone(balancedSnapshot))
+
+  renderer.setTimelineDuration(300_000)
+  renderer.setTimelineDuration(900_000)
+  assert.equal(requests.length, 1)
+
+  renderer.completeTimelineRequest({status: "accepted", axis: {
+    end_at: balancedSnapshot.window_end,
+    duration_seconds: 300,
+  }, instructions: [], scaffold: [], ambient: null, archive_start_at: null})
+  assert.equal(requests.length, 2)
+  assert.equal(requests[1].duration_seconds, 900)
+
+  renderer.completeTimelineRequest({status: "throttled", retry_after_ms: 125})
+  assert.equal(scheduled.length, 1)
+  assert.equal(scheduled[0].delay, 125)
+  scheduled[0].callback()
+  assert.equal(requests.length, 3)
+
+  renderer.completeTimelineRequest({status: "accepted", axis: {
+    end_at: balancedSnapshot.window_end,
+    duration_seconds: 900,
+  }, instructions: [], scaffold: [], ambient: null,
+  archive_start_at: new Date(Date.parse(balancedSnapshot.window_end) - 900_000).toISOString()})
+  renderer.panBy(500)
+  assert.equal(requests.length, 3)
+})
+
 test("passes every snapshot role to geometry as explicit scene input", () => {
   const projectedScenes = []
   const renderer = new Renderer(null, {
@@ -75,7 +171,7 @@ test("passes every snapshot role to geometry as explicit scene input", () => {
   renderer.setSnapshot(structuredClone(balancedSnapshot))
 
   const scene = projectedScenes.at(-1)
-  assert.equal(scene.windowEnd, balancedSnapshot.window_end)
+  assert.deepEqual(scene.axis, renderer.timelineAxis())
   assert.deepEqual(scene.displayInstructions, balancedSnapshot.display_events)
   assert.deepEqual(scene.memoryInstructions, balancedSnapshot.memory_events)
   assert.deepEqual(scene.ambient, balancedSnapshot.ambient)
