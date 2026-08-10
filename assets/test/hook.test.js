@@ -170,6 +170,37 @@ test("forwards the renderer history cursor unchanged", t => {
   })
 })
 
+test("binds timeline scales once and publishes an explicit UTC range", t => {
+  const harness = hookHarness(t)
+  const fifteenMinutes = harness.nodes.scaleButtons[2]
+
+  fifteenMinutes.dispatch("click")
+  harness.hook.updated()
+  harness.hook.updated()
+
+  assert.deepEqual(harness.renderer.timelineDurations, [900_000])
+  assert.equal(fifteenMinutes.getAttribute("aria-pressed"), "true")
+  assert.equal(harness.nodes.scaleButtons[0].getAttribute("aria-pressed"), "false")
+  assert.match(harness.nodes.timelineRange.textContent, /15 minutes · .* UTC–.* UTC/)
+  assert.equal(fifteenMinutes.listeners.get("click").length, 1)
+})
+
+test("forwards only active-generation timeline replies", t => {
+  const harness = hookHarness(t)
+  const request = {end_at: balancedSnapshot.window_end, duration_seconds: 300}
+  const options = harness.hook.rendererOptions(false)
+
+  options.onTimelineRequest(request)
+  assert.deepEqual(harness.pushes.at(-1), {name: "timeline-window", payload: request})
+  harness.timelineCallbacks.at(-1)({status: "accepted"})
+  assert.deepEqual(harness.renderer.timelineReplies, [{status: "accepted"}])
+
+  options.onTimelineRequest({...request, duration_seconds: 900})
+  harness.hook.destroyed()
+  harness.timelineCallbacks.at(-1)({status: "accepted"})
+  assert.deepEqual(harness.renderer.timelineReplies, [{status: "accepted"}])
+})
+
 test("captures direct pointer placement and commits only its final lane", t => {
   const harness = hookHarness(t)
 
@@ -771,6 +802,10 @@ function hookHarness(t, {live = true, laneDisabled = false} = {}) {
   const fallbackInput = new FakeTarget({value: ""})
   const detail = new FakeTarget()
   const gestureButton = new FakeTarget()
+  const scaleButtons = [60, 300, 900].map(duration => new FakeTarget({
+    dataset: {durationSeconds: String(duration)},
+  }))
+  const timelineRange = new FakeTarget({textContent: ""})
   const nodes = {
     laneInput,
     introduction,
@@ -780,6 +815,8 @@ function hookHarness(t, {live = true, laneDisabled = false} = {}) {
     shareLink: null,
     detail,
     gestureButtons: [gestureButton],
+    scaleButtons,
+    timelineRange,
   }
   const document = {
     querySelector(selector) {
@@ -791,10 +828,13 @@ function hookHarness(t, {live = true, laneDisabled = false} = {}) {
         "#share-fallback": nodes.fallbackInput,
         "#share-link": nodes.shareLink,
         "#signal-detail": nodes.detail,
+        "#timeline-range": nodes.timelineRange,
       }[selector] ?? null
     },
     querySelectorAll(selector) {
-      return selector === ".gesture-button" ? nodes.gestureButtons : []
+      if (selector === ".gesture-button") return nodes.gestureButtons
+      if (selector === ".timeline-scale-button") return nodes.scaleButtons
+      return []
     },
   }
   replaceGlobal(t, "window", window)
@@ -806,6 +846,7 @@ function hookHarness(t, {live = true, laneDisabled = false} = {}) {
   const renderer = fakeRenderer(effects)
   const serverEvents = new Map()
   const scheduled = new Map()
+  const timelineCallbacks = []
   let nextTimer = 1
   const hook = Object.assign(Object.create(Worldloom), {
     el,
@@ -825,6 +866,8 @@ function hookHarness(t, {live = true, laneDisabled = false} = {}) {
     introductionDismissed: false,
     boundLaneInputs: new WeakSet(),
     boundGestureButtons: new WeakSet(),
+    boundTimelineScaleButtons: new WeakSet(),
+    timelineGeneration: 0,
     scheduleTimeout(callback) {
       const timer = nextTimer++
       scheduled.set(timer, callback)
@@ -833,8 +876,11 @@ function hookHarness(t, {live = true, laneDisabled = false} = {}) {
     cancelTimeout(timer) {
       scheduled.delete(timer)
     },
-    pushEvent(name, payload) {
+    pushEvent(name, payload, callback) {
       pushes.push({name, payload})
+      if (name === "timeline-window" && typeof callback === "function") {
+        timelineCallbacks.push(callback)
+      }
       effects.push(`push.${name}`)
     },
     handleEvent(name, handler) {
@@ -868,6 +914,7 @@ function hookHarness(t, {live = true, laneDisabled = false} = {}) {
     announcements,
     serverEvents,
     scheduled,
+    timelineCallbacks,
     nodes,
     laneInput,
     introduction,
@@ -897,6 +944,15 @@ class FakeTarget {
   removeEventListener(name, listener, options) {
     const listeners = this.listeners.get(name) ?? []
     this.listeners.set(name, listeners.filter(item => item.listener !== listener || item.options !== options))
+  }
+
+  setAttribute(name, value) {
+    this.attributes ??= new Map()
+    this.attributes.set(name, String(value))
+  }
+
+  getAttribute(name) {
+    return this.attributes?.get(name) ?? null
   }
 
   dispatch(name, event = {}) {
@@ -937,8 +993,27 @@ function fakeRenderer(effects = []) {
     selections: [],
     clearSelections: 0,
     snapshots: [],
+    timelineDurations: [],
+    timelineReplies: [],
+    timelineDurationMilliseconds: 60_000,
     lifecycle: [],
     atLiveEdge: () => true,
+    timelineAxis() {
+      const end = Date.parse(balancedSnapshot.window_end)
+      const duration = this.timelineDurationMilliseconds
+      return {
+        start: new Date(end - duration).toISOString(),
+        end: new Date(end).toISOString(),
+        durationMilliseconds: duration,
+        durationSeconds: duration / 1000,
+      }
+    },
+    setTimelineDuration(duration) {
+      this.timelineDurations.push(duration)
+      this.timelineDurationMilliseconds = duration
+      return true
+    },
+    completeTimelineRequest(reply) { this.timelineReplies.push(reply) },
     setTargetLane(lane) { this.targetLanes.push(lane) },
     pointerDown(event) { this.pointerDowns.push(event) },
     pointerMove(event) { this.pointerMoves.push(event) },

@@ -23,6 +23,9 @@ export const Worldloom = {
     this.listeners = []
     this.boundLaneInputs = new WeakSet()
     this.boundGestureButtons = new WeakSet()
+    this.boundTimelineScaleButtons = new WeakSet()
+    this.timelineGeneration = 0
+    this.timelineDestroyed = false
     this.introductionDismissed = false
     this.placingLane = false
     this.placedLane = false
@@ -48,6 +51,7 @@ export const Worldloom = {
         ambient: parseJson(this.el.dataset.ambient, null),
         scaffold: parseJson(this.el.dataset.scaffold, []),
       })
+      if (this.el.dataset.anchorAt) this.renderer.setChapterAnchor(this.el.dataset.anchorAt)
     }
     this.laneInput = document.querySelector("#gesture-lane")
     this.localLane = normalizedLane(this.el.dataset.gestureLane, 0.5)
@@ -62,6 +66,7 @@ export const Worldloom = {
     this.installServerEvents()
     this.installResizeObserver()
     this.renderer.start()
+    this.refreshTimelineControls()
     this.syncRenderedSequence()
     this.el.dataset.ready = "true"
   },
@@ -69,7 +74,11 @@ export const Worldloom = {
   rendererOptions(reducedMotion) {
     return {
       reducedMotion,
+      liveMode: this.el.dataset.live === "true",
+      scheduleTimeout: (callback, delay) => this.scheduleTimeout(callback, delay),
+      cancelTimeout: timer => this.cancelTimeout(timer),
       onHistoryRequest: payload => this.pushEvent("history-before", payload),
+      onTimelineRequest: payload => this.requestTimelineWindow(payload),
       onViewportChange: ({atLiveEdge}) =>
         this.pushEvent("viewport-state", {at_live_edge: atLiveEdge}),
       onSelect: sequence => {
@@ -85,6 +94,8 @@ export const Worldloom = {
   },
 
   destroyed() {
+    this.timelineDestroyed = true
+    this.timelineGeneration = (this.timelineGeneration ?? 0) + 1
     this.shareDestroyed = true
     this.invalidateShareRequests()
     this.clearClickSuppression()
@@ -102,6 +113,7 @@ export const Worldloom = {
     this.reconcileShareFallback()
     if (this.placingLane && !this.directPlacementEnabled()) this.cancelPlacement()
     this.reconcileServerLane()
+    this.refreshTimelineControls()
     this.syncRenderedSequence()
     this.el.dataset.ready = "true"
     this.el.dataset.motion = this.renderer.reducedMotion ? "reduced" : "full"
@@ -110,6 +122,7 @@ export const Worldloom = {
   installServerEvents() {
     this.handleEvent("worldloom:snapshot", envelope => {
       this.renderer.setSnapshot(envelope)
+      this.refreshTimelineControls()
       this.syncRenderedSequence()
     })
 
@@ -118,6 +131,7 @@ export const Worldloom = {
         archiveStart: payload["archive_start?"] ?? payload.archive_start ?? false,
         scaffold: payload.scaffold ?? [],
       })
+      this.refreshTimelineControls()
       this.syncRenderedSequence()
     })
 
@@ -126,6 +140,8 @@ export const Worldloom = {
         ambient: payload.ambient ?? null,
         scaffold: payload.scaffold ?? [],
       })
+      if (payload.anchor_at) this.renderer.setChapterAnchor(payload.anchor_at)
+      this.refreshTimelineControls()
       if (Number.isSafeInteger(payload.selected_sequence) && payload.selected_sequence > 0) {
         this.renderer.setSelection(payload.selected_sequence)
       } else {
@@ -139,6 +155,7 @@ export const Worldloom = {
       this.renderer.setSnapshot(payload)
       this.renderer.returnLive()
       this.renderer.clearSelection()
+      this.refreshTimelineControls()
       this.syncRenderedSequence()
     })
 
@@ -290,6 +307,42 @@ export const Worldloom = {
       this.listen(button, "click", () => this.dismissIntroduction())
       this.boundGestureButtons.add(button)
     }
+
+    for (const button of document.querySelectorAll(".timeline-scale-button")) {
+      if (this.boundTimelineScaleButtons.has(button)) continue
+      this.listen(button, "click", () => {
+        const durationSeconds = Number(button.dataset.durationSeconds)
+        if (this.renderer.setTimelineDuration(durationSeconds * 1000)) {
+          this.dismissIntroduction()
+          this.refreshTimelineControls()
+          this.syncRenderedSequence()
+        }
+      })
+      this.boundTimelineScaleButtons.add(button)
+    }
+  },
+
+  requestTimelineWindow(payload) {
+    const generation = this.timelineGeneration ?? 0
+    this.pushEvent("timeline-window", payload, reply => {
+      if (this.timelineDestroyed || generation !== this.timelineGeneration) return
+      this.renderer.completeTimelineRequest(reply)
+      this.refreshTimelineControls()
+      this.syncRenderedSequence()
+    })
+  },
+
+  refreshTimelineControls() {
+    if (!this.renderer) return
+    const duration = this.renderer.timelineDurationMilliseconds
+    for (const button of document.querySelectorAll(".timeline-scale-button")) {
+      const pressed = Number(button.dataset.durationSeconds) * 1000 === duration
+      button.setAttribute("aria-pressed", String(pressed))
+    }
+
+    const range = document.querySelector("#timeline-range")
+    const axis = this.renderer.timelineAxis?.()
+    if (range) range.textContent = timelineRangeText(axis, duration)
   },
 
   handleLaneInput(event) {
@@ -625,6 +678,25 @@ function normalizedLane(encoded, fallback) {
   const lane = Number(encoded)
   if (!Number.isFinite(lane)) return fallback
   return Math.min(1, Math.max(0, lane))
+}
+
+function timelineRangeText(axis, durationMilliseconds) {
+  const minutes = Number(durationMilliseconds) / 60_000
+  const durationLabel = minutes === 1 ? "1 minute" : `${minutes} minutes`
+  if (!axis || !Number.isFinite(Date.parse(axis.start)) || !Number.isFinite(Date.parse(axis.end))) {
+    return `${durationLabel} · UTC range unavailable`
+  }
+
+  return `${durationLabel} · ${utcHourMinute(axis.start)} UTC–${utcHourMinute(axis.end)} UTC`
+}
+
+function utcHourMinute(timestamp) {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "UTC",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(new Date(timestamp))
 }
 
 function canonicalJson(value) {

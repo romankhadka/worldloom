@@ -83,6 +83,33 @@ defmodule WorldloomWeb.WorldLiveTest do
     refute has_element?(live_view, "#signal-detail")
   end
 
+  test "renders one accessible timeline scale group on live and chapter routes", %{conn: conn} do
+    [event] = seed_events(1)
+
+    {:ok, live_view, _html} = live(conn, "/")
+
+    assert has_element?(
+             live_view,
+             "#timeline-scale[role='group'][aria-describedby='timeline-range']"
+           )
+
+    assert has_element?(live_view, "#timeline-range", "1 minute · UTC range unavailable")
+
+    for {seconds, pressed} <- [{60, true}, {300, false}, {900, false}] do
+      assert has_element?(
+               live_view,
+               "#timeline-scale-#{seconds}.timeline-scale-button" <>
+                 "[data-duration-seconds='#{seconds}'][data-touch-target='44']" <>
+                 "[aria-pressed='#{pressed}'][aria-describedby='timeline-range']"
+             )
+    end
+
+    {:ok, chapter_view, _html} = live(conn, chapter_path(event))
+    assert has_element?(chapter_view, "#timeline-scale[role='group']")
+    assert has_element?(chapter_view, "#timeline-scale-900")
+    assert has_element?(chapter_view, "#gesture-tug[disabled]")
+  end
+
   test "exposes separate initial snapshot fields with scaffold and ambient", %{conn: conn} do
     snapshot = synthetic_live_snapshot_fixture()
     put_current_snapshot(snapshot)
@@ -1122,7 +1149,7 @@ defmodule WorldloomWeb.WorldLiveTest do
              )
     end
 
-    refute has_element?(live_view, "[aria-pressed]")
+    refute has_element?(live_view, "#gesture-dock [aria-pressed]")
     refute has_element?(live_view, "#weave-gesture")
 
     render_hook(live_view, "lane-key", %{"key" => "ArrowUp"})

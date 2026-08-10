@@ -209,10 +209,33 @@
       Return live
     </.link>
 
-    <div id="timeline" class="timeline" aria-label="UTC timeline">
-      <span>Earlier</span>
-      <i aria-hidden="true"></i>
-      <span>Now</span>
+    <div id="timeline-controls" class="timeline-controls">
+      <div id="timeline" class="timeline" aria-hidden="true">
+        <span>Earlier</span>
+        <i></i>
+        <span>Now</span>
+      </div>
+      <div
+        id="timeline-scale"
+        class="timeline-scale"
+        role="group"
+        aria-label="Timeline scale"
+        aria-describedby="timeline-range"
+      >
+        <button
+          :for={{label, seconds} <- [{"1m", 60}, {"5m", 300}, {"15m", 900}]}
+          id={"timeline-scale-#{seconds}"}
+          type="button"
+          class="timeline-scale-button"
+          data-duration-seconds={seconds}
+          data-touch-target="44"
+          aria-pressed={to_string(seconds == 60)}
+          aria-describedby="timeline-range"
+        >
+          {label}
+        </button>
+      </div>
+      <p id="timeline-range" class="timeline-range">1 minute · UTC range unavailable</p>
     </div>
 
     <aside
