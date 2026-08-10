@@ -615,6 +615,19 @@ test("holds ambient weather outside the visible event window", () => {
   assert.equal(commands.filter(command => command.type === "ambient").length, 1)
 })
 
+test("keeps weather atmospheric without covering the lacquer surface", () => {
+  const weather = contract.find(instruction => instruction.kind === "weather")
+  const [quietAtmosphere] = commandsForEvent({...weather, intensity: 0}, viewport)
+  const [strongAtmosphere] = commandsForEvent({...weather, intensity: 1}, viewport)
+  const embeddedAtmosphere = commandsForScene([
+    {...weather, intensity: 1, visual: {...weather.visual, spread: 1}},
+  ], viewport).find(command => command.type === "ambient")
+
+  assert.ok(quietAtmosphere.coverage >= 0.05)
+  assert.ok([strongAtmosphere, embeddedAtmosphere].every(command => command.coverage <= 0.22))
+  assert.ok(strongAtmosphere.coverage > quietAtmosphere.coverage)
+})
+
 test("held ambient weather does not re-space the visible event projection", () => {
   const publicInstruction = {...contract[0], sequence: 100, source: "wikimedia", kind: "wikimedia"}
   const visitorTemplate = contract.find(instruction => instruction.source === "visitor")

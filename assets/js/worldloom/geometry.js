@@ -95,7 +95,7 @@ export function commandsForEvent(instruction, viewport) {
     case "earthquake":
       return [{...common, type: "ripple", radius: 10 + intensity * 42}]
     case "weather":
-      return [{...common, type: "ambient", coverage: 0.2 + intensity * 0.5}]
+      return [{...common, type: "ambient", coverage: 0.06 + intensity * 0.16}]
     case "tug":
       return [{...common, type: "tug", displacement: 12 + visual.spread * 32}]
     case "knot":
