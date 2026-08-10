@@ -322,6 +322,21 @@ test("Lacquered Gallery reaches the rendered interface and interaction states", 
   expect(browserFailures).toEqual([])
 })
 
+test("LiveView remains operable when the palette stylesheet is unavailable", async ({
+  page,
+}) => {
+  const browserFailures = monitorPage(page, "missing palette")
+  await page.route("**/assets/css/app.css", route =>
+    route.fulfill({contentType: "text/css", body: ""}),
+  )
+
+  await page.goto("/")
+  const canvas = await waitForCanvas(page)
+
+  await expect(canvas).toHaveAttribute("data-ready", "true")
+  expect(browserFailures).toEqual([])
+})
+
 test("quiet labels retain localized contrast over weather", async ({browser}) => {
   const baseURL = process.env.WORLDLOOM_BASE_URL ?? "http://localhost:4002"
   const contrastContracts = [
