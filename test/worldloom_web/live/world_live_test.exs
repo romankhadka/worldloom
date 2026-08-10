@@ -538,6 +538,91 @@ defmodule WorldloomWeb.WorldLiveTest do
     refute_push_event live_view, "worldloom:history", _throttled
   end
 
+  test "acknowledges accepted invalid and throttled timeline window requests", %{conn: conn} do
+    events = seed_events(1_000, ~U[2026-08-09 12:00:00.000000Z])
+
+    put_current_snapshot(%LiveSnapshot{
+      window_end: ~U[2026-08-09 12:16:39.000000Z],
+      commit_watermark: List.last(events).id,
+      display_events: Enum.take(events, -60),
+      memory_events: [],
+      ambient: nil
+    })
+
+    {:ok, live_view, _html} = live(conn, "/")
+
+    render_hook(live_view, "timeline-window", %{
+      "duration_seconds" => 901,
+      "end_at" => "not-utc"
+    })
+
+    assert_reply live_view, %{status: "invalid"}
+    assert live_assign(live_view, :trusted_history_events) == %{}
+
+    valid_payload = %{
+      "duration_seconds" => 900,
+      "end_at" => "2026-08-09T12:15:00.000000Z"
+    }
+
+    render_hook(live_view, "timeline-window", valid_payload)
+
+    assert_reply live_view, %{
+      status: "accepted",
+      axis: axis,
+      instructions: instructions,
+      scaffold: _scaffold,
+      ambient: nil,
+      archive_start_at: archive_start_at
+    }
+
+    assert axis == %{
+             start_at: "2026-08-09T12:00:00.000000Z",
+             end_at: "2026-08-09T12:15:00.000000Z",
+             duration_seconds: 900
+           }
+
+    assert length(instructions) == 100
+    assert is_binary(archive_start_at)
+    assert map_size(live_assign(live_view, :trusted_history_events)) == length(instructions)
+
+    render_hook(live_view, "timeline-window", valid_payload)
+
+    assert_reply live_view, %{status: "throttled", retry_after_ms: retry_after_ms}
+    assert retry_after_ms in 1..500
+    assert map_size(live_assign(live_view, :trusted_history_events)) == length(instructions)
+  end
+
+  test "chapter routes expose and authorize the trusted temporal anchor", %{conn: conn} do
+    events = seed_events(20, ~U[2026-08-09 12:00:00.000000Z])
+    selected_event = Enum.at(events, 9)
+    selected_at = DateTime.to_iso8601(selected_event.occurred_at)
+    path = chapter_path(selected_event)
+
+    {:ok, live_view, _html} = live(conn, path)
+
+    assert has_element?(live_view, "#loom-canvas[data-anchor-at='#{selected_at}']")
+
+    render_hook(live_view, "timeline-window", %{
+      "duration_seconds" => 300,
+      "end_at" => DateTime.add(selected_event.occurred_at, 150, :second) |> DateTime.to_iso8601()
+    })
+
+    assert_reply live_view, %{status: "accepted", instructions: instructions}
+    assert selected_event.id in instruction_sequence_ids(instructions)
+    assert Map.has_key?(live_assign(live_view, :trusted_history_events), selected_event.id)
+
+    next_event = Enum.at(events, 10)
+    render_patch(live_view, chapter_path(next_event))
+
+    assert_push_event live_view, "worldloom:reload", %{
+      selected_sequence: selected_sequence,
+      anchor_at: anchor_at
+    }
+
+    assert selected_sequence == next_event.id
+    assert anchor_at == DateTime.to_iso8601(next_event.occurred_at)
+  end
+
   test "uses the safe history fallback for an oversized integer cursor", %{conn: conn} do
     events = seed_events(405)
 

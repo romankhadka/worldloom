@@ -15,6 +15,7 @@ defmodule WorldloomWeb.WorldLive do
   @maximum_window 600
   @history_page_limit 400
   @history_throttle_ms 500
+  @timeline_durations [60, 300, 900]
   @accessible_limit 20
   @public_scaffold_limit 12
   @maximum_sequence 9_223_372_036_854_775_807
@@ -49,6 +50,8 @@ defmodule WorldloomWeb.WorldLive do
       |> assign(:trusted_history_events, %{})
       |> assign(:history_cursor, nil)
       |> assign(:history_requested_at, nil)
+      |> assign(:timeline_requested_at, nil)
+      |> assign(:anchor_at, nil)
       |> assign(:selected_event, nil)
       |> assign(:selected_detail, nil)
       |> assign(:gesture_lane, 0.5)
@@ -137,6 +140,47 @@ defmodule WorldloomWeb.WorldLive do
        |> push_event("worldloom:presence", %{viewer_count: viewer_count})}
     else
       {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_event("timeline-window", payload, socket) do
+    now_ms = System.monotonic_time(:millisecond)
+
+    with {:ok, duration_seconds, end_at} <- timeline_request(payload) do
+      case timeline_retry_after_ms(socket.assigns.timeline_requested_at, now_ms) do
+        0 ->
+          window = Store.timeline_window(end_at, duration_seconds, socket.assigns.selected_event)
+          instructions = Enum.map(window.events, &Instruction.from_event/1)
+
+          reply = %{
+            status: "accepted",
+            axis: %{
+              start_at: DateTime.to_iso8601(window.start_at),
+              end_at: DateTime.to_iso8601(window.end_at),
+              duration_seconds: window.duration_seconds
+            },
+            instructions: instructions,
+            scaffold: public_scaffold(window.events, socket.assigns.selected_event),
+            ambient: encode_ambient(window.ambient),
+            archive_start_at: encode_datetime(window.archive_start_at)
+          }
+
+          {:reply, reply,
+           socket
+           |> assign(:timeline_requested_at, now_ms)
+           |> assign(:trusted_history_events, trusted_event_map(window.events))
+           |> stream(
+             :accessible_formations,
+             Enum.take(instructions, -@accessible_limit),
+             reset: true
+           )}
+
+        retry_after_ms ->
+          {:reply, %{status: "throttled", retry_after_ms: retry_after_ms}, socket}
+      end
+    else
+      :error -> {:reply, %{status: "invalid"}, socket}
     end
   end
 
@@ -365,6 +409,8 @@ defmodule WorldloomWeb.WorldLive do
       |> assign(:at_live_edge, true)
       |> assign(:selected_event, nil)
       |> assign(:selected_detail, nil)
+      |> assign(:anchor_at, nil)
+      |> assign(:timeline_requested_at, nil)
       |> assign(:permalink, URI.parse(uri).path || "/")
       |> assign(:current_url, uri)
       |> clear_history_authorization()
@@ -402,7 +448,8 @@ defmodule WorldloomWeb.WorldLive do
         scaffold: socket.assigns.scaffold,
         ambient: encode_ambient(socket.assigns.ambient),
         watermark: instruction_watermark(socket.assigns.instructions),
-        selected_sequence: selected_event.id
+        selected_sequence: selected_event.id,
+        anchor_at: socket.assigns.anchor_at
       })
     else
       socket
@@ -446,6 +493,8 @@ defmodule WorldloomWeb.WorldLive do
 
     socket
     |> assign(:utc_chapter, utc_chapter(events, selected_event))
+    |> assign(:anchor_at, selected_event && DateTime.to_iso8601(selected_event.occurred_at))
+    |> assign(:timeline_requested_at, nil)
     |> assign(:instructions, instructions)
     |> assign(:snapshot_version, 1)
     |> assign(:window_end, nil)
@@ -975,6 +1024,30 @@ defmodule WorldloomWeb.WorldLive do
   defp history_request_allowed?(requested_at, now_ms),
     do: now_ms - requested_at >= @history_throttle_ms
 
+  defp timeline_request(%{
+         "duration_seconds" => duration_seconds,
+         "end_at" => encoded_end_at
+       })
+       when duration_seconds in @timeline_durations and is_binary(encoded_end_at) do
+    case DateTime.from_iso8601(encoded_end_at) do
+      {:ok, end_at, 0} ->
+        if String.ends_with?(encoded_end_at, "Z"),
+          do: {:ok, duration_seconds, end_at},
+          else: :error
+
+      _invalid ->
+        :error
+    end
+  end
+
+  defp timeline_request(_payload), do: :error
+
+  defp timeline_retry_after_ms(nil, _now_ms), do: 0
+
+  defp timeline_retry_after_ms(requested_at, now_ms) do
+    max(@history_throttle_ms - (now_ms - requested_at), 0)
+  end
+
   defp older_history_cursor([], socket), do: socket.assigns.history_cursor
   defp older_history_cursor(events, _socket), do: event_history_cursor(events)
   defp event_history_cursor([]), do: nil
@@ -987,6 +1060,8 @@ defmodule WorldloomWeb.WorldLive do
 
   defp minimum_sequence(events), do: events |> Enum.map(& &1.id) |> Enum.min()
   defp trusted_event_map(events), do: Map.new(events, &{&1.id, &1})
+  defp encode_datetime(nil), do: nil
+  defp encode_datetime(datetime), do: DateTime.to_iso8601(datetime)
   defp formation_dom_id(instruction), do: "formation-#{instruction["sequence"]}"
   defp chapter_dom_id(chapter), do: "chapter-#{Date.to_iso8601(chapter.date)}"
 
