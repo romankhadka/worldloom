@@ -674,30 +674,40 @@ rtk mix test test/worldloom_web/controllers/page_metadata_test.exs
 
 Expected: FAIL because both `og:image:alt` and `twitter:image:alt` still truthfully describe the old cyan, ember, and olive preview.
 
-- [ ] **Step 2: Start a deterministic feed-disabled capture server**
+- [ ] **Step 2: Start the isolated deterministic acceptance server**
 
 Use an isolated managed terminal session:
 
 ```bash
-rtk env WORLDLOOM_FEEDS_ENABLED=false mix worldloom.seed_demo
-rtk env PORT=4003 WORLDLOOM_FEEDS_ENABLED=false mix phx.server
+rtk env MIX_BUILD_PATH=_build/social MIX_ENV=test WORLDLOOM_E2E=true WORLDLOOM_FEEDS_ENABLED=false mix ecto.reset
+rtk env MIX_BUILD_PATH=_build/social MIX_ENV=test WORLDLOOM_E2E=true WORLDLOOM_FEEDS_ENABLED=false mix assets.build
+rtk env MIX_BUILD_PATH=_build/social MIX_ENV=test WORLDLOOM_E2E=true WORLDLOOM_FEEDS_ENABLED=false mix phx.server
 ```
 
-Wait for `http://localhost:4003/healthz` to return HTTP 200.
+Wait for `http://localhost:4002/healthz` to return HTTP 200. This uses the same
+feed-disabled acceptance harness as the verified browser suite, avoiding network
+variance without presenting the public sources as disabled.
 
-- [ ] **Step 3: Capture the verified application at the declared dimensions**
+- [ ] **Step 3: Install the balanced world and capture the verified application**
 
-After `#loom-canvas[data-ready='true']` is present, run:
+Install the accepted balanced snapshot through the test-only scene route:
 
 ```bash
-rtk npx playwright screenshot --browser chromium --viewport-size "1600,900" --wait-for-selector "#loom-canvas[data-ready='true']" --wait-for-timeout 4000 http://localhost:4003 priv/static/images/worldloom-social-preview.png
+rtk node --input-type=module -e 'import {balanced} from "./assets/test/fixtures/balanced_snapshots.js"; const response = await fetch("http://localhost:4002/__e2e__/scenes/balanced", {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify({snapshot: balanced})}); if (!response.ok) throw new Error(`${response.status} ${await response.text()}`); console.log(await response.text())'
+```
+
+Verify the rendered summary reports all enabled sources live. Then, after
+`#loom-canvas[data-ready='true']` is present, run:
+
+```bash
+rtk npx playwright screenshot --browser chromium --viewport-size "1600,900" --wait-for-selector "#loom-canvas[data-ready='true']" --wait-for-timeout 4000 http://localhost:4002 priv/static/images/worldloom-social-preview.png
 ```
 
 Expected: a 1600-by-900 PNG captured from the application, not a concept mockup.
 
 - [ ] **Step 4: Inspect the preview at original resolution**
 
-Reject and recapture if it does not show oxblood/wine foundations, vivid jade/copper/saffron material, readable bone text, the living weave, and an unclipped gesture dock. Reject empty, loading, disconnected, chart-like, or mockup imagery.
+Reject and recapture if it does not show oxblood/wine foundations, vivid jade/copper/saffron material, readable bone text, the living weave, all enabled sources live, and an unclipped gesture dock. Reject empty, loading, disabled, disconnected, chart-like, or mockup imagery.
 
 - [ ] **Step 5: Align metadata with the accepted preview and prove GREEN**
 
