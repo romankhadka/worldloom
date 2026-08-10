@@ -1,7 +1,7 @@
 # Timeline Zoom and Touch Reliability Design
 
 **Date:** 2026-08-09
-**Status:** Approved
+**Status:** Approved — plan-reviewed against repository and runtime evidence
 **Scope:** Add bounded 1-, 5-, and 15-minute timeline scales to live and historical Worldloom views, harden the existing two-step touch interaction, repair obsolete mobile touch verification, and update the public README.
 
 ## Summary
@@ -10,7 +10,7 @@ Worldloom currently projects the live weave across one fixed 60-second event-tim
 
 This change adds a curated **1m / 5m / 15m** timeline-scale control. One minute remains the default. At the live edge, Now stays fixed to the right while longer scales reveal more recent history to the left. In a historical view, scale changes preserve the timestamp at the center of the viewport. The existing gesture semantics remain unchanged: touching the membrane positions a lane, and only pressing a named gesture button commits a formation.
 
-The implementation keeps timeline state client-local, reuses the existing bounded history path, and preserves all renderer, persistence, privacy, and source limits.
+The implementation keeps timeline state client-local and adds a bounded, server-authorized range projection for wider windows. It preserves all renderer, persistence, privacy, and source limits while sampling real stored events across the full requested interval instead of assuming that the nearest 600 sequences cover fifteen minutes.
 
 ## Goals
 
@@ -28,9 +28,9 @@ The implementation keeps timeline state client-local, reuses the existing bounde
 - No continuous or arbitrary zoom values.
 - No browser, trackpad, or pinch gesture for changing scale.
 - No scale query parameter, permalink state, cookie, or local-storage persistence.
-- No server-side personalized viewport state.
+- No persisted server-side personalized viewport state. LiveView may answer a validated, ephemeral range request, but it does not retain a visitor's selected scale.
 - No change to event ingestion, source qualification, health, persistence, cooldown, rate limiting, gesture meaning, or public privacy behavior.
-- No increase to the 600-event renderer bound, 4,000-command bound, or one-history-request-in-flight rule.
+- No increase to the 600-event renderer bound, 4,000-command bound, or one-timeline-request-in-flight rule.
 - No new package, remote asset, font, or runtime dependency.
 
 ## Interaction design
@@ -59,7 +59,7 @@ Once the visitor pans away from Now, the renderer tracks how far the visible rig
 
 When a new live snapshot arrives while the visitor is historical, the canonical live edge may advance but the visible historical interval remains fixed. Return live resets historical lag to zero while retaining the chosen scale.
 
-Read-only chapter routes use the selected formation as their initial temporal anchor. Scale and pan remain available, while all gesture controls remain disabled as they are today.
+Read-only chapter reloads include the selected formation's trusted `anchor_at`. The renderer centers that timestamp at the default scale and preserves it through later scale changes. Scale and pan remain available, while all gesture controls remain disabled as they are today.
 
 ### Touch the loom
 
@@ -107,18 +107,23 @@ Before installing a newer live snapshot, the renderer records the canonical wind
 
 Reload and route transitions establish a fresh canonical anchor. Return live clears lag, historical instructions, request state, and transient selection exactly as today, but it does not reset the visitor's chosen 1m/5m/15m scale during the current page session.
 
-### Bounded history coverage
+### Bounded range coverage
 
-At one minute, the initial live snapshot remains sufficient. When a wider live or historical interval reaches beyond loaded instructions, the renderer uses the existing `history-before` callback and cursor. It requests one bounded page at a time until one of these conditions is true:
+At one minute, the initial live snapshot remains sufficient. A measured balanced local interval contains 1,022 genuine events over fifteen minutes, so nearest-sequence cursor pages cannot both cover the requested time and preserve the 600-event renderer bound. Wider zoom and time-axis panning therefore use a typed `timeline-window` LiveView request rather than cursor-page autofill.
 
-- the oldest loaded timestamp reaches or precedes the visible interval start;
-- the server reports archive start;
-- a request is already in flight;
-- the renderer's existing event bound prevents retaining additional instructions.
+The server validates the requested duration against `60`, `300`, or `900` seconds and parses the requested UTC interval end strictly. It queries no more than fifteen minutes through the existing source/time indexes and builds level-of-detail from stored records:
 
-The existing LiveView history authorization, cursor validation, request throttle, 600-event bound, scaffold bound, and 4,000-command bound remain unchanged. No client request can select arbitrary database rows.
+- keep at most 100 deterministic temporal-bucket representatives per non-weather source across the complete interval, including that source's first and last event;
+- force-include a selected chapter anchor when present, replacing its nearest same-source representative if necessary;
+- reserve mandatory endpoints and the anchor first, round-robin the remaining representatives across sources to a final cap of 600, then restore chronological order;
+- load the public scaffold and the latest authorized ambient weather at or before the interval end;
+- authorize exactly the returned selectable formations.
 
-If authorized history does not cover the requested interval, the renderer shows honest empty time. It does not stretch, duplicate, interpolate, or invent formations.
+This projection does not average, stretch, duplicate, interpolate, or invent events. Sparse sources remain sparse and genuine temporal gaps remain empty. The 600-event renderer bound, 4,000-command bound, and one-request-in-flight rule remain unchanged.
+
+The request uses the LiveView push reply as its acknowledgement. An accepted reply contains the bounded instructions, scaffold, ambient state, exact axis, and archive boundary. A request inside the existing 500-millisecond server guard returns an explicit `throttled` reply with `retry_after_ms`; it is never silently discarded. The browser keeps only the newest unsatisfied scale/pan intent, retries it after the guard, and ignores stale replies after a route-generation change. It stops at coverage or the returned archive boundary.
+
+The existing `history-before` cursor handler and its validation remain intact for compatibility in this change, but the new zoom path does not depend on repeated cursor requests.
 
 ## Component boundaries
 
@@ -134,27 +139,35 @@ If authorized history does not cover the requested interval, the renderer shows 
 - Own supported scale, canonical window end, historical lag, and coverage checks.
 - Convert pan pixels to elapsed time.
 - Preserve historical center on scale changes and historical time on snapshots.
-- Request bounded history coverage and keep Return live semantics.
+- Request bounded range coverage, queue only the latest unsatisfied intent, and keep Return live semantics.
 - Report scale and visible range to the hook.
 
 ### `hook.js`
 
 - Bind the external scale buttons idempotently across LiveView updates.
 - Apply `aria-pressed`, active data state, and readable UTC-range text from renderer state.
+- Bridge accepted/throttled `timeline-window` replies to the renderer with a route-generation guard.
 - Keep explicit wheel, pointer, and touch panning behavior.
 - Preserve direct touch placement completion and cancellation invariants.
-- Synchronize diagnostics after scale, pan, resize, snapshot, history, and route changes.
+- Synchronize diagnostics after scale, pan, resize, snapshot, range, and route changes.
 
 ### LiveView template and CSS
 
 - Render the semantic scale-button group with stable IDs.
-- Place it in the existing timeline/dock composition without entering the Canvas-owned ignored subtree.
+- Place one group inside a `.timeline-controls` wrapper with the decorative Earlier—Now rule. Desktop stacks both above the dock; compact layouts hide only the decorative rule and retain the same group above the dock.
 - Use Lacquered Gallery semantic tokens, visible focus, forced-colors support, and reduced-motion-safe states.
 - Keep historical gesture disablement and Return live rendering server-authoritative.
 
 ### LiveView server
 
-The server continues receiving only history cursors, viewport live-edge state, lane changes, selection events, and gesture submissions. It does not receive or persist zoom state. Chapter history continues through the same bounded and authorized cursor path.
+The server adds one bounded `timeline-window` request/reply contract. It receives a requested duration and UTC interval end, validates both without persisting them, projects an authorized interval, and replaces range-selection authorization atomically with exactly that reply. Chapter reloads also expose the selected event's trusted `anchor_at`. Existing history cursors, viewport live-edge state, lane changes, selection events, and gesture submissions retain their current validation.
+
+### Timeline projection and Store
+
+- Query the requested event-time interval using the existing `(source, occurred_at, id)` and partial `(occurred_at, id)` indexes.
+- Bound database output with deterministic per-source temporal buckets before loading full event structs into the LiveView process.
+- Balance only genuine representatives and force-include a trusted selected anchor without exceeding 600 events.
+- Return the relevant historical ambient state and archive boundary with the same projection.
 
 ## Touch reliability correction
 
@@ -183,9 +196,10 @@ The production action succeeds; the verification path is stale. The corrected te
 ## Error and recovery behavior
 
 - Unsupported scale input never produces non-finite geometry and cannot expand beyond fifteen minutes.
-- A scale change with insufficient loaded history shows available material while one bounded request is in flight.
+- A scale change with insufficient loaded history shows available material while one bounded range request is in flight.
+- A throttled range request is explicitly acknowledged and retried once the guard expires; rapid changes retain only the latest intent.
 - Archive start stops further requests and preserves the visible empty interval.
-- Live snapshot arrival during a history request cannot move the selected historical time.
+- Live snapshot arrival during a range request cannot move the selected historical time.
 - Touch cancellation, lost capture, second touch, disabled lane state, cooldown, and historical mode create no gesture.
 - A failed gesture commit updates only the safe status region and leaves Canvas topology unchanged.
 - Canvas or context absence remains a safe no-op for server rendering and unit tests.
@@ -195,7 +209,7 @@ The production action succeeds; the verification path is stale. The corrected te
 
 - Scale buttons are native buttons in a named group and expose the active choice with `aria-pressed`.
 - Each scale target is at least 44 by 44 CSS pixels on desktop and mobile.
-- The rendered timeline exposes the selected scale and visible UTC start/end as text for assistive technology.
+- The rendered timeline exposes the selected scale and visible UTC start/end as persistent text referenced by the control group. It is not an `aria-live` region, so panning and live snapshots do not create announcement noise.
 - Keyboard visitors can Tab to any scale and activate it with standard button behavior.
 - Focus uses the existing saffron ring and remains visible against wine surfaces.
 - Forced-colors mode retains button boundaries and current-state text.
@@ -221,7 +235,7 @@ Implementation follows red-green-refactor. Each production behavior begins with 
 - A historical center timestamp survives scale changes where boundaries permit it.
 - New snapshots leave a panned visible interval unchanged.
 - Pan distance maps proportionally to elapsed time at each scale.
-- Wider intervals request one bounded history page at a time and stop on coverage, archive start, in-flight state, or capacity.
+- Wider intervals request one bounded range at a time, coalesce rapid changes to the latest intent, retry explicit throttles, and stop on coverage or archive boundary.
 - Return live clears lag without resetting the selected scale.
 - Resize and reduced motion preserve the same time interval and settled topology.
 
@@ -229,6 +243,7 @@ Implementation follows red-green-refactor. Each production behavior begins with 
 
 - Scale controls bind once across repeated LiveView updates.
 - Activating a control updates renderer scale, active state, assistive range text, and diagnostics.
+- Accepted, throttled, stale-generation, and destroyed-hook range replies cannot deadlock or overwrite a newer intent.
 - Direct touch placement previews locally and pushes one changed lane only on completion.
 - Cancel, second touch, disabled state, and historical state restore safely without a lane or gesture push.
 - Touch placement and horizontal panning remain isolated.
@@ -237,7 +252,15 @@ Implementation follows red-green-refactor. Each production behavior begins with 
 
 - Live, panned, and chapter routes render stable scale-control IDs and accessible group semantics.
 - Chapter routes keep gesture controls disabled while scale remains available.
+- A range request accepts only supported durations and strict UTC ends, returns bounded real instructions, atomically authorizes them, preserves a selected chapter anchor, and explicitly replies when throttled.
 - Existing history cursor validation, authorization, throttling, and viewport-state tests remain green.
+
+### Timeline projection and Store tests
+
+- A 1,000-plus-event fifteen-minute fixture returns at most 600 real records while retaining temporal endpoints and every represented source.
+- Dense sources cannot crowd out sparse sources; ordering is deterministic and chronological after selection.
+- Weather remains ambient rather than topology, a selected anchor is force-included, and invalid intervals fail before a query.
+- Query-plan/index assertions cover the bounded source/time access path.
 
 ### Browser tests
 
@@ -247,13 +270,14 @@ Implementation follows red-green-refactor. Each production behavior begins with 
 - A real mobile touch on the live membrane changes the lane once, followed by a touch submission that commits the chosen gesture.
 - Tug, Knot, and Illuminate each pass through native `.tap()` in isolated mobile identities and produce their distinct committed formation.
 - Formation inspection occurs before the new current-time gesture and taps a renderer-authoritative visible hit region.
+- A compact overlay remains touch-scrollable after the Canvas takes full touch ownership.
 - Reduced motion preserves zoom and touch operation.
 - Browser console, page, request, response, and WebSocket failure monitors remain empty.
 
 ### Visual verification
 
-- Preserve the current screenshot threshold.
-- Add deterministic one-minute and fifteen-minute desktop/mobile states.
+- Preserve the current `0.08` screenshot threshold.
+- Keep the existing balanced one-minute desktop/mobile baselines and add a deterministic quarter-hour E2E scene with genuine prior events for dedicated fifteen-minute desktop/mobile baselines.
 - Inspect the scale group, dock spacing, live-edge alignment, legend overlap, selected formation, cooldown, and historical Return live state.
 - Confirm the weave remains legible at fifteen minutes without lifting renderer bounds.
 
@@ -285,7 +309,7 @@ No hosted-demo claim, source posture, privacy claim, runtime version, or deploym
 - In panned history, scale changes preserve the viewport center time where boundaries permit.
 - Live snapshots do not drag a historical view forward.
 - Chapter views support the same scales and remain read-only.
-- Wider scales fetch only authorized bounded history and stop correctly.
+- Wider scales fetch only an authorized, temporally representative bounded projection and stop correctly.
 - Timeline and hit geometry use one explicit time axis; browser tests do not duplicate projection math.
 - Direct mobile touch reliably positions a lane, cancellation restores state, and a normal end synchronizes once.
 - Tug, Knot, and Illuminate commit through real mobile taps and remain durable, shared, and inspectable.
