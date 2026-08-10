@@ -798,6 +798,7 @@ function hitCommand(instruction, viewport) {
   return {
     type: "anchor-hit",
     sequence: instruction.sequence,
+    source: instruction.source,
     x,
     y,
     hit: {x: x - hitSize / 2, y: y - hitSize / 2, width: hitSize, height: hitSize},

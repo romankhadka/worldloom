@@ -5,7 +5,11 @@ import test from "node:test"
 import {commandsForScene, eventTimeToX} from "../js/worldloom/geometry.js"
 import {canvasPalette, signalPalette} from "../js/worldloom/palette.js"
 import {Renderer} from "../js/worldloom/renderer.js"
-import {balanced} from "./fixtures/balanced_snapshots.js"
+import {
+  balanced,
+  balancedQuarterHour,
+  balancedQuarterHourPriorEvents,
+} from "./fixtures/balanced_snapshots.js"
 
 const balancedSnapshot = JSON.parse(readFileSync(
   new URL("../../test/support/fixtures/live_snapshots/balanced_v1.json", import.meta.url),
@@ -157,6 +161,43 @@ test("coalesces timeline requests and retries only the latest intent", () => {
   archive_start_at: new Date(Date.parse(balancedSnapshot.window_end) - 900_000).toISOString()})
   renderer.panBy(500)
   assert.equal(requests.length, 3)
+})
+
+test("applies width-aware level of detail to expanded timelines", () => {
+  const renderer = new Renderer(null, {
+    width: 1_440,
+    height: 1_000,
+    padding: 40,
+    reducedMotion: true,
+  })
+  renderer.setSnapshot(structuredClone(balancedQuarterHour))
+  renderer.timelineDurationMilliseconds = 900_000
+  renderer.setTimelineWindow({
+    axis: {
+      start_at: "2026-08-08T11:46:00.000Z",
+      end_at: balancedQuarterHour.window_end,
+      duration_seconds: 900,
+    },
+    instructions: balancedQuarterHourPriorEvents.slice(0, 600),
+    scaffold: [],
+    ambient: null,
+    archive_start_at: "2026-08-08T11:46:00.000Z",
+  })
+
+  const desktopHits = renderer.commands.filter(command => command.type === "anchor-hit")
+  assert.ok(desktopHits.length <= 240)
+  assert.deepEqual(
+    new Set(desktopHits.map(command => command.source)),
+    new Set(["wikimedia", "bluesky", "ripe_ris", "solana", "drand"]),
+  )
+
+  renderer.resize(390, 844)
+  const mobileHits = renderer.commands.filter(command => command.type === "anchor-hit")
+  assert.ok(mobileHits.length <= 60)
+  assert.deepEqual(
+    new Set(mobileHits.map(command => command.source)),
+    new Set(["wikimedia", "bluesky", "ripe_ris", "solana", "drand"]),
+  )
 })
 
 test("passes every snapshot role to geometry as explicit scene input", () => {

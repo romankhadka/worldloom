@@ -81,6 +81,18 @@ const balancedDisplaySpecs = [
   ),
 ]
 
+const quarterHourPriorSpecs = [
+  ...offsetsThrough(-840, -4, 4).map(offset => scheduledSpec("wikimedia", offset * 1_000)),
+  ...offsetsThrough(-839, -3, 4).map(offset => scheduledSpec("bluesky", offset * 1_000)),
+  ...offsetsThrough(-838, -2, 4).map(offset => scheduledSpec("ripe_ris", offset * 1_000)),
+  ...offsetsThrough(-837, -1, 4).map(offset => scheduledSpec("solana", offset * 1_000)),
+  ...offsetsThrough(-840, -3, 3).map((offset, index) =>
+    scheduledSpec("drand", offset * 1_000, {
+      metrics: {round: firstDrandRound - 280 + index},
+    })
+  ),
+]
+
 const memorySpecs = [
   {source: "usgs", occurredAt: "2026-08-08T11:42:00.000Z"},
   {
@@ -111,6 +123,17 @@ export const balanced = buildSnapshot({
   memorySpecs,
   ambientSpec,
 })
+
+export const balancedQuarterHour = buildSnapshot({
+  sequenceBase: 10_000,
+  displaySpecs: balancedDisplaySpecs,
+  memorySpecs,
+  ambientSpec,
+})
+
+export const balancedQuarterHourPriorEvents = [...quarterHourPriorSpecs]
+  .sort(compareSpecs)
+  .map((spec, index) => instructionFor(index + 1, spec))
 
 export const wikimediaSurge = buildSnapshot({
   sequenceBase: 2_000,

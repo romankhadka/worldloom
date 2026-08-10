@@ -11,6 +11,7 @@ defmodule Worldloom.E2ESceneLoader do
 
   @scenes %{
     "balanced" => :all_live,
+    "balanced-quarter-hour" => :all_live,
     "wikimedia-surge" => :all_live,
     "delayed-recovery" => :delayed_recovery,
     "total-outage" => :total_outage,
@@ -21,6 +22,8 @@ defmodule Worldloom.E2ESceneLoader do
   @display_limit 600
   @memory_limit 4
   @ambient_limit 1
+  @prior_limit 1_200
+  @prior_sources ~w(wikimedia bluesky ripe_ris solana drand)
 
   @spec known_scene?(term()) :: boolean()
   def known_scene?(name), do: is_binary(name) and Map.has_key?(@scenes, name)
@@ -29,8 +32,16 @@ defmodule Worldloom.E2ESceneLoader do
           {:ok, Worldloom.Loom.LiveSnapshot.t()}
           | {:error, :unknown_scene | :invalid_snapshot}
   def load(name, snapshot) do
+    load(name, snapshot, [])
+  end
+
+  @spec load(term(), term(), term()) ::
+          {:ok, Worldloom.Loom.LiveSnapshot.t()}
+          | {:error, :unknown_scene | :invalid_snapshot}
+  def load(name, snapshot, prior_events) do
     with {:ok, health_profile} <- Map.fetch(@scenes, name),
          {:ok, validated} <- validate_snapshot(snapshot),
+         {:ok, validated} <- validate_prior_events(name, prior_events, validated),
          true <- preflight_matches?(validated),
          :ok <- replace_events(validated.events),
          {:ok, authoritative_snapshot} <- restart_coordinator(),
@@ -87,6 +98,24 @@ defmodule Worldloom.E2ESceneLoader do
   end
 
   defp validate_snapshot(_snapshot), do: {:error, :invalid_snapshot}
+
+  defp validate_prior_events(name, prior_events, validated)
+       when is_list(prior_events) and length(prior_events) <= @prior_limit do
+    with true <- name == "balanced-quarter-hour" or prior_events == [],
+         {:ok, events} <- validate_instructions(prior_events),
+         true <- Enum.all?(events, &(&1.source in @prior_sources)),
+         live_start <- DateTime.add(validated.window_end, -60, :second),
+         true <- Enum.all?(events, &(DateTime.compare(&1.occurred_at, live_start) == :lt)),
+         all_events <- events ++ validated.events,
+         true <- unique_sequences?(all_events) do
+      {:ok, %{validated | events: all_events}}
+    else
+      _invalid -> {:error, :invalid_snapshot}
+    end
+  end
+
+  defp validate_prior_events(_name, _prior_events, _validated),
+    do: {:error, :invalid_snapshot}
 
   defp ambient_events(nil), do: {:ok, []}
   defp ambient_events(ambient) when is_map(ambient), do: {:ok, [ambient]}

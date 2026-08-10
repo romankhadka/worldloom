@@ -13,6 +13,8 @@ const fixtureModule = await import(fixtureModuleUrl).catch(error => {
 test("exports every named balanced-world acceptance fixture", () => {
   assert.deepEqual(Object.keys(fixtureModule).sort(), [
     "balanced",
+    "balancedQuarterHour",
+    "balancedQuarterHourPriorEvents",
     "delayedRecovery",
     "memoryExpiry",
     "totalOutage",
@@ -20,7 +22,9 @@ test("exports every named balanced-world acceptance fixture", () => {
   ])
 })
 
-const namedFixtures = Object.entries(fixtureModule)
+const namedFixtures = Object.entries(fixtureModule).filter(([_name, fixture]) =>
+  !Array.isArray(fixture)
+)
 const scheduledSources = ["bluesky", "drand", "ripe_ris", "solana", "wikimedia"]
 const scheduledSourceSet = new Set(scheduledSources)
 
@@ -89,6 +93,18 @@ test("every fixture timestamp is an explicit UTC instant", () => {
       assert.equal(Number.isFinite(Date.parse(timestamp)), true, `${name} valid timestamp`)
     }
   }
+})
+
+test("quarter-hour prior events are bounded, unique, and end before the live minute", () => {
+  const priorEvents = fixtureModule.balancedQuarterHourPriorEvents
+  const liveStart = Date.parse(fixtureModule.balancedQuarterHour.window_end) - 60_000
+
+  assert.ok(priorEvents.length <= 1_200)
+  assert.ok(priorEvents.length > 1_000)
+  assert.equal(new Set(priorEvents.map(event => event.sequence)).size, priorEvents.length)
+  assert.ok(priorEvents.every(event => event.sequence < 10_000))
+  assert.ok(priorEvents.every(event => Date.parse(event.occurred_at) < liveStart))
+  assert.equal(priorEvents[0].occurred_at, "2026-08-08T11:46:00.000Z")
 })
 
 test("every rolling ten-second balanced interval contains all five scheduled families", () => {

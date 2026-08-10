@@ -306,24 +306,35 @@ export class Renderer {
   rebuild() {
     const viewport = this.viewport()
     const axis = this.timelineAxis()
-    const eventSequences = new Set(this.events.map(instruction => instruction.sequence))
+    const sceneEvents = this.timelineDurationMilliseconds > 60_000
+      ? timelineLevelOfDetail(
+          this.events,
+          timelineLevelOfDetailCapacity(this.width, this.padding),
+          this.selectedSequence,
+        )
+      : this.events
+    const eventSequences = new Set(sceneEvents.map(instruction => instruction.sequence))
     const scaffoldOnly = this.scaffold.filter(
       instruction => !eventSequences.has(instruction.sequence),
     )
     const topologyCapacity = maximumEvents - scaffoldOnly.length
     const topologyInstructions = [
       ...scaffoldOnly,
-      ...this.events.slice(-topologyCapacity),
+      ...sceneEvents.slice(-topologyCapacity),
     ]
     this.commands = this.projectScene(topologyInstructions, viewport, {
       axis,
-      displayInstructions: this.instructions,
+      displayInstructions: this.instructions.filter(instruction =>
+        eventSequences.has(instruction.sequence)
+      ),
       memoryInstructions: this.memoryInstructions,
       ambient: this.ambient,
-      historyInstructions: this.historyInstructions,
+      historyInstructions: this.historyInstructions.filter(instruction =>
+        eventSequences.has(instruction.sequence)
+      ),
       scaffoldInstructions: scaffoldOnly,
-      projectionInstructions: [...scaffoldOnly, ...this.events],
-      hitInstructions: this.events,
+      projectionInstructions: [...scaffoldOnly, ...sceneEvents],
+      hitInstructions: sceneEvents,
     }).slice(-maximumCommands)
     this.reconcilePendingSelection()
     const availableTransitions = transitionSequences(this.commands)
@@ -903,6 +914,53 @@ function boundedInstructions(instructions, preference) {
   }
   const ordered = [...bySequence.values()].sort((left, right) => left.sequence - right.sequence)
   return preference === "oldest" ? ordered.slice(0, maximumEvents) : ordered.slice(-maximumEvents)
+}
+
+function timelineLevelOfDetailCapacity(width, padding) {
+  const drawableWidth = Math.max(0, Number(width) - Number(padding) * 2)
+  return Math.max(60, Math.min(240, Math.floor(drawableWidth / 6)))
+}
+
+function timelineLevelOfDetail(instructions, capacity, selectedSequence) {
+  if (instructions.length <= capacity) return instructions
+
+  const sourceGroups = Map.groupBy(instructions, instruction => instruction.source)
+  const sources = [...sourceGroups.keys()].sort()
+  const baseSize = Math.floor(capacity / sources.length)
+  let remainder = capacity % sources.length
+  const selected = []
+
+  for (const source of sources) {
+    const sourceInstructions = sourceGroups.get(source).sort(compareTimelineInstructions)
+    const sourceCapacity = baseSize + (remainder > 0 ? 1 : 0)
+    remainder = Math.max(0, remainder - 1)
+    selected.push(...evenlySpacedInstructions(sourceInstructions, sourceCapacity))
+  }
+
+  const selectedInstruction = instructions.find(
+    instruction => instruction.sequence === selectedSequence,
+  )
+  if (selectedInstruction && !selected.some(item => item.sequence === selectedSequence)) {
+    selected[Math.floor(selected.length / 2)] = selectedInstruction
+  }
+
+  return selected.sort(compareTimelineInstructions)
+}
+
+function evenlySpacedInstructions(instructions, capacity) {
+  if (instructions.length <= capacity) return instructions
+  const lastIndex = instructions.length - 1
+  const indices = new Set(
+    Array.from({length: capacity}, (_entry, index) =>
+      Math.round(index * lastIndex / (capacity - 1))
+    ),
+  )
+  return [...indices].map(index => instructions[index])
+}
+
+function compareTimelineInstructions(left, right) {
+  return Date.parse(left.occurred_at) - Date.parse(right.occurred_at) ||
+    left.sequence - right.sequence
 }
 
 function validatedSnapshot(envelope) {

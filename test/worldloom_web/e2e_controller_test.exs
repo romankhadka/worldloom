@@ -123,6 +123,41 @@ defmodule WorldloomWeb.E2EControllerTest do
       assert Repo.aggregate(Event, :count) == 605
     end
 
+    test "loads bounded prior records only for the quarter-hour scene" do
+      prior_events = [prior_instruction(1, "2026-08-08T11:59:59.000Z")]
+
+      response = post_scene("balanced-quarter-hour", valid_snapshot(), prior_events)
+
+      assert json_response(response, 200)["scene"] == "balanced-quarter-hour"
+      assert Enum.map(durable_events(), & &1.id) == [1, 10, 11]
+      assert Coordinator.current_snapshot().commit_watermark == 11
+    end
+
+    test "rejects unauthorized, oversized, malformed, and live-minute prior records" do
+      valid_prior = prior_instruction(1, "2026-08-08T11:59:59.000Z")
+
+      oversized_prior =
+        Enum.map(1..1_201, &prior_instruction(&1, "2026-08-08T11:59:59.000Z"))
+
+      malformed_prior =
+        Map.merge(valid_prior, %{"kind" => "earthquake", "source" => "wikimedia"})
+
+      live_minute_prior = prior_instruction(1, "2026-08-08T12:00:00.000Z")
+
+      for {scene, prior_events} <- [
+            {"balanced", [valid_prior]},
+            {"balanced-quarter-hour", oversized_prior},
+            {"balanced-quarter-hour", [malformed_prior]},
+            {"balanced-quarter-hour", [live_minute_prior]}
+          ] do
+        before_events = durable_events()
+        response = post_scene(scene, valid_snapshot(), prior_events)
+
+        assert json_response(response, 422) == %{"error" => "invalid snapshot"}
+        assert durable_events() == before_events
+      end
+    end
+
     test "rejects each scene collection above its independent limit" do
       display_overflow =
         maximum_snapshot()
@@ -275,10 +310,24 @@ defmodule WorldloomWeb.E2EControllerTest do
       )
     end
 
-    defp post_scene(name, snapshot) do
+    defp post_scene(name, snapshot, prior_events \\ nil) do
+      body =
+        if is_nil(prior_events),
+          do: %{snapshot: snapshot},
+          else: %{snapshot: snapshot, prior_events: prior_events}
+
       build_conn()
       |> put_req_header("content-type", "application/json")
-      |> post("/__e2e__/scenes/#{name}", Jason.encode!(%{snapshot: snapshot}))
+      |> post("/__e2e__/scenes/#{name}", Jason.encode!(body))
+    end
+
+    defp prior_instruction(sequence, occurred_at) do
+      instruction(%{
+        "sequence" => sequence,
+        "kind" => "wikimedia",
+        "source" => "wikimedia",
+        "occurred_at" => occurred_at
+      })
     end
 
     defp durable_events do

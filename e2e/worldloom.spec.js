@@ -2,6 +2,8 @@ import {expect, test} from "@playwright/test"
 
 import {
   balanced,
+  balancedQuarterHour,
+  balancedQuarterHourPriorEvents,
   delayedRecovery,
   memoryExpiry,
   totalOutage,
@@ -1033,6 +1035,95 @@ test.describe.serial("balanced-world visual release", () => {
     }
   })
 
+  test("quarter-hour desktop keeps every public material across the full axis", async ({page}) => {
+    const browserFailures = monitorPage(page, "quarter-hour desktop")
+    await installScene(
+      page,
+      "balanced-quarter-hour",
+      balancedQuarterHour,
+      balancedQuarterHourPriorEvents,
+    )
+    const canvas = await openWorldloom(page, {width: 1440, height: 1000})
+    const fifteenMinutes = page.getByRole("button", {name: "15m", exact: true})
+    await fifteenMinutes.click()
+    await expect(fifteenMinutes).toHaveAttribute("aria-pressed", "true")
+
+    await expect.poll(async () => quarterHourScene(canvas)).toMatchObject({
+      durationSeconds: 900,
+      fullWidth: true,
+    })
+    const diagnostics = await liveSceneDiagnostics(canvas)
+    expect(Date.parse(diagnostics.scene.axis.end) - Date.parse(diagnostics.scene.axis.start))
+      .toBe(900_000)
+    expect(Date.parse(diagnostics.scene.axis.end)).toBe(
+      Date.parse(balancedQuarterHour.window_end),
+    )
+    const paintedSources = new Set(
+      diagnostics.scene.paintCommands.map(command => command.source),
+    )
+    for (const source of ["wikimedia", "bluesky", "ripe_ris", "solana", "drand"]) {
+      expect(paintedSources).toContain(source)
+    }
+    await expect(page.locator("#timeline-range")).toContainText("15 minutes")
+
+    for (const button of await page.locator(".timeline-scale-button").all()) {
+      const bounds = await button.boundingBox()
+      expect(bounds.width).toBeGreaterThanOrEqual(44)
+      expect(bounds.height).toBeGreaterThanOrEqual(44)
+    }
+
+    await expectStableScreenshot(page, "quarter-hour-desktop.png")
+
+    await page.getByRole("button", {name: "5m", exact: true}).click()
+    await canvas.dispatchEvent("wheel", {deltaY: -1_500})
+    await expect.poll(async () =>
+      sceneCenterMilliseconds((await liveSceneDiagnostics(canvas)).scene.axis)
+    ).toBeLessThan(Date.parse(balancedQuarterHour.window_end) - 150_000)
+    const historicalCenter = sceneCenterMilliseconds(
+      (await liveSceneDiagnostics(canvas)).scene.axis,
+    )
+    await fifteenMinutes.click()
+    await expect.poll(async () =>
+      sceneCenterMilliseconds((await liveSceneDiagnostics(canvas)).scene.axis)
+    ).toBe(historicalCenter)
+    expect(browserFailures).toEqual([])
+  })
+
+  test("quarter-hour mobile keeps the scale readable and Now pinned", async ({browser}) => {
+    const context = await browser.newContext({
+      baseURL: process.env.WORLDLOOM_BASE_URL ?? "http://localhost:4002",
+      viewport: {width: 390, height: 844},
+      hasTouch: true,
+      isMobile: true,
+    })
+    const page = await context.newPage()
+    const browserFailures = monitorPage(page, "quarter-hour mobile")
+
+    try {
+      await installScene(
+        page,
+        "balanced-quarter-hour",
+        balancedQuarterHour,
+        balancedQuarterHourPriorEvents,
+      )
+      const canvas = await openWorldloom(page)
+      await page.getByRole("button", {name: "15m", exact: true}).tap()
+      await expect.poll(async () => quarterHourScene(canvas)).toMatchObject({
+        durationSeconds: 900,
+        fullWidth: true,
+      })
+      const diagnostics = await liveSceneDiagnostics(canvas)
+      expect(Date.parse(diagnostics.scene.axis.end)).toBe(
+        Date.parse(balancedQuarterHour.window_end),
+      )
+      await expect(page.locator("#timeline-range")).toContainText("15 minutes")
+      await expectStableScreenshot(page, "quarter-hour-mobile.png")
+      expect(browserFailures).toEqual([])
+    } finally {
+      await context.close()
+    }
+  })
+
   test("a Wikimedia surge preserves the other public materials", async ({page}) => {
     const browserFailures = monitorPage(page, "Wikimedia surge")
     await installScene(page, "wikimedia-surge", wikimediaSurge)
@@ -1211,13 +1302,34 @@ async function expectStableScreenshot(page, name) {
   await expect(page).toHaveScreenshot(name, screenshotOptions)
 }
 
-async function installScene(page, sceneName, snapshot) {
+async function installScene(page, sceneName, snapshot, priorEvents = null) {
+  const data = priorEvents === null
+    ? {snapshot}
+    : {snapshot, prior_events: priorEvents}
   const response = await page.request.post(`/__e2e__/scenes/${sceneName}`, {
-    data: {snapshot},
+    data,
   })
   const responseBody = await response.text()
 
   expect(response.ok(), `${sceneName} scene response: ${responseBody}`).toBe(true)
+}
+
+async function quarterHourScene(canvas) {
+  const diagnostics = await liveSceneDiagnostics(canvas)
+  const anchors = diagnostics.scene.paintCommands.filter(command =>
+    command.type === "anchor-hit" && Number.isFinite(command.x)
+  )
+  const xs = anchors.map(command => command.x)
+  const drawableWidth = diagnostics.scene.viewport.width - diagnostics.scene.viewport.padding * 2
+
+  return {
+    durationSeconds: diagnostics.scene.axis.durationSeconds,
+    fullWidth: xs.length > 0 && Math.max(...xs) - Math.min(...xs) >= drawableWidth * 0.8,
+  }
+}
+
+function sceneCenterMilliseconds(axis) {
+  return (Date.parse(axis.start) + Date.parse(axis.end)) / 2
 }
 
 async function backingAlpha(page, selector) {

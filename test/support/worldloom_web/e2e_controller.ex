@@ -5,9 +5,33 @@ defmodule WorldloomWeb.E2EController do
   alias Worldloom.Loom.SourceEvent
   alias Worldloom.E2ESceneLoader
 
+  def scene(
+        conn,
+        %{"name" => name, "snapshot" => snapshot, "prior_events" => prior_events} = params
+      )
+      when map_size(params) == 3 do
+    load_scene(conn, name, snapshot, prior_events)
+  end
+
   def scene(conn, %{"name" => name, "snapshot" => snapshot} = params)
       when map_size(params) == 2 do
-    case E2ESceneLoader.load(name, snapshot) do
+    load_scene(conn, name, snapshot, [])
+  end
+
+  def scene(conn, %{"name" => name}) do
+    if E2ESceneLoader.known_scene?(name) do
+      conn
+      |> put_status(:unprocessable_entity)
+      |> json(%{error: "invalid snapshot"})
+    else
+      conn
+      |> put_status(:not_found)
+      |> json(%{error: "unknown scene"})
+    end
+  end
+
+  defp load_scene(conn, name, snapshot, prior_events) do
+    case E2ESceneLoader.load(name, snapshot, prior_events) do
       {:ok, loaded_snapshot} ->
         json(conn, %{
           commit_watermark: loaded_snapshot.commit_watermark,
@@ -24,18 +48,6 @@ defmodule WorldloomWeb.E2EController do
         conn
         |> put_status(:unprocessable_entity)
         |> json(%{error: "invalid snapshot"})
-    end
-  end
-
-  def scene(conn, %{"name" => name}) do
-    if E2ESceneLoader.known_scene?(name) do
-      conn
-      |> put_status(:unprocessable_entity)
-      |> json(%{error: "invalid snapshot"})
-    else
-      conn
-      |> put_status(:not_found)
-      |> json(%{error: "unknown scene"})
     end
   end
 
