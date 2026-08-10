@@ -5,6 +5,7 @@ defmodule Worldloom.Loom.StoreTest do
   alias Worldloom.Loom.FeedCheckpoint
   alias Worldloom.Loom.SourceEvent
   alias Worldloom.Loom.Store
+  alias Worldloom.Loom.TimelineWindow
 
   @live_source_count 7
   @contextual_source_count 2
@@ -254,6 +255,64 @@ defmodule Worldloom.Loom.StoreTest do
     assert primary_definition =~ "WHERE"
     assert primary_definition =~ "source"
     assert primary_definition =~ "<> 'open_meteo'"
+  end
+
+  test "loads a bounded balanced fifteen-minute timeline window" do
+    start_at = ~U[2026-08-09 12:00:00.000000Z]
+    end_at = DateTime.add(start_at, 900, :second)
+
+    source_events = %{
+      "wikimedia" =>
+        insert_stored_events("wikimedia", 0..224, &DateTime.add(start_at, &1 * 4, :second)),
+      "bluesky" =>
+        insert_stored_events("bluesky", 0..224, &DateTime.add(start_at, &1 * 4 + 1, :second)),
+      "ripe_ris" =>
+        insert_stored_events("ripe_ris", 0..48, &DateTime.add(start_at, &1 * 18 + 2, :second)),
+      "solana" =>
+        insert_stored_events("solana", 0..224, &DateTime.add(start_at, &1 * 4 + 3, :second)),
+      "drand" => insert_stored_events("drand", 0..299, &DateTime.add(start_at, &1 * 3, :second)),
+      "usgs" =>
+        insert_stored_events("usgs", 0..1, &DateTime.add(start_at, 100 + &1 * 700, :second)),
+      "visitor" =>
+        insert_stored_events("visitor", 0..2, &DateTime.add(start_at, 300 + &1 * 200, :second))
+    }
+
+    [_old_weather, historical_weather] =
+      insert_stored_events("open_meteo", 0..1, fn
+        0 -> DateTime.add(start_at, -60, :second)
+        1 -> DateTime.add(end_at, -30, :second)
+      end)
+
+    anchor = source_events["visitor"] |> Enum.at(1)
+
+    window = Store.timeline_window(end_at, 900, anchor)
+
+    assert %TimelineWindow{} = window
+    assert window.start_at == start_at
+    assert window.end_at == end_at
+    assert window.duration_seconds == 900
+    assert length(window.events) <= 600
+    assert anchor in window.events
+    assert window.ambient.id == historical_weather.id
+    refute Enum.any?(window.events, &(&1.source == "open_meteo"))
+
+    assert MapSet.new(window.events, & &1.source) == MapSet.new(Map.keys(source_events))
+
+    for {source, stored_events} <- source_events do
+      projected_events = Enum.filter(window.events, &(&1.source == source))
+      assert hd(projected_events).id == hd(stored_events).id
+      assert List.last(projected_events).id == List.last(stored_events).id
+    end
+
+    assert DateTime.compare(window.archive_start_at, start_at) != :gt
+  end
+
+  test "timeline windows validate their end, duration, and anchor before querying" do
+    end_at = ~U[2026-08-09 12:15:00.000000Z]
+
+    assert_raise ArgumentError, fn -> Store.timeline_window(end_at, 120) end
+    assert_raise ArgumentError, fn -> Store.timeline_window(~N[2026-08-09 12:15:00], 900) end
+    assert_raise ArgumentError, fn -> Store.timeline_window(end_at, 900, 42) end
   end
 
   test "live event-time index migration is concurrent and recoverable" do

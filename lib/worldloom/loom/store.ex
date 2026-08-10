@@ -6,16 +6,21 @@ defmodule Worldloom.Loom.Store do
   alias Worldloom.Loom.LiveProjection
   alias Worldloom.Loom.LiveSnapshot
   alias Worldloom.Loom.SourceEvent
+  alias Worldloom.Loom.TimelineProjection
+  alias Worldloom.Loom.TimelineWindow
   alias Worldloom.Loom.VisualParameters
   alias Worldloom.Repo
 
   @primary_sources ~w(wikimedia bluesky ripe_ris solana drand)
   @context_sources ~w(usgs visitor)
+  @timeline_sources @primary_sources ++ @context_sources
   @live_source_limit 240
   @memory_lookback_seconds 24 * 60 * 60
   @live_window_seconds 60
   @maximum_limit 600
   @maximum_sequence 9_223_372_036_854_775_807
+  @timeline_durations [60, 300, 900]
+  @timeline_source_buckets 100
 
   @spec commit_external([SourceEvent.t()], map() | nil) ::
           {:ok, [Event.t()]} | {:error, term()}
@@ -105,6 +110,29 @@ defmodule Worldloom.Loom.Store do
       LiveProjection.build(candidates, ambient, commit_watermark, previous_window_end)
     end
   end
+
+  @spec timeline_window(DateTime.t(), 60 | 300 | 900, Event.t() | nil) ::
+          TimelineWindow.t()
+  def timeline_window(end_at, duration_seconds, anchor \\ nil)
+
+  def timeline_window(%DateTime{} = end_at, duration_seconds, anchor)
+      when duration_seconds in @timeline_durations and
+             (is_nil(anchor) or is_struct(anchor, Event)) do
+    start_at = DateTime.add(end_at, -duration_seconds, :second)
+    candidates = timeline_candidates(start_at, end_at)
+
+    %TimelineWindow{
+      start_at: start_at,
+      end_at: end_at,
+      duration_seconds: duration_seconds,
+      events: TimelineProjection.select(candidates, anchor_in_window(anchor, start_at, end_at)),
+      ambient: ambient_at(end_at),
+      archive_start_at: archive_start_at()
+    }
+  end
+
+  def timeline_window(_end_at, _duration_seconds, _anchor),
+    do: raise(ArgumentError, "timeline end, duration, or anchor is invalid")
 
   @spec fetch(pos_integer()) :: {:ok, Event.t()} | :error
   def fetch(sequence) when is_integer(sequence) and sequence > 0 do
@@ -414,6 +442,88 @@ defmodule Worldloom.Loom.Store do
       payload: Map.put(event.payload, "visual", parameters.visual),
       inserted_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
     }
+  end
+
+  defp timeline_candidates(start_at, end_at) do
+    last_bucket = @timeline_source_buckets - 1
+
+    ranked =
+      Event
+      |> where(
+        [event],
+        event.source in ^@timeline_sources and event.occurred_at >= ^start_at and
+          event.occurred_at <= ^end_at
+      )
+      |> windows(
+        [event],
+        source_order: [
+          partition_by: event.source,
+          order_by: [asc: event.occurred_at, asc: event.id]
+        ],
+        source_count: [partition_by: event.source]
+      )
+      |> select([event], %{
+        id: event.id,
+        source: event.source,
+        occurred_at: event.occurred_at,
+        ordinal: over(row_number(), :source_order),
+        source_count: over(count(event.id), :source_count)
+      })
+
+    bucketed =
+      from candidate in subquery(ranked),
+        select: %{
+          id: candidate.id,
+          source: candidate.source,
+          occurred_at: candidate.occurred_at,
+          bucket:
+            fragment(
+              "floor(((? - 1) * ?::numeric) / greatest(? - 1, 1))::integer",
+              candidate.ordinal,
+              ^last_bucket,
+              candidate.source_count
+            )
+        }
+
+    sampled_ids =
+      from candidate in subquery(bucketed),
+        distinct: [candidate.source, candidate.bucket],
+        order_by: [
+          asc: candidate.source,
+          asc: candidate.bucket,
+          asc: candidate.occurred_at,
+          asc: candidate.id
+        ],
+        select: candidate.id
+
+    Event
+    |> where([event], event.id in subquery(sampled_ids))
+    |> order_by([event], asc: event.occurred_at, asc: event.id)
+    |> Repo.all()
+  end
+
+  defp ambient_at(end_at) do
+    Event
+    |> where([event], event.source == "open_meteo" and event.occurred_at <= ^end_at)
+    |> order_by([event], desc: event.occurred_at, desc: event.id)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  defp archive_start_at do
+    Event
+    |> where([event], event.source != "open_meteo")
+    |> select([event], min(event.occurred_at))
+    |> Repo.one()
+  end
+
+  defp anchor_in_window(nil, _start_at, _end_at), do: nil
+
+  defp anchor_in_window(%Event{} = anchor, start_at, end_at) do
+    if DateTime.compare(anchor.occurred_at, start_at) != :lt and
+         DateTime.compare(anchor.occurred_at, end_at) != :gt do
+      anchor
+    end
   end
 
   defp rows_before(_sequence, 0), do: []
