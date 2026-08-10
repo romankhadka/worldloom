@@ -57,11 +57,19 @@ defmodule WorldloomWeb.CoreComponents do
     >
       <div class={[
         "flex w-full items-start gap-3 border px-4 py-3 text-sm shadow-2xl backdrop-blur-md",
-        @kind == :info && "border-loom-cyan/40 bg-[#0c1a1a]/95 text-[#dffffb]",
-        @kind == :error && "border-loom-ember/50 bg-[#21120e]/95 text-[#ffe4d2]"
+        @kind == :info && "border-loom-jade/40 bg-loom-lacquer/95 text-loom-bone",
+        @kind == :error && "border-loom-copper/50 bg-loom-lacquer/95 text-loom-bone"
       ]}>
-        <.icon :if={@kind == :info} name="hero-information-circle" class="size-5 shrink-0" />
-        <.icon :if={@kind == :error} name="hero-exclamation-circle" class="size-5 shrink-0" />
+        <.icon
+          :if={@kind == :info}
+          name="hero-information-circle"
+          class="size-5 shrink-0 text-loom-jade"
+        />
+        <.icon
+          :if={@kind == :error}
+          name="hero-exclamation-circle"
+          class="size-5 shrink-0 text-loom-copper"
+        />
         <div>
           <p :if={@title} class="font-semibold">{@title}</p>
           <p>{msg}</p>
@@ -96,9 +104,9 @@ defmodule WorldloomWeb.CoreComponents do
   def button(%{rest: rest} = assigns) do
     variants = %{
       "primary" =>
-        "border-loom-ivory bg-loom-ivory text-loom-ink hover:bg-white focus-visible:outline-loom-cyan",
+        "border-loom-bone bg-loom-bone text-loom-lacquer hover:bg-loom-bone/90 focus-visible:outline-loom-jade",
       nil =>
-        "border-loom-ivory/35 bg-transparent text-loom-ivory hover:border-loom-ivory focus-visible:outline-loom-cyan"
+        "border-loom-bone/35 bg-transparent text-loom-bone hover:border-loom-bone focus-visible:outline-loom-jade"
     }
 
     assigns =
@@ -194,7 +202,7 @@ defmodule WorldloomWeb.CoreComponents do
 
     ~H"""
     <div class="mb-4">
-      <label class="flex items-center gap-3 text-sm text-loom-ivory/85">
+      <label class="flex items-center gap-3 text-sm text-loom-bone/85">
         <input type="hidden" name={@name} value="false" disabled={@rest[:disabled]} />
         <span class="flex items-center gap-3">
           <input
@@ -205,7 +213,7 @@ defmodule WorldloomWeb.CoreComponents do
             checked={@checked}
             class={
               @class ||
-                "size-4 appearance-none border border-loom-ivory/50 bg-transparent checked:border-loom-cyan checked:bg-loom-cyan focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-loom-cyan"
+                "size-4 appearance-none border border-loom-bone/50 bg-transparent checked:border-loom-jade checked:bg-loom-jade focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-loom-jade"
             }
             {@rest}
           />{@label}
@@ -220,7 +228,7 @@ defmodule WorldloomWeb.CoreComponents do
     ~H"""
     <div class="mb-4">
       <label class="block">
-        <span :if={@label} class="mb-1.5 block text-xs uppercase tracking-[0.14em] text-loom-ivory/65">
+        <span :if={@label} class="mb-1.5 block text-xs uppercase tracking-[0.14em] text-loom-bone/65">
           {@label}
         </span>
         <select
@@ -228,8 +236,8 @@ defmodule WorldloomWeb.CoreComponents do
           name={@name}
           class={[
             @class ||
-              "w-full border border-loom-ivory/30 bg-loom-ink px-3 py-2 text-loom-ivory outline-none transition focus:border-loom-cyan focus:ring-1 focus:ring-loom-cyan",
-            @errors != [] && (@error_class || "border-loom-ember focus:border-loom-ember")
+              "w-full border border-loom-bone/30 bg-loom-lacquer px-3 py-2 text-loom-bone outline-none transition focus:border-loom-jade focus:ring-1 focus:ring-loom-jade",
+            @errors != [] && (@error_class || "border-loom-copper focus:border-loom-copper")
           ]}
           multiple={@multiple}
           {@rest}
@@ -247,7 +255,7 @@ defmodule WorldloomWeb.CoreComponents do
     ~H"""
     <div class="mb-4">
       <label class="block">
-        <span :if={@label} class="mb-1.5 block text-xs uppercase tracking-[0.14em] text-loom-ivory/65">
+        <span :if={@label} class="mb-1.5 block text-xs uppercase tracking-[0.14em] text-loom-bone/65">
           {@label}
         </span>
         <textarea
@@ -255,8 +263,8 @@ defmodule WorldloomWeb.CoreComponents do
           name={@name}
           class={[
             @class ||
-              "w-full border border-loom-ivory/30 bg-loom-ink px-3 py-2 text-loom-ivory outline-none transition placeholder:text-loom-ivory/35 focus:border-loom-cyan focus:ring-1 focus:ring-loom-cyan",
-            @errors != [] && (@error_class || "border-loom-ember focus:border-loom-ember")
+              "w-full border border-loom-bone/30 bg-loom-lacquer px-3 py-2 text-loom-bone outline-none transition placeholder:text-loom-bone/35 focus:border-loom-jade focus:ring-1 focus:ring-loom-jade",
+            @errors != [] && (@error_class || "border-loom-copper focus:border-loom-copper")
           ]}
           {@rest}
         >{Phoenix.HTML.Form.normalize_value("textarea", @value)}</textarea>
@@ -271,7 +279,7 @@ defmodule WorldloomWeb.CoreComponents do
     ~H"""
     <div class="mb-4">
       <label class="block">
-        <span :if={@label} class="mb-1.5 block text-xs uppercase tracking-[0.14em] text-loom-ivory/65">
+        <span :if={@label} class="mb-1.5 block text-xs uppercase tracking-[0.14em] text-loom-bone/65">
           {@label}
         </span>
         <input
@@ -281,8 +289,8 @@ defmodule WorldloomWeb.CoreComponents do
           value={Phoenix.HTML.Form.normalize_value(@type, @value)}
           class={[
             @class ||
-              "w-full border border-loom-ivory/30 bg-loom-ink px-3 py-2 text-loom-ivory outline-none transition placeholder:text-loom-ivory/35 focus:border-loom-cyan focus:ring-1 focus:ring-loom-cyan",
-            @errors != [] && (@error_class || "border-loom-ember focus:border-loom-ember")
+              "w-full border border-loom-bone/30 bg-loom-lacquer px-3 py-2 text-loom-bone outline-none transition placeholder:text-loom-bone/35 focus:border-loom-jade focus:ring-1 focus:ring-loom-jade",
+            @errors != [] && (@error_class || "border-loom-copper focus:border-loom-copper")
           ]}
           {@rest}
         />
@@ -295,7 +303,7 @@ defmodule WorldloomWeb.CoreComponents do
   # Helper used by inputs to generate form errors
   defp error(assigns) do
     ~H"""
-    <p class="mt-1.5 flex items-center gap-2 text-sm text-loom-ember">
+    <p class="mt-1.5 flex items-center gap-2 text-sm text-loom-copper">
       <.icon name="hero-exclamation-circle" class="size-5" />
       {render_slot(@inner_block)}
     </p>
@@ -313,10 +321,10 @@ defmodule WorldloomWeb.CoreComponents do
     ~H"""
     <header class={[@actions != [] && "flex items-center justify-between gap-6", "pb-4"]}>
       <div>
-        <h1 class="font-display text-2xl leading-8 text-loom-ivory">
+        <h1 class="font-display text-2xl leading-8 text-loom-bone">
           {render_slot(@inner_block)}
         </h1>
-        <p :if={@subtitle != []} class="text-sm text-loom-ivory/65">
+        <p :if={@subtitle != []} class="text-sm text-loom-bone/65">
           {render_slot(@subtitle)}
         </p>
       </div>
@@ -357,9 +365,9 @@ defmodule WorldloomWeb.CoreComponents do
       end
 
     ~H"""
-    <div class="overflow-x-auto border border-loom-ivory/15">
+    <div class="overflow-x-auto border border-loom-bone/15">
       <table class="w-full border-collapse text-left text-sm">
-        <thead class="border-b border-loom-ivory/20 bg-white/3 text-xs uppercase tracking-[0.14em] text-loom-ivory/60">
+        <thead class="border-b border-loom-bone/20 bg-loom-bone/3 text-xs uppercase tracking-[0.14em] text-loom-bone/60">
           <tr>
             <th :for={col <- @col} class="px-4 py-3 font-medium">{col[:label]}</th>
             <th :if={@action != []}>
@@ -371,14 +379,14 @@ defmodule WorldloomWeb.CoreComponents do
           <tr
             :for={row <- @rows}
             id={@row_id && @row_id.(row)}
-            class="border-b border-loom-ivory/10 last:border-0 even:bg-white/2"
+            class="border-b border-loom-bone/10 last:border-0 even:bg-loom-bone/2"
           >
             <td
               :for={col <- @col}
               phx-click={@row_click && @row_click.(row)}
               class={[
-                "px-4 py-3 text-loom-ivory/85",
-                @row_click && "cursor-pointer hover:bg-loom-cyan/5"
+                "px-4 py-3 text-loom-bone/85",
+                @row_click && "cursor-pointer hover:bg-loom-jade/5"
               ]}
             >
               {render_slot(col, @row_item.(row))}
@@ -413,13 +421,13 @@ defmodule WorldloomWeb.CoreComponents do
 
   def list(assigns) do
     ~H"""
-    <ul class="divide-y divide-loom-ivory/10 border-y border-loom-ivory/15">
+    <ul class="divide-y divide-loom-bone/10 border-y border-loom-bone/15">
       <li :for={item <- @item} class="grid gap-1 py-3 sm:grid-cols-[10rem_1fr] sm:gap-4">
         <div class="contents">
-          <div class="text-xs font-semibold uppercase tracking-[0.14em] text-loom-ivory/55">
+          <div class="text-xs font-semibold uppercase tracking-[0.14em] text-loom-bone/55">
             {item.title}
           </div>
-          <div class="text-loom-ivory/85">{render_slot(item)}</div>
+          <div class="text-loom-bone/85">{render_slot(item)}</div>
         </div>
       </li>
     </ul>

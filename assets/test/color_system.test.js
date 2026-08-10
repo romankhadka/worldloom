@@ -3,6 +3,11 @@ import {readFile} from "node:fs/promises"
 import test from "node:test"
 
 const css = await readFile(new URL("../css/app.css", import.meta.url), "utf8")
+const coreComponents = await readFile(
+  new URL("../../lib/worldloom_web/components/core_components.ex", import.meta.url),
+  "utf8",
+)
+const appJs = await readFile(new URL("../js/app.js", import.meta.url), "utf8")
 const expectedTokens = new Map([
   ["lacquer-deep", "#120708"], ["lacquer", "#241013"], ["wine", "#35171a"],
   ["wine-raised", "#4b2020"], ["bone", "#f6e2c5"], ["parchment", "#cbb89f"],
@@ -73,4 +78,27 @@ test("routes component colors through semantic tokens", () => {
   assert.match(declarationBlock(".gesture-button:hover"), /var\(--loom-wine-raised\)/)
   assert.match(declarationBlock('[data-health-state="live"] .legend-health'), /var\(--loom-health-live\)/)
   assert.match(declarationBlock('[data-shape="intervention"]'), /var\(--loom-visitor\)/)
+})
+
+test("routes shared Phoenix components through Lacquered Gallery utilities", () => {
+  for (const removedUtility of ["loom-cyan", "loom-ember", "loom-ivory", "loom-ink"]) {
+    assert.equal(coreComponents.includes(removedUtility), false, removedUtility)
+  }
+
+  for (const privateLegacyColor of ["#0c1a1a", "#dffffb", "#21120e", "#ffe4d2"]) {
+    assert.equal(coreComponents.toLowerCase().includes(privateLegacyColor), false, privateLegacyColor)
+  }
+
+  assert.match(coreComponents, /border-loom-jade\/40 bg-loom-lacquer\/95 text-loom-bone/)
+  assert.match(coreComponents, /border-loom-copper\/50 bg-loom-lacquer\/95 text-loom-bone/)
+  assert.match(coreComponents, /bg-loom-bone text-loom-lacquer/)
+  assert.match(coreComponents, /focus-visible:outline-loom-jade/)
+  assert.match(coreComponents, /text-loom-copper/)
+})
+
+test("routes the LiveView topbar through Lacquered Gallery CSS variables", () => {
+  assert.equal(appJs.includes("#29d"), false)
+  assert.doesNotMatch(appJs, /rgba\(\s*0\s*,\s*0\s*,\s*0\s*,/)
+  assert.match(appJs, /barColors:\s*\{0:\s*"var\(--loom-saffron\)"\}/)
+  assert.match(appJs, /shadowColor:\s*"rgb\(var\(--loom-lacquer-deep-rgb\) \/ 30%\)"/)
 })
