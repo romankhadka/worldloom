@@ -1133,6 +1133,7 @@ const screenshotOptions = {
   animations: "disabled",
   caret: "hide",
   scale: "css",
+  threshold: 0.08,
 }
 
 async function expectStableScreenshot(page, name) {
