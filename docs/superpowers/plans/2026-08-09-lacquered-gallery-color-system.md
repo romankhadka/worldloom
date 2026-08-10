@@ -465,6 +465,7 @@ rtk git commit -m "Align Worldloom metadata with Lacquered Gallery"
 ## Task 4: Prove the rendered palette and accept deterministic baselines
 
 **Files:**
+- Modify: `assets/css/app.css:685-700`
 - Modify: `e2e/worldloom.spec.js:130-225, 767-1011`
 - Modify: `e2e/worldloom.spec.js-snapshots/*.png`
 
@@ -514,12 +515,53 @@ Add this helper beside `localContrastContract`:
 ```javascript
 async function contrastForElement(page, selector) {
   return page.locator(selector).evaluate(element => {
+    const root = getComputedStyle(document.documentElement)
     const style = getComputedStyle(element)
-    return contrast(parseColor(style.color).rgb, parseColor(style.backgroundColor).rgb)
+    const containerStyle = getComputedStyle(element.closest("#gesture-dock"))
+    const worstFoundation = parseColor(
+      root.getPropertyValue("--loom-wine-raised"),
+    )
+    const containerColor = parseColor(containerStyle.backgroundColor)
+    const elementColor = parseColor(style.backgroundColor)
+    const textColor = parseColor(style.color)
+    const containerBackdrop = blend(
+      containerColor.rgb,
+      worstFoundation.rgb,
+      containerColor.alpha,
+    )
+    const elementBackdrop = blend(
+      elementColor.rgb,
+      containerBackdrop,
+      elementColor.alpha,
+    )
+    const effectiveText = blend(
+      textColor.rgb,
+      elementBackdrop,
+      textColor.alpha,
+    )
+
+    return contrast(effectiveText, elementBackdrop)
 
     function parseColor(color) {
-      const channels = color.match(/[\d.]+/g).map(Number)
-      return {rgb: channels.slice(0, 3)}
+      const normalized = color.trim()
+
+      if (normalized.startsWith("#")) {
+        const hex = normalized.slice(1)
+        const channels = hex.length === 3
+          ? [...hex].map(channel => Number.parseInt(channel + channel, 16))
+          : [0, 2, 4].map(offset => Number.parseInt(hex.slice(offset, offset + 2), 16))
+        return {rgb: channels, alpha: 1}
+      }
+
+      const channels = normalized.match(/[\d.]+/g)?.map(Number)
+      if (!channels || channels.length < 3) throw new Error(`Unsupported color: ${color}`)
+      return {rgb: channels.slice(0, 3), alpha: channels[3] ?? 1}
+    }
+
+    function blend(foreground, background, alpha) {
+      return foreground.map((channel, index) =>
+        channel * alpha + background[index] * (1 - alpha),
+      )
     }
 
     function contrast(first, second) {
@@ -549,9 +591,21 @@ Update the existing localized-contrast backing expectation from `[3, 8, 6]` to `
 rtk npm run test:e2e -- --grep "Lacquered Gallery|quiet labels|balanced-world visual release"
 ```
 
-Expected: behavior and contrast assertions pass after Tasks 1–3; visual-release cases fail only because the accepted screenshots still contain the former palette. Any selector, browser error, layout, or contrast failure must be fixed before updating baselines.
+Expected: the new focus-color assertion fails because Illuminate still inherits the global jade outline, while visual-release cases fail because the accepted screenshots still contain the former palette. Token and composited-contrast assertions pass. Any selector, browser error, layout, or unrelated contrast failure must be fixed before updating baselines.
 
-- [ ] **Step 3: Update Darwin visual baselines and inspect every image**
+- [ ] **Step 3: Add the approved Illuminate focus treatment and prove interaction GREEN**
+
+Add the interaction-specific focus treatment without changing the global focus contract:
+
+```css
+.gesture-button[data-gesture="illuminate"]:focus-visible {
+  outline-color: var(--loom-saffron);
+}
+```
+
+Re-run the focused command from Step 2. The token, contrast, focus, and quiet-label assertions must pass; only the expected visual-release snapshot mismatches may remain.
+
+- [ ] **Step 4: Update Darwin visual baselines and inspect every image**
 
 ```bash
 rtk npm run test:e2e -- --grep "balanced-world visual release" --update-snapshots
@@ -566,12 +620,12 @@ Inspect the updated original-resolution Darwin files in `e2e/worldloom.spec.js-s
 - desktop, tablet, mobile, outage, recovery, selection, and reduced-motion states are unclipped;
 - no geometry, layout, copy, health semantics, or interaction changed.
 
-- [ ] **Step 4: Produce exact Linux baselines through CI evidence**
+- [ ] **Step 5: Produce exact Linux baselines through CI evidence**
 
 Push the task branch after the Darwin review:
 
 ```bash
-rtk git add e2e/worldloom.spec.js e2e/worldloom.spec.js-snapshots
+rtk git add assets/css/app.css e2e/worldloom.spec.js e2e/worldloom.spec.js-snapshots
 rtk git commit -m "Accept Lacquered Gallery browser presentation"
 rtk git push -u origin design-lacquered-gallery
 ```
@@ -588,7 +642,7 @@ rtk git push
 
 Re-run or watch CI until the complete Linux browser job passes.
 
-- [ ] **Step 5: Re-run the complete local browser suite**
+- [ ] **Step 6: Re-run the complete local browser suite**
 
 ```bash
 rtk npm run test:e2e
