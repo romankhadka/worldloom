@@ -253,6 +253,7 @@ test("captures direct pointer placement and commits only its final lane", t => {
 
 test("touch placement cancels cleanly and commits a normal end at most once", t => {
   const harness = hookHarness(t)
+  harness.renderer.hitTestResult = null
 
   harness.el.dispatch("touchstart", touchEvent(430))
   harness.el.dispatch("touchmove", touchEvent(431))
@@ -261,7 +262,7 @@ test("touch placement cancels cleanly and commits a normal end at most once", t 
   assert.equal(harness.renderer.targetLanes.at(-1), 0.5)
 
   harness.el.dispatch("click", {clientX: 200, clientY: 200})
-  assert.equal(harness.renderer.hitTests.length, 1)
+  assert.equal(harness.renderer.hitTests.length, 2)
 
   harness.el.dispatch("touchstart", touchEvent(430))
   harness.el.dispatch("touchend", touchEvent())
@@ -271,6 +272,7 @@ test("touch placement cancels cleanly and commits a normal end at most once", t 
 
 test("a second touch cancels direct placement without committing its preview lane", t => {
   const harness = hookHarness(t)
+  harness.renderer.hitTestResult = null
   const firstTouch = {clientX: 790, clientY: 430}
   const secondTouch = {clientX: 760, clientY: 170}
 
@@ -282,6 +284,17 @@ test("a second touch cancels direct placement without committing its preview lan
 
   assert.deepEqual(harness.lanePushes(), [])
   assert.equal(harness.renderer.targetLanes.at(-1), 0.5)
+})
+
+test("a touch formation at the live edge remains inspectable", t => {
+  const harness = hookHarness(t)
+  harness.renderer.hitTestResult = 123
+
+  harness.el.dispatch("touchstart", touchEvent(430))
+
+  assert.equal(harness.hook.placingLane, false)
+  assert.equal(harness.renderer.touchStarts.length, 1)
+  assert.deepEqual(harness.renderer.targetLanes, [])
 })
 
 test("deduplicates snapped placement updates and synchronizes only on release", t => {
@@ -302,6 +315,7 @@ test("deduplicates snapped placement updates and synchronizes only on release", 
 
 test("keeps active pointer and touch placement paths isolated", t => {
   const harness = hookHarness(t)
+  harness.renderer.hitTestResult = null
 
   harness.el.dispatch("pointerdown", pointerEvent({pointerId: 3, clientY: 430}))
   harness.el.dispatch("touchstart", touchEvent(170))
@@ -990,6 +1004,7 @@ function fakeRenderer(effects = []) {
     touchMoves: [],
     touchEnds: 0,
     hitTests: [],
+    hitTestResult: 17,
     selections: [],
     clearSelections: 0,
     snapshots: [],
@@ -1024,7 +1039,7 @@ function fakeRenderer(effects = []) {
     handleWheel() {},
     hitTest(x, y) {
       this.hitTests.push([x, y])
-      return 17
+      return this.hitTestResult
     },
     setSelection(sequence) {
       this.selections.push(sequence)

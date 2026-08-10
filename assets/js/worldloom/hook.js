@@ -229,7 +229,15 @@ export const Worldloom = {
 
       const touch = event.touches[0]
       const bounds = this.el.getBoundingClientRect()
-      if (withinLiveEdgeTarget(touch.clientX, bounds) && this.directPlacementEnabled()) {
+      const formationSequence = this.renderer.hitTest(
+        touch.clientX - bounds.left,
+        touch.clientY - bounds.top,
+      )
+      if (
+        formationSequence === null &&
+        withinLiveEdgeTarget(touch.clientX, bounds) &&
+        this.directPlacementEnabled()
+      ) {
         this.beginPlacement(touch, "touch")
         return
       }

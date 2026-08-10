@@ -575,6 +575,9 @@ test("Tug, Knot, and Illuminate commit distinct accessible formations", async ({
   for (const [label, summary] of expectations) {
     const context = await browser.newContext({
       baseURL: process.env.WORLDLOOM_BASE_URL ?? "http://localhost:4002",
+      viewport: {width: 390, height: 844},
+      hasTouch: true,
+      isMobile: true,
     })
     const gesturePage = await context.newPage()
     const browserFailures = monitorPage(gesturePage, label)
@@ -583,7 +586,7 @@ test("Tug, Knot, and Illuminate commit distinct accessible formations", async ({
       const canvas = await openWorldloom(gesturePage)
       const startingSequence = await renderedSequence(canvas)
 
-      await gesturePage.getByRole("button", {name: label, exact: true}).click()
+      await gesturePage.getByRole("button", {name: label, exact: true}).tap()
       await expect
         .poll(async () => renderedSequence(canvas))
         .toBeGreaterThan(startingSequence)
@@ -809,12 +812,6 @@ test("touch visitors can inspect formations without clipped mobile controls", as
       page.getByRole("slider", {name: "Gesture vertical lane"}),
     ).toBeVisible()
 
-    const startingSequence = await renderedSequence(canvas)
-    await page.getByRole("button", {name: "Tug", exact: true}).tap()
-    await expect
-      .poll(async () => renderedSequence(canvas))
-      .toBeGreaterThan(startingSequence)
-
     await tapVisibleFormation(
       page,
       canvas,
@@ -830,6 +827,57 @@ test("touch visitors can inspect formations without clipped mobile controls", as
     expect(detailBounds.y + detailBounds.height).toBeLessThanOrEqual(
       dockBounds.y,
     )
+
+    await page.getByRole("link", {name: "Return live"}).tap()
+    await expect(page).toHaveURL(/\/$/)
+    await expect(canvas).toHaveAttribute("data-ready", "true")
+
+    const liveBounds = await canvas.boundingBox()
+    expect(liveBounds).not.toBeNull()
+    const targetY = liveBounds.y + 40 + (liveBounds.height - 80) * 0.25
+    await dispatchTouchDrag(page, {
+      from: {
+        x: liveBounds.x + liveBounds.width - 32,
+        y: liveBounds.y + liveBounds.height * 0.7,
+      },
+      to: {x: liveBounds.x + liveBounds.width - 32, y: targetY},
+    })
+    await expect(
+      page.getByRole("slider", {name: "Gesture vertical lane"}),
+    ).toHaveValue("0.25")
+
+    const startingSequence = await renderedSequence(canvas)
+    await page.getByRole("button", {name: "Tug", exact: true}).tap()
+    await expect
+      .poll(async () => renderedSequence(canvas))
+      .toBeGreaterThan(startingSequence)
+    expect(browserFailures).toEqual([])
+  } finally {
+    await context.close()
+  }
+})
+
+test("compact overlays remain touch-scrollable outside the loom canvas", async ({browser}) => {
+  const context = await browser.newContext({
+    baseURL: process.env.WORLDLOOM_BASE_URL ?? "http://localhost:4002",
+    viewport: {width: 390, height: 844},
+    hasTouch: true,
+    isMobile: true,
+  })
+  const page = await context.newPage()
+  const browserFailures = monitorPage(page, "mobile overlay scroll")
+
+  try {
+    await openWorldloom(page)
+    await page.locator("#signal-legend-toggle").tap()
+    const legendBody = page.locator("#signal-legend .legend-body")
+    const bounds = await legendBody.boundingBox()
+    expect(bounds).not.toBeNull()
+    await dispatchTouchDrag(page, {
+      from: {x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height * 0.8},
+      to: {x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height * 0.2},
+    })
+    await expect.poll(() => legendBody.evaluate(element => element.scrollTop)).toBeGreaterThan(0)
     expect(browserFailures).toEqual([])
   } finally {
     await context.close()
@@ -1467,20 +1515,17 @@ async function compositedContrastContract(page, targetSelector, textContracts) {
 }
 
 async function tapVisibleFormation(page, canvas, gestureDock, detailSheet) {
-  const instructions = JSON.parse(
-    (await canvas.getAttribute("data-instructions")) ?? "[]",
-  )
+  const diagnostics = await liveSceneDiagnostics(canvas)
   const canvasBounds = await canvas.boundingBox()
   const dockBounds = await gestureDock.boundingBox()
   const detailBounds =
     (await detailSheet.count()) > 0 ? await detailSheet.boundingBox() : null
   expect(canvasBounds).not.toBeNull()
   expect(dockBounds).not.toBeNull()
-  const maximumSequence = await renderedSequence(canvas)
-  const formations = [...instructions].reverse().filter((instruction) => {
-    const x =
-      canvasBounds.width - 40 - (maximumSequence - instruction.sequence) * 28
-    const y = 40 + Number(instruction.lane) * (canvasBounds.height - 80)
+  const formations = diagnostics.scene.paintCommands.filter(command => {
+    if (command.type !== "anchor-hit" || !command.hit) return false
+    const x = command.hit.x + command.hit.width / 2
+    const y = command.hit.y + command.hit.height / 2
     const behindDetail =
       detailBounds !== null &&
       x >= detailBounds.x - canvasBounds.x &&
@@ -1497,10 +1542,23 @@ async function tapVisibleFormation(page, canvas, gestureDock, detailSheet) {
   })
 
   expect(formations.length).toBeGreaterThan(0)
-  for (const formation of formations.slice(0, 8)) {
-    const x =
-      canvasBounds.width - 40 - (maximumSequence - formation.sequence) * 28
-    const y = 40 + Number(formation.lane) * (canvasBounds.height - 80)
+  const attempted = []
+  for (const formation of formations.slice(-12).reverse()) {
+    const x = formation.hit.x + formation.hit.width / 2
+    const y = formation.hit.y + formation.hit.height / 2
+    const surface = await page.evaluate(({x, y, localX, localY}) => {
+      const target = document.elementFromPoint(x, y)
+      const stage = document.querySelector("#loom-canvas")
+      const view = globalThis.liveSocket?.getViewByEl?.(stage) ?? globalThis.liveSocket?.main
+      const hook = view?.getHook?.(stage)
+      return {
+        unobstructed: target?.closest?.("#loom-canvas") !== null,
+        target: target?.id || target?.className || target?.tagName || null,
+        hitSequence: hook?.renderer?.hitTest(localX, localY) ?? null,
+      }
+    }, {x: canvasBounds.x + x, y: canvasBounds.y + y, localX: x, localY: y})
+    attempted.push({sequence: formation.sequence, x, y, ...surface})
+    if (!surface.unobstructed) continue
 
     try {
       await canvas.tap({position: {x, y}})
@@ -1513,7 +1571,41 @@ async function tapVisibleFormation(page, canvas, gestureDock, detailSheet) {
     }
   }
 
-  throw new Error("no unobstructed painted formation responded to touch")
+  throw new Error(`no unobstructed painted formation responded to touch: ${JSON.stringify(attempted)}`)
+}
+
+async function dispatchTouchDrag(page, {from, to}) {
+  const session = await page.context().newCDPSession(page)
+  const touchPoint = point => [{
+    x: point.x,
+    y: point.y,
+    radiusX: 1,
+    radiusY: 1,
+    force: 1,
+  }]
+
+  try {
+    await session.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: touchPoint(from),
+    })
+    for (let step = 1; step <= 5; step += 1) {
+      const progress = step / 5
+      await session.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: touchPoint({
+          x: from.x + (to.x - from.x) * progress,
+          y: from.y + (to.y - from.y) * progress,
+        }),
+      })
+    }
+    await session.send("Input.dispatchTouchEvent", {
+      type: "touchEnd",
+      touchPoints: [],
+    })
+  } finally {
+    await session.detach()
+  }
 }
 
 function monitorPage(page, label, failures = []) {
