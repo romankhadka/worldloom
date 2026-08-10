@@ -7,6 +7,10 @@ const coreComponents = await readFile(
   new URL("../../lib/worldloom_web/components/core_components.ex", import.meta.url),
   "utf8",
 )
+const layouts = await readFile(
+  new URL("../../lib/worldloom_web/components/layouts.ex", import.meta.url),
+  "utf8",
+)
 const appJs = await readFile(new URL("../js/app.js", import.meta.url), "utf8")
 const expectedTokens = new Map([
   ["lacquer-deep", "#120708"], ["lacquer", "#241013"], ["wine", "#35171a"],
@@ -81,24 +85,66 @@ test("routes component colors through semantic tokens", () => {
 })
 
 test("routes shared Phoenix components through Lacquered Gallery utilities", () => {
-  for (const removedUtility of ["loom-cyan", "loom-ember", "loom-ivory", "loom-ink"]) {
-    assert.equal(coreComponents.includes(removedUtility), false, removedUtility)
-  }
+  const sharedComponentSources = new Map([
+    ["CoreComponents", coreComponents],
+    ["Layouts", layouts],
+  ])
 
-  for (const privateLegacyColor of ["#0c1a1a", "#dffffb", "#21120e", "#ffe4d2"]) {
-    assert.equal(coreComponents.toLowerCase().includes(privateLegacyColor), false, privateLegacyColor)
+  for (const [sourceName, source] of sharedComponentSources) {
+    for (const removedUtility of ["loom-cyan", "loom-ember", "loom-ivory", "loom-ink"]) {
+      assert.equal(source.includes(removedUtility), false, `${sourceName}: ${removedUtility}`)
+    }
+
+    for (const privateLegacyColor of ["#0c1a1a", "#dffffb", "#21120e", "#ffe4d2"]) {
+      assert.equal(
+        source.toLowerCase().includes(privateLegacyColor),
+        false,
+        `${sourceName}: ${privateLegacyColor}`,
+      )
+    }
   }
 
   assert.match(coreComponents, /border-loom-jade\/40 bg-loom-lacquer\/95 text-loom-bone/)
   assert.match(coreComponents, /border-loom-copper\/50 bg-loom-lacquer\/95 text-loom-bone/)
+  assert.match(coreComponents, /class="size-5 shrink-0 text-loom-jade"/)
+  assert.match(coreComponents, /class="size-5 shrink-0 text-loom-copper"/)
   assert.match(coreComponents, /bg-loom-bone text-loom-lacquer/)
   assert.match(coreComponents, /focus-visible:outline-loom-jade/)
   assert.match(coreComponents, /text-loom-copper/)
+  assert.match(layouts, /min-h-screen bg-loom-lacquer text-loom-bone/)
 })
 
-test("routes the LiveView topbar through Lacquered Gallery CSS variables", () => {
+test("keeps default input boundaries and placeholder copy readable", () => {
+  assert.equal(coreComponents.includes("border-loom-bone/30"), false)
+  assert.equal(coreComponents.includes("placeholder:text-loom-bone/35"), false)
+  assert.equal(coreComponents.match(/border-loom-bone\/40/g)?.length, 3)
+  assert.equal(coreComponents.match(/placeholder:text-loom-bone\/55/g)?.length, 2)
+})
+
+test("preserves source-specific flash borders", () => {
+  const alertSurface = declarationBlock('#flash-group [role="alert"] > div')
+  assert.doesNotMatch(alertSurface, /border-color\s*:/)
+  assert.match(
+    declarationBlock('.phx-disconnected #flash-group [role="alert"] > div'),
+    /var\(--loom-copper-rgb\)/,
+  )
+})
+
+test("resolves the LiveView topbar palette into Canvas colors", () => {
   assert.equal(appJs.includes("#29d"), false)
   assert.doesNotMatch(appJs, /rgba\(\s*0\s*,\s*0\s*,\s*0\s*,/)
-  assert.match(appJs, /barColors:\s*\{0:\s*"var\(--loom-saffron\)"\}/)
-  assert.match(appJs, /shadowColor:\s*"rgb\(var\(--loom-lacquer-deep-rgb\) \/ 30%\)"/)
+  assert.doesNotMatch(appJs, /barColors:\s*\{0:\s*"var\(/)
+  assert.doesNotMatch(appJs, /shadowColor:\s*"rgb\(var\(/)
+  assert.match(appJs, /getComputedStyle\(document\.documentElement\)/)
+  assert.match(appJs, /getPropertyValue\("--loom-saffron"\)\.trim\(\)/)
+  assert.match(appJs, /getPropertyValue\("--loom-lacquer-deep-rgb"\)\s*\.trim\(\)/)
+  assert.match(appJs, /CSS\.supports\("color", topbarSaffron\)/)
+  assert.match(appJs, /Worldloom topbar requires a valid --loom-saffron color/)
+  assert.match(appJs, /Worldloom topbar requires valid --loom-lacquer-deep-rgb channels/)
+  assert.match(
+    appJs,
+    /const topbarShadow = `rgba\(\$\{topbarLacquerDeepChannels\.join\(", "\)\}, 0\.3\)`/,
+  )
+  assert.match(appJs, /barColors:\s*\{0:\s*topbarSaffron\}/)
+  assert.match(appJs, /shadowColor:\s*topbarShadow/)
 })

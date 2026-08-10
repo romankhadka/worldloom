@@ -302,6 +302,23 @@ test("Lacquered Gallery reaches the rendered interface and interaction states", 
   await illuminate.focus()
   await expect(illuminate).toBeFocused()
   await expect(illuminate).toHaveCSS("outline-color", "rgb(227, 165, 58)")
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent("phx:page-loading-start"))
+  })
+  const topbarCanvas = page.locator("body > canvas")
+  await expect(topbarCanvas).toBeVisible({timeout: 2_000})
+  expect(browserFailures).toEqual([])
+  const topbarHasPaint = await topbarCanvas.evaluate(canvas => {
+    const context = canvas.getContext("2d")
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data
+    return pixels.some((_channel, index) => index % 4 === 3 && pixels[index] > 0)
+  })
+  expect(topbarHasPaint).toBe(true)
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent("phx:page-loading-stop"))
+  })
+
   expect(browserFailures).toEqual([])
 })
 

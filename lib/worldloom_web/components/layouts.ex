@@ -35,7 +35,7 @@ defmodule WorldloomWeb.Layouts do
 
   def app(assigns) do
     ~H"""
-    <div class="min-h-screen bg-loom-ink text-loom-ivory">
+    <div class="min-h-screen bg-loom-lacquer text-loom-bone">
       <main id="worldloom-main" class="min-h-screen">
         {render_slot(@inner_block)}
       </main>

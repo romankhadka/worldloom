@@ -1106,7 +1106,6 @@ a.legend-name:focus-visible {
 }
 
 #flash-group [role="alert"] > div {
-  border-color: var(--loom-border);
   border-radius: 3px;
   background: rgb(var(--loom-wine-rgb) / 92%);
   box-shadow: 0 18px 50px rgb(var(--loom-lacquer-deep-rgb) / 32%);

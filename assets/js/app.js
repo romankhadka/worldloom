@@ -33,10 +33,33 @@ const liveSocket = new LiveSocket("/live", Socket, {
   hooks: {...colocatedHooks, Worldloom},
 })
 
+// Resolve the CSS palette before passing colors to topbar's Canvas renderer.
+const topbarPalette = getComputedStyle(document.documentElement)
+const topbarSaffron = topbarPalette.getPropertyValue("--loom-saffron").trim()
+const topbarLacquerDeepRgb = topbarPalette
+  .getPropertyValue("--loom-lacquer-deep-rgb")
+  .trim()
+
+if (!topbarSaffron || !CSS.supports("color", topbarSaffron)) {
+  throw new Error("Worldloom topbar requires a valid --loom-saffron color")
+}
+
+const topbarLacquerDeepChannels = topbarLacquerDeepRgb.split(/\s+/).map(Number)
+if (
+  topbarLacquerDeepChannels.length !== 3 ||
+  topbarLacquerDeepChannels.some(channel =>
+    !Number.isInteger(channel) || channel < 0 || channel > 255
+  )
+) {
+  throw new Error("Worldloom topbar requires valid --loom-lacquer-deep-rgb channels")
+}
+
+const topbarShadow = `rgba(${topbarLacquerDeepChannels.join(", ")}, 0.3)`
+
 // Show progress bar on live navigation and form submits
 topbar.config({
-  barColors: {0: "var(--loom-saffron)"},
-  shadowColor: "rgb(var(--loom-lacquer-deep-rgb) / 30%)",
+  barColors: {0: topbarSaffron},
+  shadowColor: topbarShadow,
 })
 window.addEventListener("phx:page-loading-start", _info => topbar.show(300))
 window.addEventListener("phx:page-loading-stop", _info => topbar.hide())

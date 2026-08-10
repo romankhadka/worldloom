@@ -236,7 +236,7 @@ defmodule WorldloomWeb.CoreComponents do
           name={@name}
           class={[
             @class ||
-              "w-full border border-loom-bone/30 bg-loom-lacquer px-3 py-2 text-loom-bone outline-none transition focus:border-loom-jade focus:ring-1 focus:ring-loom-jade",
+              "w-full border border-loom-bone/40 bg-loom-lacquer px-3 py-2 text-loom-bone outline-none transition focus:border-loom-jade focus:ring-1 focus:ring-loom-jade",
             @errors != [] && (@error_class || "border-loom-copper focus:border-loom-copper")
           ]}
           multiple={@multiple}
@@ -263,7 +263,7 @@ defmodule WorldloomWeb.CoreComponents do
           name={@name}
           class={[
             @class ||
-              "w-full border border-loom-bone/30 bg-loom-lacquer px-3 py-2 text-loom-bone outline-none transition placeholder:text-loom-bone/35 focus:border-loom-jade focus:ring-1 focus:ring-loom-jade",
+              "w-full border border-loom-bone/40 bg-loom-lacquer px-3 py-2 text-loom-bone outline-none transition placeholder:text-loom-bone/55 focus:border-loom-jade focus:ring-1 focus:ring-loom-jade",
             @errors != [] && (@error_class || "border-loom-copper focus:border-loom-copper")
           ]}
           {@rest}
@@ -289,7 +289,7 @@ defmodule WorldloomWeb.CoreComponents do
           value={Phoenix.HTML.Form.normalize_value(@type, @value)}
           class={[
             @class ||
-              "w-full border border-loom-bone/30 bg-loom-lacquer px-3 py-2 text-loom-bone outline-none transition placeholder:text-loom-bone/35 focus:border-loom-jade focus:ring-1 focus:ring-loom-jade",
+              "w-full border border-loom-bone/40 bg-loom-lacquer px-3 py-2 text-loom-bone outline-none transition placeholder:text-loom-bone/55 focus:border-loom-jade focus:ring-1 focus:ring-loom-jade",
             @errors != [] && (@error_class || "border-loom-copper focus:border-loom-copper")
           ]}
           {@rest}
