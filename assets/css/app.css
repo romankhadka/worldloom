@@ -1333,8 +1333,26 @@ a.legend-name:focus-visible {
     gap: 3px 8px;
   }
 
-  .worldloom-shell:has(.legend-compact[open]) .timeline-controls,
-  .worldloom-shell:has(#signal-detail) .timeline-controls { display: none; }
+  .worldloom-shell:has(.legend-compact[open]) .timeline-controls { display: none; }
+
+  .worldloom-shell:has(#signal-detail) .timeline-controls {
+    top: 178px;
+    right: auto;
+    bottom: auto;
+    left: 10px;
+    width: max-content;
+    max-width: calc(100vw - 20px);
+    justify-content: flex-start;
+  }
+
+  .worldloom-shell:has(#signal-detail) .timeline-range {
+    padding: 2px 4px;
+    border-radius: 3px;
+    background: rgb(var(--loom-lacquer-deep-rgb) / 72%);
+    text-align: left;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
 
   .timeline-range {
     flex-basis: 100%;

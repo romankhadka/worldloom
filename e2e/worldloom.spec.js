@@ -1208,7 +1208,10 @@ test.describe.serial("balanced-world visual release", () => {
     await expect(page.locator("#mobile-detail-sheet .detail-summary")).toHaveText(
       selectedMemory.summary,
     )
-    await expect(page.locator("#timeline-controls")).toBeHidden()
+    await expect(page.locator("#timeline-controls")).toBeVisible()
+    expect(
+      await elementsOverlap(page, "#signal-detail", "#timeline-controls"),
+    ).toBe(false)
     await expect.poll(async () => {
       const diagnostics = await liveSceneDiagnostics(canvas)
       return {
