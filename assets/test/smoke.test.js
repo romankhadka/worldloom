@@ -13,6 +13,7 @@ const fixtureModule = await import(fixtureModuleUrl).catch(error => {
 test("exports every named balanced-world acceptance fixture", () => {
   assert.deepEqual(Object.keys(fixtureModule).sort(), [
     "balanced",
+    "balancedMemoryPriorEvents",
     "balancedQuarterHour",
     "balancedQuarterHourPriorEvents",
     "delayedRecovery",
@@ -105,6 +106,27 @@ test("quarter-hour prior events are bounded, unique, and end before the live min
   assert.ok(priorEvents.every(event => event.sequence < 10_000))
   assert.ok(priorEvents.every(event => Date.parse(event.occurred_at) < liveStart))
   assert.equal(priorEvents[0].occurred_at, "2026-08-08T11:46:00.000Z")
+})
+
+test("memory chapter prior events cover its centered minute without colliding with the live snapshot", () => {
+  const priorEvents = fixtureModule.balancedMemoryPriorEvents
+  const selectedMemory = fixtureModule.balanced.memory_events.find(event =>
+    event.source === "visitor" && event.kind === "illuminate"
+  )
+  const centeredStart = Date.parse(selectedMemory.occurred_at) - 30_000
+  const centeredEnd = Date.parse(selectedMemory.occurred_at) + 30_000
+  const centeredEvents = priorEvents.filter(event => {
+    const occurredAt = Date.parse(event.occurred_at)
+    return occurredAt >= centeredStart && occurredAt <= centeredEnd
+  })
+
+  assert.ok(priorEvents.length <= 1_200)
+  assert.ok(priorEvents.every(event => event.sequence < 1_000))
+  assert.equal(new Set(priorEvents.map(event => event.sequence)).size, priorEvents.length)
+  assert.deepEqual(
+    [...new Set(centeredEvents.map(event => event.source))].sort(),
+    scheduledSources,
+  )
 })
 
 test("every rolling ten-second balanced interval contains all five scheduled families", () => {

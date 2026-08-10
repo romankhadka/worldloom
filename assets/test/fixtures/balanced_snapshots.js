@@ -135,6 +135,10 @@ export const balancedQuarterHourPriorEvents = [...quarterHourPriorSpecs]
   .sort(compareSpecs)
   .map((spec, index) => instructionFor(index + 1, spec))
 
+export const balancedMemoryPriorEvents = balancedQuarterHourPriorEvents.filter(
+  event => event.sequence < 1_000,
+)
+
 export const wikimediaSurge = buildSnapshot({
   sequenceBase: 2_000,
   displaySpecs: balancedDisplaySpecs.map(spec =>

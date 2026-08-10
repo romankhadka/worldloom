@@ -24,6 +24,7 @@ defmodule Worldloom.E2ESceneLoader do
   @ambient_limit 1
   @prior_limit 1_200
   @prior_sources ~w(wikimedia bluesky ripe_ris solana drand)
+  @prior_scenes ~w(balanced balanced-quarter-hour)
 
   @spec known_scene?(term()) :: boolean()
   def known_scene?(name), do: is_binary(name) and Map.has_key?(@scenes, name)
@@ -101,7 +102,7 @@ defmodule Worldloom.E2ESceneLoader do
 
   defp validate_prior_events(name, prior_events, validated)
        when is_list(prior_events) and length(prior_events) <= @prior_limit do
-    with true <- name == "balanced-quarter-hour" or prior_events == [],
+    with true <- name in @prior_scenes or prior_events == [],
          {:ok, events} <- validate_instructions(prior_events),
          true <- Enum.all?(events, &(&1.source in @prior_sources)),
          live_start <- DateTime.add(validated.window_end, -60, :second),

@@ -1333,6 +1333,9 @@ a.legend-name:focus-visible {
     gap: 3px 8px;
   }
 
+  .worldloom-shell:has(.legend-compact[open]) .timeline-controls,
+  .worldloom-shell:has(#signal-detail) .timeline-controls { display: none; }
+
   .timeline-range {
     flex-basis: 100%;
     text-align: center;

@@ -123,12 +123,18 @@ defmodule WorldloomWeb.E2EControllerTest do
       assert Repo.aggregate(Event, :count) == 605
     end
 
-    test "loads bounded prior records only for the quarter-hour scene" do
+    test "loads bounded prior records for representative timeline scenes" do
       prior_events = [prior_instruction(1, "2026-08-08T11:59:59.000Z")]
 
       response = post_scene("balanced-quarter-hour", valid_snapshot(), prior_events)
 
       assert json_response(response, 200)["scene"] == "balanced-quarter-hour"
+      assert Enum.map(durable_events(), & &1.id) == [1, 10, 11]
+      assert Coordinator.current_snapshot().commit_watermark == 11
+
+      response = post_scene("balanced", valid_snapshot(), prior_events)
+
+      assert json_response(response, 200)["scene"] == "balanced"
       assert Enum.map(durable_events(), & &1.id) == [1, 10, 11]
       assert Coordinator.current_snapshot().commit_watermark == 11
     end
@@ -145,7 +151,7 @@ defmodule WorldloomWeb.E2EControllerTest do
       live_minute_prior = prior_instruction(1, "2026-08-08T12:00:00.000Z")
 
       for {scene, prior_events} <- [
-            {"balanced", [valid_prior]},
+            {"wikimedia-surge", [valid_prior]},
             {"balanced-quarter-hour", oversized_prior},
             {"balanced-quarter-hour", [malformed_prior]},
             {"balanced-quarter-hour", [live_minute_prior]}

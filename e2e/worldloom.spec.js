@@ -2,6 +2,7 @@ import {expect, test} from "@playwright/test"
 
 import {
   balanced,
+  balancedMemoryPriorEvents,
   balancedQuarterHour,
   balancedQuarterHourPriorEvents,
   delayedRecovery,
@@ -550,7 +551,10 @@ test("a second formation remains selected after LiveView navigates from the firs
   await expect(page).toHaveURL(new RegExp(`/chapters/\\d{4}-\\d{2}-\\d{2}/${firstSequence}$`))
   await expect(page.locator("#signal-detail .detail-summary")).toHaveText(firstSummary)
 
-  const secondFormation = formations.nth(1)
+  const secondFormation = page
+    .locator(`#accessible-formations button:not(#formation-${firstSequence})`)
+    .first()
+  await expect(secondFormation).toBeAttached()
   const secondSummary = (await secondFormation.textContent()).trim()
   const secondSequence = Number((await secondFormation.getAttribute("id")).split("-").at(-1))
   expect(secondSequence).not.toBe(firstSequence)
@@ -1183,6 +1187,7 @@ test.describe.serial("balanced-world visual release", () => {
         "#gesture-dock",
       ),
     ).toBe(false)
+    await expect(page.locator("#timeline-controls")).toBeHidden()
 
     await expectStableScreenshot(page, "total-outage-mobile.png")
     expect(browserFailures).toEqual([])
@@ -1190,8 +1195,8 @@ test.describe.serial("balanced-world visual release", () => {
 
   test("mobile memory selection reveals source-owned detail", async ({page}) => {
     const browserFailures = monitorPage(page, "memory selection")
-    await installScene(page, "balanced", balanced)
-    await openWorldloom(page, {width: 390, height: 844})
+    await installScene(page, "balanced", balanced, balancedMemoryPriorEvents)
+    const canvas = await openWorldloom(page, {width: 390, height: 844})
     const selectedMemory = balanced.memory_events.find(
       event => event.source === "visitor" && event.kind === "illuminate",
     )
@@ -1203,6 +1208,19 @@ test.describe.serial("balanced-world visual release", () => {
     await expect(page.locator("#mobile-detail-sheet .detail-summary")).toHaveText(
       selectedMemory.summary,
     )
+    await expect(page.locator("#timeline-controls")).toBeHidden()
+    await expect.poll(async () => {
+      const diagnostics = await liveSceneDiagnostics(canvas)
+      return {
+        center: sceneCenterMilliseconds(diagnostics.scene.axis),
+        anchorVisible: diagnostics.scene.paintCommands.some(command =>
+          command.type === "anchor-hit" && command.sequence === selectedMemory.sequence
+        ),
+      }
+    }).toEqual({
+      center: Date.parse(selectedMemory.occurred_at),
+      anchorVisible: true,
+    })
     const selectedMetadata = await page
       .locator("#mobile-detail-sheet .detail-meta")
       .textContent()
