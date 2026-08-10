@@ -282,12 +282,22 @@ test("Lacquered Gallery reaches the rendered interface and interaction states", 
     exact: true,
   })
   await illuminate.hover()
-  expect(
-    await compositedContrastContract(
-      page,
-      '.gesture-button[data-gesture="illuminate"]',
-    ),
-  ).toBeGreaterThanOrEqual(4.5)
+  const textContrasts = await compositedContrastContract(
+    page,
+    '.gesture-button[data-gesture="illuminate"]',
+    [
+      {label: "Illuminate title", selector: ".gesture-copy strong"},
+      {label: "Illuminate description", selector: ".gesture-copy small"},
+    ],
+  )
+  expect(textContrasts).toHaveLength(2)
+  for (const textContrast of textContrasts) {
+    expect(textContrast.text, textContrast.label).not.toBe("")
+    expect(
+      textContrast.contrastRatio,
+      `${textContrast.label}: ${textContrast.text}`,
+    ).toBeGreaterThanOrEqual(4.5)
+  }
 
   await illuminate.focus()
   await expect(illuminate).toBeFocused()
@@ -1296,8 +1306,8 @@ async function localContrastContract(page, containerSelector, textSelectors) {
   )
 }
 
-async function compositedContrastContract(page, targetSelector) {
-  return page.evaluate(targetSelector => {
+async function compositedContrastContract(page, targetSelector, textContracts) {
+  return page.evaluate(({targetSelector, textContracts}) => {
     const target = document.querySelector(targetSelector)
     if (!target) throw new Error(`contrast target is unavailable: ${targetSelector}`)
 
@@ -1312,6 +1322,9 @@ async function compositedContrastContract(page, targetSelector) {
     const worstFoundation = parseColor(
       rootStyle.getPropertyValue("--loom-wine-raised"),
     )
+    if (worstFoundation.alpha !== 1) {
+      throw new Error("--loom-wine-raised must be an opaque contrast foundation")
+    }
     const dockSurface = composite(
       parseColor(dockStyle.backgroundColor),
       worstFoundation,
@@ -1320,9 +1333,41 @@ async function compositedContrastContract(page, targetSelector) {
       parseColor(targetStyle.backgroundColor),
       dockSurface,
     )
-    const renderedText = composite(parseColor(targetStyle.color), targetSurface)
 
-    return contrast(renderedText.rgb, targetSurface.rgb)
+    return textContracts.map(({label, selector}) => {
+      const textElement = target.querySelector(selector)
+      if (!textElement) {
+        throw new Error(`contrast text is unavailable: ${label} (${selector})`)
+      }
+
+      const textStyle = getComputedStyle(textElement)
+      const text = textElement.textContent.trim()
+      const hasTextNode = [...textElement.childNodes].some(node =>
+        node.nodeType === Node.TEXT_NODE && node.textContent.trim() !== "",
+      )
+      const rendered =
+        textElement.getClientRects().length > 0 &&
+        textStyle.display !== "none" &&
+        textStyle.visibility !== "hidden"
+      if (!hasTextNode || text === "") {
+        throw new Error(`contrast text is empty: ${label} (${selector})`)
+      }
+      if (!rendered) {
+        throw new Error(`contrast text is not rendered: ${label} (${selector})`)
+      }
+
+      const renderedText = composite(
+        parseColor(textStyle.color),
+        targetSurface,
+      )
+
+      return {
+        label,
+        selector,
+        text,
+        contrastRatio: contrast(renderedText.rgb, targetSurface.rgb),
+      }
+    })
 
     function parseColor(color) {
       const normalized = color.trim().toLowerCase()
@@ -1385,7 +1430,7 @@ async function compositedContrastContract(page, targetSelector) {
       })
       return red * 0.2126 + green * 0.7152 + blue * 0.0722
     }
-  }, targetSelector)
+  }, {targetSelector, textContracts})
 }
 
 async function tapVisibleFormation(page, canvas, gestureDock, detailSheet) {
