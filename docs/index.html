@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Worldloom — the world is weaving itself</title>
+<meta name="description" content="A persistent living tapestry woven in real time from seven public signals and three anonymous visitor gestures. Elixir, Phoenix LiveView, Canvas 2D." />
+<meta name="color-scheme" content="dark" />
+<link rel="canonical" href="https://worldloom.romn.dev/" />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://worldloom.romn.dev/" />
+<meta property="og:title" content="Worldloom — the world is weaving itself" />
+<meta property="og:description" content="A persistent living tapestry woven from Wikimedia edits, Bluesky activity, RIPE routing motion, Solana slots, drand rounds, earthquakes, weather — and you." />
+<meta name="twitter:card" content="summary_large_image" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23120708'/%3E%3Cpath d='M5 11h22M5 16h22M5 21h22' stroke='%234db69a' stroke-width='1.6' stroke-linecap='round'/%3E%3Cpath d='M11 6v20M21 6v20' stroke='%23e07245' stroke-width='1.6' stroke-linecap='round' opacity='.75'/%3E%3C/svg%3E" />
+
+<style>
+/* ══════════════════════════════════════════════════════════════
+   Worldloom — landing page
+
+   Built in the application's own materials: the lacquer ground,
+   the bone serif, the saffron accent and the eight signal families
+   are the values from assets/css/app.css and
+   assets/js/worldloom/palette.js, so the page and the loom are the
+   same object in two places.
+   ══════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ground — assets/css/app.css */
+  --lacquer-deep: #120708;
+  --lacquer:      #241013;
+  --wine:         #35171a;
+  --wine-raised:  #4b2020;
+  --bone:         #f6e2c5;
+  --parchment:    #cbb89f;
+  --saffron:      #e3a53a;
+
+  --ink:   var(--bone);
+  --ink-2: var(--parchment);
+  --ink-3: #9f8c82;
+  --rule:   rgba(246, 226, 197, 0.14);
+  --rule-2: rgba(246, 226, 197, 0.28);
+
+  /* signal families — assets/js/worldloom/palette.js */
+  --wikimedia:  #4db69a;
+  --bluesky:    #9a84c7;
+  --ripe:       #6c9bad;
+  --solana:     #e0a43b;
+  --drand:      #c7ddd6;
+  --usgs:       #e07245;
+  --meteo:      #8da56e;
+  --visitor:    #ffe8c9;
+
+  --display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, ui-serif, serif;
+  --interface: "Avenir Next", Avenir, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+
+  --measure: 34rem;
+  --gutter: clamp(1.15rem, 4.5vw, 3.25rem);
+  --ease: cubic-bezier(.2,.8,.3,1);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+body {
+  margin: 0;
+  background: var(--lacquer-deep);
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 17px; line-height: 1.62;
+  -webkit-font-smoothing: antialiased;
+}
+h1,h2,h3 { margin:0; font-weight:600; letter-spacing:-.018em; text-wrap:balance; }
+p { margin:0; text-wrap:pretty; }
+a { color:inherit; text-underline-offset:.18em; }
+canvas { display:block; }
+:focus-visible { outline:2px solid var(--saffron); outline-offset:3px; border-radius:3px; }
+
+.skip { position:fixed; top:0; left:0; z-index:99; transform:translateY(-120%); background:var(--saffron); color:var(--lacquer-deep); padding:.7rem 1rem; border-radius:0 0 .5rem 0; font-family:var(--interface); font-size:.9rem; font-weight:700; text-decoration:none; }
+.skip:focus { transform:translateY(0); }
+
+.shell { max-width:76rem; margin-inline:auto; padding-inline:var(--gutter); }
+.eyebrow { font-family:var(--interface); font-size:.68rem; font-weight:600; letter-spacing:.19em; text-transform:uppercase; color:var(--saffron); margin:0; }
+
+.masthead { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding-block:1.4rem; }
+.wordmark { display:inline-flex; align-items:center; gap:.6rem; font-size:1.22rem; font-weight:600; letter-spacing:-.02em; text-decoration:none; }
+.wordmark svg { width:1.5rem; height:1.5rem; flex:0 0 auto; }
+.masthead nav { display:flex; gap:1.5rem; font-family:var(--interface); font-size:.85rem; color:var(--ink-2); }
+.masthead nav a { text-decoration:none; }
+.masthead nav a:hover { color:var(--saffron); }
+@media (max-width:54rem){ .masthead nav { display:none; } }
+
+/* ── hero ───────────────────────────────────────────────────── */
+.hero { padding-block: clamp(2rem,6vw,4rem) clamp(1.2rem,3vw,2rem); text-align:center; }
+.hero h1 { font-size:clamp(2.5rem,7vw,4.6rem); line-height:1.02; margin:.9rem auto .1rem; max-width:16ch; }
+.hero h1 em { font-style:italic; color:var(--saffron); }
+.hero-lede { font-size:clamp(1.06rem,2vw,1.28rem); color:var(--ink-2); max-width:44rem; margin:1.15rem auto 0; }
+
+/* ── the loom ───────────────────────────────────────────────── */
+.loom-wrap { padding-bottom: clamp(2.5rem,6vw,4rem); }
+.loom {
+  position:relative; border-radius:.7rem; overflow:hidden;
+  border:1px solid var(--rule); background:var(--lacquer);
+  box-shadow: 0 2px 6px rgba(0,0,0,.5), 0 26px 60px -26px rgba(0,0,0,.9);
+}
+.loom canvas { width:100%; height:auto; aspect-ratio: 24/9; }
+@media (max-width:46rem){ .loom canvas { aspect-ratio: 4/3; } }
+.edge-label {
+  position:absolute; right:.7rem; top:.6rem;
+  font-family:var(--mono); font-size:.66rem; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--saffron); background:rgba(18,7,8,.7); padding:.22rem .5rem; border-radius:100px;
+  border:1px solid rgba(227,165,58,.35); pointer-events:none;
+}
+.inspect {
+  position:absolute; left:.7rem; bottom:.7rem; right:.7rem;
+  font-family:var(--mono); font-size:.72rem; color:var(--ink-2);
+  background:rgba(18,7,8,.78); border:1px solid var(--rule); border-radius:.4rem;
+  padding:.45rem .65rem; backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
+  min-height:2.2rem; display:flex; align-items:center; gap:.6rem;
+}
+.inspect .sw { width:.6rem; height:.6rem; border-radius:2px; flex:0 0 auto; }
+.inspect b { color:var(--bone); font-weight:600; }
+
+.gestures { display:flex; flex-wrap:wrap; gap:.55rem; align-items:center; margin-top:1rem; justify-content:center; }
+.gesture {
+  font-family:var(--interface); font-size:.85rem; font-weight:600;
+  padding:.55rem 1.05rem; border-radius:100px; cursor:pointer;
+  background:transparent; border:1px solid var(--rule-2); color:var(--ink);
+  transition: border-color .15s var(--ease), color .15s var(--ease), background-color .15s var(--ease);
+}
+.gesture:hover { border-color:var(--visitor); color:var(--visitor); background:rgba(255,232,201,.07); }
+.gesture-note { font-family:var(--interface); font-size:.8rem; color:var(--ink-3); width:100%; text-align:center; margin-top:.25rem; }
+
+/* ── sections ───────────────────────────────────────────────── */
+section { padding-block: clamp(3.5rem,8vw,6rem); }
+.band { background:var(--lacquer); border-block:1px solid var(--rule); }
+.head { max-width:var(--measure); margin-bottom:clamp(2rem,4vw,3rem); }
+.head h2 { font-size:clamp(1.9rem,4.4vw,2.9rem); line-height:1.08; margin-block:.7rem .85rem; }
+.head p { color:var(--ink-2); font-size:1.04rem; }
+.prose { max-width:var(--measure); color:var(--ink-2); display:flex; flex-direction:column; gap:1.05rem; }
+.prose strong { color:var(--ink); font-weight:600; }
+code, .ic { font-family:var(--mono); font-size:.84em; color:var(--bone); background:var(--wine); padding:.1em .38em; border-radius:.25rem; }
+
+/* legend */
+.legend { display:grid; gap:1px; background:var(--rule); border:1px solid var(--rule); border-radius:.7rem; overflow:hidden; }
+@media (min-width:44rem){ .legend { grid-template-columns:1fr 1fr; } }
+@media (min-width:72rem){ .legend { grid-template-columns:1fr 1fr 1fr; } }
+.lg { background:var(--lacquer); padding:1.1rem 1.15rem; display:flex; flex-direction:column; gap:.4rem; }
+.lg .top { display:flex; align-items:center; gap:.55rem; }
+.lg .sw { width:.85rem; height:.85rem; border-radius:3px; flex:0 0 auto; }
+.lg h3 { font-size:.98rem; }
+.lg .fam { font-family:var(--mono); font-size:.66rem; color:var(--ink-3); letter-spacing:.05em; margin-left:auto; }
+.lg p { font-size:.9rem; color:var(--ink-2); }
+.lg .shape { font-family:var(--mono); font-size:.68rem; color:var(--saffron); letter-spacing:.06em; text-transform:uppercase; }
+.lg .status { font-family:var(--mono); font-size:.66rem; color:var(--ink-3); }
+.lg .status.live { color:var(--wikimedia); }
+.lg .status.out { color:var(--usgs); }
+
+/* source table */
+.table-wrap { overflow-x:auto; border:1px solid var(--rule); border-radius:.7rem; background:var(--lacquer); }
+table { width:100%; min-width:38rem; border-collapse:collapse; font-family:var(--interface); font-size:.86rem; }
+th, td { text-align:left; padding:.6rem .8rem; border-bottom:1px solid var(--rule); vertical-align:top; }
+th { font-size:.64rem; letter-spacing:.11em; text-transform:uppercase; color:var(--ink-3); font-weight:600; }
+tr:last-child td { border-bottom:0; }
+td.d { color:var(--ink-2); }
+td:first-child { color:var(--ink); font-weight:600; }
+
+/* pipeline */
+.pipe { display:grid; gap:.55rem; }
+@media (min-width:52rem){ .pipe { grid-template-columns:repeat(5,1fr); align-items:stretch; } }
+.step { border:1px solid var(--rule); border-radius:.6rem; background:var(--lacquer); padding:1rem 1rem; display:flex; flex-direction:column; gap:.35rem; position:relative; }
+.step .n { font-family:var(--mono); font-size:.64rem; color:var(--saffron); letter-spacing:.1em; }
+.step h3 { font-size:.94rem; }
+.step p { font-size:.85rem; color:var(--ink-2); line-height:1.45; }
+
+.facts { display:grid; gap:0; border-top:1px solid var(--rule); }
+.fact { display:grid; gap:.3rem 2rem; padding:1.15rem 0; border-bottom:1px solid var(--rule); }
+@media (min-width:48rem){ .fact { grid-template-columns:16rem minmax(0,1fr); align-items:baseline; } }
+.fact h3 { font-size:1rem; font-weight:600; }
+.fact p { color:var(--ink-2); font-size:.95rem; }
+
+.nums { display:grid; gap:1px; background:var(--rule); border:1px solid var(--rule); border-radius:.7rem; overflow:hidden; grid-template-columns:repeat(auto-fit,minmax(9rem,1fr)); margin-top:2.5rem; }
+.num { background:var(--lacquer); padding:1.2rem 1.1rem; display:flex; flex-direction:column; gap:.2rem; }
+.num b { font-family:var(--mono); font-size:1.5rem; font-weight:600; letter-spacing:-.03em; font-variant-numeric:tabular-nums; }
+.num span { font-family:var(--interface); font-size:.8rem; color:var(--ink-2); line-height:1.4; }
+
+.cmd { display:flex; align-items:flex-start; gap:.7rem; width:100%; padding:.65rem .65rem .65rem .9rem; border:1px solid var(--rule); border-radius:.55rem; background:var(--wine); font-family:var(--mono); font-size:.8rem; overflow:hidden; }
+.cmd code { background:none; padding:0; white-space:pre; overflow-x:auto; min-width:0; flex:1 1 auto; color:var(--bone); line-height:1.7; }
+.cmd .c { color:var(--ink-3); }
+.copy { flex:0 0 auto; border:1px solid var(--rule); background:transparent; color:var(--ink-2); font-family:var(--interface); font-size:.66rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:.3rem .5rem; border-radius:.32rem; cursor:pointer; }
+.copy:hover, .copy[data-done="1"] { color:var(--saffron); border-color:var(--saffron); }
+
+.paths { display:grid; gap:1.1rem; align-items:start; }
+@media (min-width:54rem){ .paths { grid-template-columns:1fr 1fr; } }
+.path { border:1px solid var(--rule); border-radius:.8rem; padding:1.4rem 1.3rem; background:var(--lacquer); display:flex; flex-direction:column; gap:.8rem; align-items:flex-start; min-width:0; max-width:100%; }
+.path > * { max-width:100%; }
+.path.lead { border-color:var(--saffron); }
+.path h3 { font-size:1.06rem; }
+.path p { font-size:.91rem; color:var(--ink-2); }
+
+.notice { border:1px solid var(--rule-2); border-left:3px solid var(--saffron); border-radius:.3rem .7rem .7rem .3rem; background:var(--lacquer); padding:1.2rem 1.35rem; max-width:46rem; }
+.notice p { font-size:.94rem; color:var(--ink-2); }
+.notice p + p { margin-top:.7rem; }
+
+footer { border-top:1px solid var(--rule); padding-block:2.5rem 3.5rem; font-family:var(--interface); font-size:.85rem; color:var(--ink-3); }
+.foot-row { display:flex; flex-wrap:wrap; gap:1rem 2rem; justify-content:space-between; align-items:center; }
+footer a { color:var(--ink-2); text-decoration:none; }
+footer a:hover { color:var(--saffron); }
+.foot-links { display:flex; flex-wrap:wrap; gap:1.3rem; }
+.colophon { margin-top:1.4rem; max-width:48rem; line-height:1.65; font-size:.82rem; }
+
+@media (prefers-reduced-motion: reduce){ *, *::before, *::after { transition-duration:.01ms !important; } }
+</style>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<div class="shell">
+  <header class="masthead">
+    <a class="wordmark" href="/">
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M3 11h26M3 16h26M3 21h26" stroke="var(--wikimedia)" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+        <path d="M11 5v22M21 5v22" stroke="var(--usgs)" stroke-width="1.5" stroke-linecap="round" fill="none" opacity=".8"/>
+      </svg>
+      Worldloom
+    </a>
+    <nav>
+      <a href="#signals">Signals</a>
+      <a href="#gestures">Gestures</a>
+      <a href="#build">How it holds</a>
+      <a href="#run">Run it</a>
+    </nav>
+  </header>
+</div>
+
+<main id="main">
+  <div class="shell">
+    <div class="hero">
+      <p class="eyebrow">Elixir · Phoenix LiveView · Canvas 2D</p>
+      <h1>The world is <em>weaving itself</em>.</h1>
+      <p class="hero-lede">
+        A persistent living tapestry woven in real time from Wikimedia edits, Bluesky
+        activity, RIPE routing motion, Solana slots, drand rounds, earthquakes, global
+        weather — and three small anonymous gestures from whoever is watching. The
+        present lives at the luminous right edge.
+      </p>
+    </div>
+  </div>
+
+  <div class="shell loom-wrap">
+    <div class="loom">
+      <canvas id="loom" width="1680" height="630"
+              aria-label="A woven tapestry of public signals. Each formation is described in the panel below the canvas."></canvas>
+      <span class="edge-label" id="edge">the present</span>
+      <div class="inspect" id="inspect" aria-live="polite">
+        <span class="sw" style="background:var(--saffron)"></span>
+        <span>Weaving. Hover or tab a formation to inspect it.</span>
+      </div>
+    </div>
+    <div class="gestures">
+      <button class="gesture" data-g="tug" type="button">Tug</button>
+      <button class="gesture" data-g="knot" type="button">Knot</button>
+      <button class="gesture" data-g="illuminate" type="button">Illuminate</button>
+      <p class="gesture-note">
+        Three gestures, no account and no name — the same three the live loom accepts.
+        Here they are woven in your browser only.
+      </p>
+    </div>
+  </div>
+
+  <!-- ══ signals ══ -->
+  <section id="signals" class="band">
+    <div class="shell">
+      <div class="head">
+        <p class="eyebrow">Seven signals, one cloth</p>
+        <h2>Every source keeps its own hand</h2>
+        <p>
+          Each public source becomes a distinct formation with its own colour family,
+          so the cloth stays legible as it thickens. These are the shapes and the
+          materials the loom actually uses.
+        </p>
+      </div>
+      <ol class="legend" id="legend"></ol>
+      <p class="prose" style="margin-top:1.6rem; font-size:.9rem">
+        On this page the earthquake ruptures and the drand crystals are fetched live
+        from their public endpoints; the other five families are drawn from a fixed
+        seed for illustration. The status beside each name says which is which right now.
+      </p>
+    </div>
+  </section>
+
+  <!-- ══ gestures ══ -->
+  <section id="gestures">
+    <div class="shell">
+      <div class="head">
+        <p class="eyebrow">Your hand</p>
+        <h2>Three gestures, and nothing about you</h2>
+        <p>
+          There are no accounts, names, chat messages, uploads or visitor profiles.
+          Anonymous browser and network values exist only long enough to enforce
+          contribution limits, and are never written to loom events or public output.
+        </p>
+      </div>
+      <div class="pipe" style="grid-template-columns:repeat(auto-fit,minmax(14rem,1fr))">
+        <div class="step"><span class="n">TUG</span><h3>Bend the living edge</h3><p>A warm intervention that pulls the present strand out of true.</p></div>
+        <div class="step"><span class="n">KNOT</span><h3>Join what is there</h3><p>Ties the edge together where two formations meet.</p></div>
+        <div class="step"><span class="n">ILLUMINATE</span><h3>Light it</h3><p>Brightens a region so later visitors see where attention fell.</p></div>
+      </div>
+      <div class="prose" style="margin-top:2rem">
+        <p>
+          <strong>Every formation is stored before it is broadcast.</strong> Two
+          connected browsers see the same committed artifact, and a restart
+          reconstructs the cloth from PostgreSQL rather than from memory. What you add
+          is permanent and shareable by link; browsing an earlier UTC chapter never
+          changes its history.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ how it holds ══ -->
+  <section id="build" class="band">
+    <div class="shell">
+      <div class="head">
+        <p class="eyebrow">How it holds together</p>
+        <h2>Commit first, then broadcast</h2>
+        <p>
+          The browser draws compact, versioned instructions. It never receives raw
+          upstream payloads.
+        </p>
+      </div>
+      <div class="pipe">
+        <div class="step"><span class="n">01</span><h3>Normalise and bound</h3><p>Seven upstream sources are normalised and independently bounded.</p></div>
+        <div class="step"><span class="n">02</span><h3>Bounded buffer</h3><p>A single bounded signal buffer absorbs bursts without unbounded growth.</p></div>
+        <div class="step"><span class="n">03</span><h3>One coordinator</h3><p>A single loom coordinator decides what becomes a formation.</p></div>
+        <div class="step"><span class="n">04</span><h3>Transaction</h3><p>PostgreSQL commits the formation. Only on success does it exist.</p></div>
+        <div class="step"><span class="n">05</span><h3>Broadcast</h3><p>Phoenix PubSub fans the committed instruction out to LiveView clients.</p></div>
+      </div>
+
+      <div class="head" style="margin-top:clamp(3rem,6vw,4.5rem)">
+        <h2 style="font-size:clamp(1.5rem,3vw,2rem)">Source posture</h2>
+        <p>
+          All seven run by default. Each environment switch is an operator circuit
+          breaker: turning one off removes that source and its upstream connection
+          while the rest of the world keeps weaving.
+        </p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Source</th><th>Public freshness</th><th>Recovery posture</th></tr></thead>
+          <tbody>
+            <tr><td>Wikimedia</td><td class="d">Quiet after 20 seconds</td><td class="d">At most 60 seconds from a durable event ID</td></tr>
+            <tr><td>USGS</td><td class="d">Quiet after 3 minutes</td><td class="d">Idempotent rolling-feed polling with a private ETag</td></tr>
+            <tr><td>Open-Meteo</td><td class="d">Stale after 30 minutes</td><td class="d">Keep the last ambient state; retry locally</td></tr>
+            <tr><td>drand Quicknet</td><td class="d">Stale after 12 seconds</td><td class="d">At most 20 exact rounds; report a larger gap</td></tr>
+            <tr><td>Bluesky Jetstream</td><td class="d">Quiet after 20 seconds</td><td class="d">Five-second overlap within a 60-second horizon</td></tr>
+            <tr><td>RIPE RIS Live</td><td class="d">Quiet after 20 seconds</td><td class="d">Rejoin the live edge; never claim replay</td></tr>
+            <tr><td>Solana slots</td><td class="d">Quiet after 20 seconds</td><td class="d">Rejoin the live edge; preserve observed gaps</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="facts" style="margin-top:3rem">
+        <div class="fact"><h3>Reduced motion is a renderer</h3><p>Not a disabled feature. The reduced-motion path draws the same cloth without losing controls, and a textual live summary describes formations for screen readers.</p></div>
+        <div class="fact"><h3>Every pointer act has a key</h3><p>Semantic controls, visible focus, non-colour signal shapes and responsive touch targets throughout — inspect a formation with pointer, touch or keyboard.</p></div>
+        <div class="fact"><h3>Deliberately single-instance</h3><p>v1 runs one loom coordinator. The invariants, recovery paths and bounds that choice buys are written down in ARCHITECTURE.md rather than implied.</p></div>
+        <div class="fact"><h3>Proven at launch capacity</h3><p>The heavy suite runs 100 independent Chromium contexts with real LiveView snapshot progress, WebSocket stability, aggregate Presence cleanup, and one server-owned connection per streaming source.</p></div>
+      </div>
+
+      <div class="nums">
+        <div class="num"><b>7</b><span>public sources, independently bounded</span></div>
+        <div class="num"><b>3</b><span>anonymous visitor gestures</span></div>
+        <div class="num"><b>8</b><span>colour families in the cloth</span></div>
+        <div class="num"><b>100</b><span>browser contexts in the capacity proof</span></div>
+        <div class="num"><b>0</b><span>accounts, names or profiles</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ run ══ -->
+  <section id="run">
+    <div class="shell">
+      <div class="head">
+        <p class="eyebrow">Run it</p>
+        <h2>Public source, local experience</h2>
+        <p>
+          Worldloom is available as public source and a local experience. A hosted demo
+          link appears in the repository only once public infrastructure is configured
+          and verified.
+        </p>
+      </div>
+
+      <div class="paths">
+        <div class="path lead">
+          <p class="eyebrow">Live</p>
+          <h3>Connect to all seven</h3>
+          <p>Needs Elixir 1.20.2 on OTP 29.0.4, Node 24.18.0 and PostgreSQL 14+. Development connects to every public source by default.</p>
+          <div class="cmd"><code id="c-run">git clone https://github.com/romankhadka/worldloom.git
+cd worldloom
+mix setup
+npm ci
+mix phx.server</code><button class="copy" data-copy="#c-run" type="button">Copy</button></div>
+          <p style="font-size:.86rem;color:var(--ink-3)">Then open localhost:4000.</p>
+        </div>
+
+        <div class="path">
+          <p class="eyebrow">Offline</p>
+          <h3>A repeatable hour</h3>
+          <p>Disable the feed workers and seed one deterministic hour. The seed task is idempotent — rerunning it does not duplicate its 120 demo signals.</p>
+          <div class="cmd"><code id="c-seed">WORLDLOOM_FEEDS_ENABLED=false mix worldloom.seed_demo
+WORLDLOOM_FEEDS_ENABLED=false mix phx.server</code><button class="copy" data-copy="#c-seed" type="button">Copy</button></div>
+        </div>
+
+        <div class="path">
+          <p class="eyebrow">Verify</p>
+          <h3>The gates</h3>
+          <p>Source normalisation, transactional persistence, retry and checkpoint behaviour, LiveView interaction, deterministic rendering, keyboard and touch operation, reduced motion, two-browser convergence and reload reconstruction.</p>
+          <div class="cmd"><code id="c-test">mix precommit
+npm test
+npm run test:e2e</code><button class="copy" data-copy="#c-test" type="button">Copy</button></div>
+        </div>
+
+        <div class="path">
+          <p class="eyebrow">Read first</p>
+          <h3>What it is not</h3>
+          <div class="notice" style="border:0; padding:0; background:none">
+            <p>
+              An artistic aggregate — not an alerting, forecasting, operational,
+              social, cryptographic-verification, financial or scientific analysis
+              service. Upstream activity is best-effort and may be delayed, revised,
+              incomplete or unavailable.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="shell foot-row">
+    <a class="wordmark" href="/" style="font-size:1rem">
+      <svg viewBox="0 0 32 32" aria-hidden="true" style="width:1.2rem;height:1.2rem">
+        <path d="M3 11h26M3 16h26M3 21h26" stroke="var(--wikimedia)" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+        <path d="M11 5v22M21 5v22" stroke="var(--usgs)" stroke-width="1.5" stroke-linecap="round" fill="none" opacity=".8"/>
+      </svg>
+      Worldloom
+    </a>
+    <div class="foot-links">
+      <a href="https://github.com/romankhadka/worldloom">GitHub</a>
+      <a href="https://github.com/romankhadka/worldloom/blob/master/ARCHITECTURE.md">Architecture</a>
+      <a href="https://github.com/romankhadka/worldloom/blob/master/docs/privacy.md">Privacy</a>
+      <a href="https://github.com/romankhadka/worldloom/blob/master/docs/data-sources.md">Data sources</a>
+      <a href="https://github.com/romankhadka/worldloom/blob/master/LICENSE">MIT</a>
+    </div>
+  </div>
+  <div class="shell">
+    <p class="colophon">
+      The cloth above is drawn in your browser with the loom's own palette and shape
+      vocabulary; it is a portrait of the renderer, not the renderer itself. Rupture
+      rings come from the USGS real-time GeoJSON feed and crystals from drand Quicknet,
+      fetched directly by this page; the other families are seeded. Signals courtesy of
+      Wikimedia EventStreams, USGS, Open-Meteo, drand, Bluesky Jetstream, RIPE RIS Live
+      and Solana. Full field-level handling and attribution live in the repository.
+    </p>
+  </div>
+</footer>
+
+<script>
+(() => {
+  "use strict";
+  const $ = (s) => document.querySelector(s);
+  const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ── the loom's own materials ─────────────────────────────── */
+  const FAM = {
+    wikimedia:  { name: "Wikimedia",         family: "aged-jade",        shape: "strand",       stroke: "#4db69a", glow: "#9ce6d0", material: "Connective strands extend the public backbone." },
+    bluesky:    { name: "Bluesky",           family: "smoky-periwinkle", shape: "fan",          stroke: "#9a84c7", glow: "#d4c5f1", material: "Conversation fans branch and return without showing posts." },
+    ripe_ris:   { name: "RIPE RIS Live",     family: "mineral-blue",     shape: "fork",         stroke: "#6c9bad", glow: "#b9dce5", material: "Angular route forks extend and withdraw." },
+    solana:     { name: "Solana",            family: "marigold",         shape: "beads",        stroke: "#e0a43b", glow: "#f5cf7a", material: "Precise slot beads pause where genuine gaps occur." },
+    drand:      { name: "drand Quicknet",    family: "moonstone",        shape: "crystal",      stroke: "#c7ddd6", glow: "#f2efe2", material: "One crystalline pulse marks each accepted public round." },
+    usgs:       { name: "USGS earthquakes",  family: "copper",           shape: "rupture",      stroke: "#e07245", glow: "#ffb080", material: "Rupture rings hold physical events as ember memories." },
+    open_meteo: { name: "Open-Meteo weather",family: "olive-jade",       shape: "atmosphere",   stroke: "#8da56e", glow: "#c5c77c", material: "A weather field shapes the shared atmosphere." },
+    visitor:    { name: "Visitors",          family: "bright-bone",      shape: "intervention", stroke: "#ffe8c9", glow: "#fff4df", material: "Warm interventions bend, join, or illuminate the living edge." }
+  };
+  const ORDER = ["wikimedia", "bluesky", "ripe_ris", "solana", "drand", "usgs", "open_meteo", "visitor"];
+  const STATUS = { usgs: "checking", drand: "checking" };
+
+  /* deterministic seed, so the seeded families are the same cloth for everyone */
+  let seed = 20260810;
+  const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+
+  const cv = $("#loom"), ctx = cv.getContext("2d");
+  const W = cv.width, H = cv.height;
+  const inspect = $("#inspect"), edge = $("#edge");
+
+  /* ── formations ──────────────────────────────────────────── */
+  // x is a fraction of the width; the present is x = 1.
+  const forms = [];
+  const push = (f) => { forms.push(f); if (forms.length > 260) forms.shift(); };
+
+  function seedCloth() {
+    for (let i = 0; i < 150; i++) {
+      const x = rnd(), y = 0.1 + rnd() * 0.8;
+      const src = ["wikimedia", "bluesky", "ripe_ris", "solana", "open_meteo"][Math.floor(rnd() * 5)];
+      push({ src, x, y, s: 0.4 + rnd() * 0.9, seedv: rnd(), label: null, born: -1 });
+    }
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+
+    // ground
+    const g = ctx.createLinearGradient(0, 0, W, 0);
+    g.addColorStop(0, "#160a0b");
+    g.addColorStop(0.72, "#241013");
+    g.addColorStop(1, "#3a1a1c");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+
+    // warp threads
+    ctx.globalAlpha = 0.09; ctx.strokeStyle = "#f6e2c5"; ctx.lineWidth = 1;
+    for (let i = 1; i < 26; i++) {
+      const x = (i / 26) * W;
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    // atmosphere bands first (they are the ambient field)
+    forms.filter(f => f.src === "open_meteo").forEach(f => {
+      const x = f.x * W, y = f.y * H;
+      const rg = ctx.createRadialGradient(x, y, 0, x, y, 150 * f.s);
+      rg.addColorStop(0, "rgba(141,165,110,0.16)");
+      rg.addColorStop(1, "rgba(141,165,110,0)");
+      ctx.fillStyle = rg;
+      ctx.fillRect(x - 150 * f.s, y - 150 * f.s, 300 * f.s, 300 * f.s);
+    });
+
+    forms.forEach(f => {
+      if (f.src === "open_meteo") return;
+      const m = FAM[f.src];
+      const x = f.x * W, y = f.y * H;
+      const near = f.x > 0.86;                       // brighter at the living edge
+      ctx.globalAlpha = near ? 1 : 0.62;
+      ctx.strokeStyle = m.stroke; ctx.fillStyle = m.stroke;
+      ctx.lineWidth = 1.6 * f.s;
+      ctx.shadowBlur = near ? 14 : 0; ctx.shadowColor = m.glow;
+
+      const s = f.s;
+      switch (m.shape) {
+        case "strand": {
+          ctx.beginPath();
+          const len = 90 * s;
+          ctx.moveTo(x - len, y);
+          ctx.bezierCurveTo(x - len / 2, y - 16 * s, x + len / 2, y + 16 * s, x + len, y);
+          ctx.stroke();
+          break;
+        }
+        case "fan": {
+          const n = 4;
+          for (let i = 0; i < n; i++) {
+            const a = -0.55 + (i / (n - 1)) * 1.1;
+            ctx.beginPath(); ctx.moveTo(x, y);
+            ctx.quadraticCurveTo(x + 26 * s, y + Math.sin(a) * 26 * s, x + 52 * s, y + Math.sin(a) * 46 * s);
+            ctx.stroke();
+          }
+          break;
+        }
+        case "fork": {
+          ctx.beginPath();
+          ctx.moveTo(x - 26 * s, y); ctx.lineTo(x, y);
+          ctx.lineTo(x + 26 * s, y - 22 * s); ctx.moveTo(x, y); ctx.lineTo(x + 26 * s, y + 22 * s);
+          ctx.stroke();
+          break;
+        }
+        case "beads": {
+          for (let i = 0; i < 5; i++) {
+            ctx.beginPath();
+            ctx.arc(x + i * 15 * s, y, 2.6 * s, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          break;
+        }
+        case "crystal": {
+          const r = 11 * s;
+          ctx.beginPath();
+          ctx.moveTo(x, y - r); ctx.lineTo(x + r * 0.62, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r * 0.62, y);
+          ctx.closePath(); ctx.stroke();
+          ctx.globalAlpha *= 0.4; ctx.fill(); ctx.globalAlpha /= 0.4;
+          break;
+        }
+        case "rupture": {
+          for (let i = 1; i <= 3; i++) {
+            ctx.globalAlpha = (near ? 0.85 : 0.5) / i;
+            ctx.beginPath(); ctx.arc(x, y, i * 9 * s, 0, Math.PI * 2); ctx.stroke();
+          }
+          break;
+        }
+        case "intervention": {
+          ctx.beginPath();
+          if (f.g === "knot") {
+            ctx.arc(x, y, 8 * s, 0, Math.PI * 2); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(x - 13 * s, y); ctx.lineTo(x + 13 * s, y); ctx.stroke();
+          } else if (f.g === "illuminate") {
+            for (let i = 0; i < 8; i++) {
+              const a = (i / 8) * Math.PI * 2;
+              ctx.moveTo(x + Math.cos(a) * 6 * s, y + Math.sin(a) * 6 * s);
+              ctx.lineTo(x + Math.cos(a) * 17 * s, y + Math.sin(a) * 17 * s);
+            }
+            ctx.stroke();
+          } else {
+            ctx.moveTo(x - 20 * s, y);
+            ctx.quadraticCurveTo(x, y - 24 * s, x + 20 * s, y);
+            ctx.stroke();
+          }
+          break;
+        }
+      }
+      ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+    });
+
+    // the luminous present
+    const eg = ctx.createLinearGradient(W * 0.9, 0, W, 0);
+    eg.addColorStop(0, "rgba(227,165,58,0)");
+    eg.addColorStop(1, "rgba(227,165,58,0.22)");
+    ctx.fillStyle = eg; ctx.fillRect(W * 0.9, 0, W * 0.1, H);
+    ctx.strokeStyle = "rgba(246,226,197,0.55)"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(W - 1.5, 0); ctx.lineTo(W - 1.5, H); ctx.stroke();
+  }
+
+  /* ── inspection ──────────────────────────────────────────── */
+  function nearest(px, py) {
+    let best = null, bd = 1e9;
+    forms.forEach(f => {
+      const dx = f.x * W - px, dy = f.y * H - py;
+      const d = dx * dx + dy * dy;
+      if (d < bd) { bd = d; best = f; }
+    });
+    return bd < 90 * 90 ? best : null;
+  }
+
+  cv.addEventListener("pointermove", (e) => {
+    const r = cv.getBoundingClientRect();
+    const f = nearest((e.clientX - r.left) * (W / r.width), (e.clientY - r.top) * (H / r.height));
+    if (!f) return;
+    const m = FAM[f.src];
+    inspect.innerHTML =
+      `<span class="sw" style="background:${m.stroke}"></span>` +
+      `<span><b>${m.name}</b> · ${m.shape}${f.label ? ` · ${f.label}` : ""} — ${m.material}</span>`;
+  });
+
+  /* ── gestures ────────────────────────────────────────────── */
+  document.querySelectorAll(".gesture").forEach(b => {
+    b.addEventListener("click", () => {
+      const g = b.dataset.g;
+      push({ src: "visitor", g, x: 0.965, y: 0.2 + Math.random() * 0.6, s: 1.15, born: performance.now() });
+      const m = FAM.visitor;
+      inspect.innerHTML = `<span class="sw" style="background:${m.stroke}"></span><span><b>${g}</b> woven at the living edge — ${m.material}</span>`;
+      draw();
+    });
+  });
+
+  /* ── legend ──────────────────────────────────────────────── */
+  function legend() {
+    $("#legend").innerHTML = ORDER.map(k => {
+      const m = FAM[k];
+      const st = STATUS[k];
+      const cls = st === "live" ? "live" : st === "unavailable" ? "out" : "";
+      const label = st ? st : (k === "visitor" ? "yours" : "seeded");
+      return `<li class="lg">
+        <span class="top">
+          <span class="sw" style="background:${m.stroke}"></span>
+          <h3>${m.name}</h3>
+          <span class="fam">${m.family}</span>
+        </span>
+        <span class="shape">${m.shape}</span>
+        <p>${m.material}</p>
+        <span class="status ${cls}">${label}</span>
+      </li>`;
+    }).join("");
+  }
+
+  /* ── live signals, best-effort exactly as the loom treats them ── */
+  async function liveUsgs() {
+    try {
+      const r = await fetch("https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson", { mode: "cors" });
+      if (!r.ok) throw new Error(r.status);
+      const j = await r.json();
+      const qs = (j.features || []).slice(0, 14);
+      qs.forEach((q, i) => {
+        const mag = q.properties && q.properties.mag;
+        push({
+          src: "usgs",
+          x: 0.5 + (i / Math.max(1, qs.length)) * 0.48,
+          y: 0.15 + ((i * 37) % 70) / 100,
+          s: Math.max(0.5, Math.min(2, (mag || 1) / 2.4)),
+          label: `M${(mag ?? 0).toFixed(1)} · ${q.properties && q.properties.place ? String(q.properties.place).slice(0, 42) : "—"}`
+        });
+      });
+      STATUS.usgs = qs.length ? "live" : "quiet";
+    } catch { STATUS.usgs = "unavailable"; }
+  }
+
+  async function liveDrand() {
+    try {
+      const r = await fetch("https://api.drand.sh/public/latest", { mode: "cors" });
+      if (!r.ok) throw new Error(r.status);
+      const j = await r.json();
+      const round = j.round || 0;
+      for (let i = 0; i < 7; i++) {
+        push({ src: "drand", x: 0.55 + i * 0.06, y: 0.16 + ((round + i * 13) % 68) / 100, s: 0.8 + (i % 3) * 0.2,
+               label: `round ${round - (6 - i)}` });
+      }
+      STATUS.drand = "live";
+    } catch { STATUS.drand = "unavailable"; }
+  }
+
+  /* ── go ──────────────────────────────────────────────────── */
+  seedCloth();
+  draw();
+  legend();
+
+  Promise.allSettled([liveUsgs(), liveDrand()]).then(() => { draw(); legend(); });
+
+  // the edge breathes; the cloth itself does not move, so nothing jitters
+  if (!still) {
+    let t = 0;
+    setInterval(() => {
+      t += 1;
+      edge.style.opacity = 0.62 + 0.38 * Math.abs(Math.sin(t / 9));
+    }, 90);
+  }
+
+  const stamp = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "UTC" }).format(new Date());
+  edge.textContent = `the present · ${stamp} UTC`;
+
+  document.querySelectorAll(".copy").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const src = document.querySelector(btn.dataset.copy);
+      if (!src) return;
+      try {
+        await navigator.clipboard.writeText(src.innerText.trim());
+        const was = btn.textContent;
+        btn.textContent = "Copied"; btn.dataset.done = "1";
+        setTimeout(() => { btn.textContent = was; btn.dataset.done = "0"; }, 1600);
+      } catch {}
+    });
+  });
+})();
+</script>
+</body>
+</html>
