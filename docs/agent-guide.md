@@ -12,6 +12,16 @@ backbone; Bluesky activity, RIPE routing motion, Solana slot progression, drand 
 USGS earthquakes, and Open-Meteo weather each have a distinct structural or atmospheric
 grammar. Visitors can Tug, Knot, or Illuminate the live edge without creating an account.
 
+The current visual language renders that record as a night-sky star chart on the
+Lacquered Gallery token system with deep-night ground values. Every formation is a
+star with an additive bloom and warm core; the Wikimedia spine is a Milky Way band
+with sequence-seeded star dust; the other sources keep distinct non-color signatures
+as constellation figures (open cluster, angular chain, string of pearls, diamond
+pulsar, ring nova, aurora curtains), and the three gestures render as a meteor, a
+binary star, and a nova. The legend's `data-shape` names (strand, fan, fork, beads,
+crystal, rupture, atmosphere, intervention) predate the star chart and are stable
+identifiers, not descriptions of the current marks.
+
 It is deliberately an artistic aggregate. It is not an alerting, forecasting, social,
 financial, cryptographic-verification, operational, or scientific-analysis product. Its
 source gaps and degraded states must remain honest.
@@ -41,9 +51,14 @@ The repository contains historical design specifications and implementation plan
 not a current backlog. Verify present code, tests, release notes, Git history, deployment
 configuration, and open issues before treating an old plan item as unfinished.
 
-At the time this guide was introduced, the README described Worldloom as public source
-and a local experience, while production deployment remained conditional on repository
-configuration. Re-check that claim before planning work or editing public copy.
+The public website at <https://worldloom.romn.dev/> is not the Phoenix application: it
+is the static landing page `docs/index.html`, served by GitHub Pages from `master:/docs`
+with the custom domain in `docs/CNAME`. The page deliberately mirrors the application's
+palette and canvas vocabulary, so a visual-language change is not done until this page
+moves with it; a push to master redeploys it automatically. The Phoenix application has
+no hosted deployment yet: the CI `deploy` job targets Fly but stays skipped until the
+repository variable `FLY_APP_NAME` (and the `FLY_API_TOKEN` secret) are configured.
+Re-check both claims before planning work or editing public copy.
 
 ## The mental model
 
@@ -118,7 +133,8 @@ Treat these as design constraints, not implementation details:
 | Live interface | `lib/worldloom_web/live/world_live.*` | Bounded state, chapters, selection, gestures, source status |
 | Browser boundary | `assets/js/worldloom/hook.js` | LiveView protocol, input ownership, timeline controls |
 | Visual model | `topology.js`, `geometry.js`, `source_grammar.js` | Pure deterministic structure and projection |
-| Painting | `renderer.js`, `palette.js`, `assets/css/app.css` | Canvas state, hit testing, animation, Lacquered Gallery system |
+| Painting | `renderer.js`, `palette.js`, `assets/css/app.css` | Canvas state, hit testing, animation, night-sky star chart on the Lacquered Gallery tokens |
+| Public landing page | `docs/index.html`, `docs/CNAME` | GitHub Pages site at worldloom.romn.dev; mirrors the palette and canvas vocabulary |
 | Contracts and fixtures | `test/support/fixtures/`, `assets/test/fixtures/` | Versioned render and balanced-world acceptance evidence |
 | End-to-end behavior | `e2e/`, `playwright.config.js` | Real browser, mobile, accessibility, convergence, visual baselines |
 | Launch capacity | `load/` | 100-browser and k6 release evidence |
@@ -140,6 +156,12 @@ effects at their existing boundaries.
    rtk wt list
    rtk wt switch --create <focused-branch-name> --yes
    ```
+
+   On this workstation `mix`/`elixir` come from asdf shims that non-interactive shells
+   may not have on PATH, and `DROP DATABASE` can outlast Ecto's timeout, which makes
+   `mix ecto.reset` fail intermittently; `psql -U postgres -h localhost -c
+   "DROP DATABASE IF EXISTS worldloom_e2e WITH (FORCE);"` followed by `mix ecto.setup`
+   recovers it.
 
 3. Read the whole file being changed and trace its callers, dependencies, tests, and public
    documentation. For providers, also verify the current official protocol; contracts drift.
@@ -179,8 +201,45 @@ not a deterministic pull-request gate.
 Before public launch or a capacity-sensitive release, also run the exact 100-browser and k6
 profiles in [load/README.md](../load/README.md). Visual changes require inspecting the actual
 desktop and mobile result, including reduced motion, before accepting new snapshots. Generate
-Linux baselines in the documented Playwright container rather than approving unexplained
-platform drift.
+Linux baselines in the Playwright container as described below rather than approving
+unexplained platform drift.
+
+### Changing the palette or visual language
+
+The color system is pinned in several places that must move together in one change:
+the `--loom-*` tokens and RGB companions in `assets/css/app.css`, the token, companion,
+theme-mirror, and legacy-denylist maps in `assets/test/color_system.test.js`, the
+palette equality map and localized-contrast backing RGB in `e2e/worldloom.spec.js`,
+`assets/js/worldloom/palette.js` with its pinned `palette.test.js`, and the landing
+page `docs/index.html`, which embeds the same values. `renderer.js` and `geometry.js`
+must stay free of color literals, and component CSS after the box-sizing sentinel must
+reference tokens, never hex. Retired token values join the legacy denylist. After any
+visual change, regenerate and visually inspect both the darwin and linux screenshot
+baselines and update the landing page's canvas portrait if the vocabulary changed.
+
+### Generating Linux screenshot baselines
+
+CI compares linux baselines on ubuntu; generate them from a workstation with the
+official Playwright container matching the pinned `@playwright/test` version:
+
+1. Start the deterministic e2e server on the host: reset and seed `worldloom_e2e`,
+   build assets, and run `mix phx.server`, all with `MIX_BUILD_PATH=_build/e2e
+   MIX_ENV=test WORLDLOOM_E2E=true WORLDLOOM_FEEDS_ENABLED=false`. Use a freshly
+   reset database for every suite run; interactive tests commit gestures, and a
+   reused database fails later runs.
+2. Run `mcr.microsoft.com/playwright:v<version>-noble` with `--platform linux/arm64`
+   on Apple Silicon; the amd64 variant crashes Chromium under qemu. Mount a scratch
+   directory containing `package.json`, `package-lock.json`, and
+   `playwright.config.js` as the workdir (so `npm ci` never touches the host's
+   darwin `node_modules`), bind-mount the repository's `e2e/` inside it, and mount
+   `assets/` read-only for the spec's fixtures.
+3. Phoenix `check_origin` rejects `host.docker.internal`, so set
+   `WORLDLOOM_BASE_URL=http://localhost:4002`, start an in-container TCP proxy from
+   `127.0.0.1:4002` to `host.docker.internal:4002`, and set
+   `WORLDLOOM_E2E_HARNESS=true` — without it the visual-release suite silently
+   skips under an external base URL.
+4. Run `npx playwright test --update-snapshots`, then rerun without the flag against
+   a fresh database and read the pass count before accepting the images.
 
 Do not claim success from an old run, a partial suite, or a subagent report. Run the relevant
 commands on the final diff and read their exit status.
