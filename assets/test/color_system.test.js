@@ -13,8 +13,8 @@ const layouts = await readFile(
 )
 const appJs = await readFile(new URL("../js/app.js", import.meta.url), "utf8")
 const expectedTokens = new Map([
-  ["lacquer-deep", "#120708"], ["lacquer", "#241013"], ["wine", "#35171a"],
-  ["wine-raised", "#4b2020"], ["bone", "#f6e2c5"], ["parchment", "#cbb89f"],
+  ["lacquer-deep", "#0b0d16"], ["lacquer", "#131628"], ["wine", "#1c2136"],
+  ["wine-raised", "#2a3050"], ["bone", "#f6e2c5"], ["parchment", "#cbb89f"],
   ["saffron", "#e3a53a"], ["jade", "#4db69a"], ["periwinkle", "#9a84c7"],
   ["mineral-blue", "#6c9bad"], ["marigold", "#e0a43b"], ["moonstone", "#c7ddd6"],
   ["copper", "#e07245"], ["olive-jade", "#8da56e"], ["visitor", "#ffe8c9"],
@@ -22,14 +22,14 @@ const expectedTokens = new Map([
   ["health-disabled", "#9f8c82"],
 ])
 const expectedRgbCompanions = new Map([
-  ["lacquer-deep-rgb", "18 7 8"], ["lacquer-rgb", "36 16 19"],
-  ["wine-rgb", "53 23 26"], ["wine-raised-rgb", "75 32 32"],
+  ["lacquer-deep-rgb", "11 13 22"], ["lacquer-rgb", "19 22 40"],
+  ["wine-rgb", "28 33 54"], ["wine-raised-rgb", "42 48 80"],
   ["bone-rgb", "246 226 197"], ["parchment-rgb", "203 184 159"],
   ["saffron-rgb", "227 165 58"], ["jade-rgb", "77 182 154"],
   ["copper-rgb", "224 114 69"], ["olive-jade-rgb", "141 165 110"],
 ])
 const expectedThemeMirrors = new Map([
-  ["lacquer", "#241013"], ["bone", "#f6e2c5"], ["jade", "#4db69a"],
+  ["lacquer", "#131628"], ["bone", "#f6e2c5"], ["jade", "#4db69a"],
   ["copper", "#e07245"], ["olive-jade", "#8da56e"], ["saffron", "#e3a53a"],
 ])
 
@@ -64,18 +64,19 @@ test("removes the previous foundation colors", () => {
   for (const legacy of [
     "#07110f", "#030806", "#69ded5", "#f0925e", "#849d68", "#d5bd78",
     "#f5ecd8", "#a3aea7", "#0a1511", "#ba9cf3", "#82dce6", "#efb85e", "#e8f5ec",
+    "#120708", "#241013", "#35171a", "#4b2020",
   ]) assert.equal(css.toLowerCase().includes(legacy), false, legacy)
 
   for (const legacyChannels of [
     "3 8 6", "5 14 12", "105 222 213", "132 157 104", "213 189 120",
     "240 146 94", "245 236 216", "250 244 228", "255 250 238", "246 207 127",
-    "147 226 195", "245 159 121",
+    "147 226 195", "245 159 121", "18 7 8", "36 16 19", "53 23 26", "75 32 32",
   ]) assert.equal(css.includes(legacyChannels), false, legacyChannels)
 })
 
 test("routes component colors through semantic tokens", () => {
-  const componentStart = css.indexOf("@property --cooldown-progress")
-  assert.ok(componentStart >= 0, "missing @property --cooldown-progress sentinel")
+  const componentStart = css.indexOf("* { box-sizing: border-box; }")
+  assert.ok(componentStart >= 0, "missing box-sizing component sentinel")
   const componentRules = css.slice(componentStart)
   assert.equal(/#[0-9a-f]{3,8}/i.test(componentRules), false)
   assert.match(declarationBlock(".worldloom-shell"), /var\(--loom-lacquer-deep\)/)

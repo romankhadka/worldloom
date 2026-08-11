@@ -1178,7 +1178,7 @@ defmodule WorldloomWeb.WorldLiveTest do
 
     assert has_element?(live_view, "#gesture-status", "Gesture joined the living edge")
     assert has_element?(live_view, "#gesture-status", "Gesture controls return in 30 seconds.")
-    assert has_element?(live_view, "#gesture-cooldown-ring[data-seconds='30']")
+    assert has_element?(live_view, "#gesture-countdown[aria-hidden='true']", "30s")
 
     for gesture <- ["tug", "knot", "illuminate"] do
       assert has_element?(live_view, "#gesture-#{gesture}[disabled]")
@@ -1188,7 +1188,7 @@ defmodule WorldloomWeb.WorldLiveTest do
 
     assert eventually(fn ->
              has_element?(live_view, "#gesture-status", "Choose an action for the live edge") and
-               not has_element?(live_view, "#gesture-cooldown-ring") and
+               not has_element?(live_view, "#gesture-countdown") and
                Enum.all?(["tug", "knot", "illuminate"], fn gesture ->
                  not has_element?(live_view, "#gesture-#{gesture}[disabled]")
                end)
@@ -1213,6 +1213,52 @@ defmodule WorldloomWeb.WorldLiveTest do
            end)
   end
 
+  test "shows a visible ticking countdown while gesture cooldown runs", %{conn: conn} do
+    {:ok, live_view, _html} = live(conn, "/")
+
+    live_view
+    |> form("#gesture-lane-form", %{"lane" => "0.4"})
+    |> render_submit(%{"gesture" => "tug"})
+
+    assert has_element?(live_view, "#gesture-countdown[aria-hidden='true']", "30s")
+
+    Process.sleep(1_100)
+
+    assert eventually(fn ->
+             has_element?(live_view, "#gesture-countdown", "29s") or
+               has_element?(live_view, "#gesture-countdown", "28s")
+           end)
+
+    send(live_view.pid, :gesture_ready)
+
+    assert eventually(fn ->
+             not has_element?(live_view, "#gesture-countdown") and
+               has_element?(live_view, "#gesture-status", "Choose an action for the live edge")
+           end)
+  end
+
+  test "explains a panned viewport instead of leaving stale gesture guidance", %{conn: conn} do
+    {:ok, live_view, _html} = live(conn, "/")
+
+    render_hook(live_view, "viewport-state", %{"at_live_edge" => false})
+
+    assert has_element?(live_view, "#gesture-dock[aria-disabled='true']")
+    assert has_element?(live_view, "#gesture-status", "Return to the live edge to contribute.")
+
+    render_hook(live_view, "viewport-state", %{"at_live_edge" => true})
+
+    assert has_element?(live_view, "#gesture-dock[aria-disabled='false']")
+    assert has_element?(live_view, "#gesture-status", "Choose an action for the live edge")
+
+    live_view
+    |> form("#gesture-lane-form", %{"lane" => "0.5"})
+    |> render_submit(%{"gesture" => "knot"})
+
+    render_hook(live_view, "viewport-state", %{"at_live_edge" => false})
+
+    assert has_element?(live_view, "#gesture-status", "Gesture joined the living edge")
+  end
+
   test "keeps cooldown feedback truthful across live and chapter routes", %{conn: conn} do
     [selected_event] = seed_events(1, ~U[2026-08-03 17:00:00.000000Z])
     {:ok, live_view, _html} = live(conn, "/")
@@ -1228,7 +1274,7 @@ defmodule WorldloomWeb.WorldLiveTest do
     assert_patch live_view, chapter_path
 
     assert has_element?(live_view, "#gesture-status", "Return to the live edge to contribute.")
-    refute has_element?(live_view, "#gesture-cooldown-ring")
+    refute has_element?(live_view, "#gesture-countdown")
     refute has_element?(live_view, "#gesture-status", "Gesture controls return in")
 
     Process.sleep(1_100)
@@ -1238,20 +1284,14 @@ defmodule WorldloomWeb.WorldLiveTest do
     assert has_element?(live_view, "#gesture-dock[aria-disabled='true']")
 
     document = live_view |> render() |> LazyHTML.from_fragment()
+    status_text = document |> LazyHTML.query("#gesture-status") |> LazyHTML.text()
 
     [remaining_text] =
-      document
-      |> LazyHTML.query("#gesture-cooldown-ring")
-      |> LazyHTML.attribute("data-seconds")
+      Regex.run(~r/return in (\d+) seconds/, status_text, capture: :all_but_first)
 
     remaining_seconds = String.to_integer(remaining_text)
     assert remaining_seconds in 1..29
-
-    assert has_element?(
-             live_view,
-             "#gesture-status",
-             "Gesture controls return in #{remaining_seconds} seconds."
-           )
+    assert has_element?(live_view, "#gesture-countdown")
 
     render_patch(live_view, chapter_path)
     send(live_view.pid, :gesture_ready)
@@ -1262,7 +1302,7 @@ defmodule WorldloomWeb.WorldLiveTest do
                "#gesture-status",
                "Return to the live edge to contribute."
              ) and
-               not has_element?(live_view, "#gesture-cooldown-ring") and
+               not has_element?(live_view, "#gesture-countdown") and
                not has_element?(live_view, "#gesture-status", "Gesture controls return in")
            end)
   end
@@ -1407,11 +1447,10 @@ defmodule WorldloomWeb.WorldLiveTest do
     render_hook(live_view, "gesture", %{"gesture" => "illuminate", "lane" => 0.72})
 
     document = live_view |> render() |> LazyHTML.from_fragment()
+    status_text = document |> LazyHTML.query("#gesture-status") |> LazyHTML.text()
 
     [remaining_text] =
-      document
-      |> LazyHTML.query("#gesture-cooldown-ring")
-      |> LazyHTML.attribute("data-seconds")
+      Regex.run(~r/return in (\d+) seconds/, status_text, capture: :all_but_first)
 
     remaining_seconds = String.to_integer(remaining_text)
     assert remaining_seconds in 1..30

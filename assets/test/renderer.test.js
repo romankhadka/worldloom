@@ -1168,36 +1168,49 @@ test("renders settled splines into a detached cache and composites it on ticks",
   assert.ok(canvas.calls.some(([name]) => name === "drawImage"))
 })
 
-test("paints each fiber as glow, body, and luminous core", () => {
-  const calls = cachedCallsFor({
+test("paints the spine as nebula layers, a core line, and star dust", () => {
+  const segments = [{
+    sequence: 2,
+    transitionSequence: 2,
+    length: 100,
+    curve: {
+      from: {x: 10, y: 30},
+      control1: {x: 35, y: 10},
+      control2: {x: 65, y: 50},
+      to: {x: 90, y: 30},
+    },
+  }]
+  const spineCalls = cachedCallsFor({
+    type: "fiber-path",
+    role: "spine",
+    sequence: 2,
+    intensity: 0.7,
+    stroke: "#63d7d1",
+    glow: "#b6fff8",
+    segments,
+  })
+
+  assert.deepEqual(
+    spineCalls.filter(([name]) => name === "lineWidth").map(([_name, width]) => width),
+    [34, 18, 8, 1],
+  )
+  assert.equal(spineCalls.filter(([name]) => name === "stroke").length, 4)
+  assert.ok(spineCalls.filter(([name]) => name === "arc").length >= 1)
+  assert.ok(spineCalls.filter(([name]) => name === "fill").length >= 1)
+
+  const filamentCalls = cachedCallsFor({
     type: "fiber-path",
     sequence: 2,
     intensity: 0.7,
     stroke: "#63d7d1",
     glow: "#b6fff8",
-    material: {
-      glow: {width: 12, alpha: 0.12},
-      body: {width: 4, alpha: 0.42},
-      core: {width: 1.2, alpha: 0.86},
-    },
-    segments: [{
-      sequence: 2,
-      transitionSequence: 2,
-      length: 100,
-      curve: {
-        from: {x: 10, y: 30},
-        control1: {x: 35, y: 10},
-        control2: {x: 65, y: 50},
-        to: {x: 90, y: 30},
-      },
-    }],
+    segments,
   })
 
-  assert.deepEqual(
-    calls.filter(([name]) => name === "lineWidth").map(([_name, width]) => width),
-    [12, 4, 1.2],
-  )
-  assert.equal(calls.filter(([name]) => name === "stroke").length, 3)
+  assert.equal(filamentCalls.find(([name]) => name === "lineWidth")?.[1], 1)
+  assert.ok(filamentCalls.some(([name]) => name === "setLineDash"))
+  assert.ok(filamentCalls.some(([name]) => name === "createRadialGradient"))
+  assert.ok(filamentCalls.filter(([name]) => name === "fill").length >= 1)
 })
 
 test("assigns every world signal its restrained source palette family", () => {
@@ -1842,6 +1855,14 @@ function fakeCanvas() {
     drawImage: record("drawImage"),
     translate: record("translate"),
     setLineDash: record("setLineDash"),
+    createRadialGradient: (...arguments_) => {
+      calls.push(["createRadialGradient", ...arguments_])
+      return {addColorStop: record("addColorStop")}
+    },
+    createLinearGradient: (...arguments_) => {
+      calls.push(["createLinearGradient", ...arguments_])
+      return {addColorStop: record("addColorStop")}
+    },
     set lineWidth(value) { calls.push(["lineWidth", value]) },
     set strokeStyle(value) { calls.push(["strokeStyle", value]) },
     set fillStyle(value) { calls.push(["fillStyle", value]) },

@@ -59,6 +59,7 @@ defmodule WorldloomWeb.WorldLive do
       |> assign(:cooldown_until, nil)
       |> assign(:cooldown_token, nil)
       |> assign(:cooldown_seconds, nil)
+      |> assign(:cooldown_remaining, nil)
       |> assign(:cooldown_status, nil)
       |> assign(:at_live_edge, action == :live)
       |> assign(:permalink, nil)
@@ -123,6 +124,19 @@ defmodule WorldloomWeb.WorldLive do
 
   def handle_info({:gesture_ready, token}, %{assigns: %{cooldown_token: token}} = socket),
     do: {:noreply, clear_gesture_cooldown(socket)}
+
+  def handle_info({:cooldown_tick, token}, %{assigns: %{cooldown_token: token}} = socket) do
+    case remaining_cooldown_seconds(socket.assigns.cooldown_until) do
+      nil ->
+        {:noreply, socket}
+
+      remaining_seconds ->
+        Process.send_after(self(), {:cooldown_tick, token}, :timer.seconds(1))
+        {:noreply, assign(socket, :cooldown_remaining, remaining_seconds)}
+    end
+  end
+
+  def handle_info({:cooldown_tick, _stale_token}, socket), do: {:noreply, socket}
 
   def handle_info({:gesture_ready, _stale_token}, socket), do: {:noreply, socket}
   def handle_info(:gesture_ready, socket), do: {:noreply, clear_gesture_cooldown(socket)}
@@ -230,7 +244,10 @@ defmodule WorldloomWeb.WorldLive do
 
   def handle_event("viewport-state", %{"at_live_edge" => at_live_edge}, socket)
       when is_boolean(at_live_edge) do
-    {:noreply, assign(socket, :at_live_edge, at_live_edge)}
+    {:noreply,
+     socket
+     |> assign(:at_live_edge, at_live_edge)
+     |> refresh_live_edge_guidance()}
   end
 
   def handle_event("viewport-state", _payload, socket), do: {:noreply, socket}
@@ -269,6 +286,7 @@ defmodule WorldloomWeb.WorldLive do
     {:noreply,
      socket
      |> assign(:at_live_edge, true)
+     |> refresh_live_edge_guidance()
      |> clear_history_authorization()
      |> assign_live_snapshot(snapshot, encoded_snapshot, scaffold_events)
      |> push_event("worldloom:return-live", encoded_snapshot)}
@@ -363,12 +381,14 @@ defmodule WorldloomWeb.WorldLive do
   defp begin_gesture_cooldown(socket, seconds, status) do
     token = make_ref()
     Process.send_after(self(), {:gesture_ready, token}, :timer.seconds(seconds))
+    Process.send_after(self(), {:cooldown_tick, token}, :timer.seconds(1))
 
     assign(socket,
       gesture_status: status,
       cooldown_until: DateTime.add(DateTime.utc_now(), seconds, :second),
       cooldown_token: token,
       cooldown_seconds: seconds,
+      cooldown_remaining: seconds,
       cooldown_status: status
     )
   end
@@ -378,9 +398,19 @@ defmodule WorldloomWeb.WorldLive do
       cooldown_until: nil,
       cooldown_token: nil,
       cooldown_seconds: nil,
+      cooldown_remaining: nil,
       cooldown_status: nil,
       gesture_status: route_gesture_status(socket.assigns.mode)
     )
+  end
+
+  defp refresh_live_edge_guidance(socket) do
+    cond do
+      not socket.assigns.live? -> socket
+      not is_nil(socket.assigns.cooldown_until) -> socket
+      socket.assigns.at_live_edge -> assign(socket, :gesture_status, route_gesture_status(:live))
+      true -> assign(socket, :gesture_status, "Return to the live edge to contribute.")
+    end
   end
 
   defp load_events(:chapter, %{"date" => encoded_date, "sequence" => encoded_sequence}) do
@@ -930,6 +960,7 @@ defmodule WorldloomWeb.WorldLive do
           cooldown_until: nil,
           cooldown_token: nil,
           cooldown_seconds: nil,
+          cooldown_remaining: nil,
           cooldown_status: nil,
           gesture_status: route_gesture_status(:live)
         )
@@ -937,6 +968,7 @@ defmodule WorldloomWeb.WorldLive do
       remaining_seconds ->
         assign(socket,
           cooldown_seconds: remaining_seconds,
+          cooldown_remaining: remaining_seconds,
           gesture_status: socket.assigns.cooldown_status
         )
     end

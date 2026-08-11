@@ -23,6 +23,7 @@ test("defines the approved Canvas interface materials", () => {
     targetSeed: "#ffe8c9",
     selectionHalo: "#e3a53a",
     viewerPulse: "#f6e2c5",
+    starCore: "#fff6e8",
   })
 })
 

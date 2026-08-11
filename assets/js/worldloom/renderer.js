@@ -1,5 +1,6 @@
 import {commandsForScene, cubicPrefix, laneToY} from "./geometry.js"
 import {canvasPalette} from "./palette.js"
+import {xorshift32} from "./random.js"
 
 const maximumEvents = 600
 const maximumMemoryEvents = 4
@@ -1121,6 +1122,67 @@ function latestAmbientInstruction(instructions) {
     .at(-1) ?? null
 }
 
+function withAlpha(color, alpha) {
+  let channels = rgbChannelCache.get(color)
+  if (!channels) {
+    channels = [1, 3, 5].map(offset => Number.parseInt(color.slice(offset, offset + 2), 16))
+    rgbChannelCache.set(color, channels)
+  }
+  return `rgba(${channels[0]}, ${channels[1]}, ${channels[2]}, ${alpha})`
+}
+
+const rgbChannelCache = new Map()
+
+function radialBloom(context, x, y, radius, color, coreAlpha) {
+  const gradient = context.createRadialGradient(x, y, 0, x, y, Math.max(0.1, radius))
+  gradient.addColorStop(0, withAlpha(color, coreAlpha))
+  gradient.addColorStop(0.55, withAlpha(color, coreAlpha * 0.35))
+  gradient.addColorStop(1, withAlpha(color, 0))
+  return gradient
+}
+
+function commandTint(command) {
+  return command.glow ?? command.stroke ?? canvasPalette.fallback
+}
+
+function drawStar(context, x, y, radius, glow, {spikes = false, coreScale = 0.3} = {}) {
+  context.globalCompositeOperation = "lighter"
+  context.globalAlpha = 1
+  context.fillStyle = radialBloom(context, x, y, radius, glow, 0.5)
+  context.beginPath()
+  context.arc(x, y, radius, 0, Math.PI * 2)
+  context.fill()
+  if (spikes) drawDiffractionSpikes(context, x, y, radius * 2.4, glow)
+  context.globalCompositeOperation = "source-over"
+  context.fillStyle = canvasPalette.starCore
+  context.globalAlpha = 0.95
+  context.beginPath()
+  context.arc(x, y, Math.max(0.9, radius * coreScale), 0, Math.PI * 2)
+  context.fill()
+}
+
+function drawDiffractionSpikes(context, x, y, reach, glow) {
+  const horizontal = context.createLinearGradient(x - reach, y, x + reach, y)
+  horizontal.addColorStop(0, withAlpha(glow, 0))
+  horizontal.addColorStop(0.5, withAlpha(glow, 0.55))
+  horizontal.addColorStop(1, withAlpha(glow, 0))
+  context.lineWidth = 0.8
+  context.strokeStyle = horizontal
+  context.beginPath()
+  context.moveTo(x - reach, y)
+  context.lineTo(x + reach, y)
+  context.stroke()
+  const vertical = context.createLinearGradient(x, y - reach, x, y + reach)
+  vertical.addColorStop(0, withAlpha(glow, 0))
+  vertical.addColorStop(0.5, withAlpha(glow, 0.55))
+  vertical.addColorStop(1, withAlpha(glow, 0))
+  context.strokeStyle = vertical
+  context.beginPath()
+  context.moveTo(x, y - reach)
+  context.lineTo(x, y + reach)
+  context.stroke()
+}
+
 function drawCommand(context, command, width, height) {
   context.save()
   if (command.type === "fiber-path") {
@@ -1138,30 +1200,101 @@ function drawCommand(context, command, width, height) {
   context.fillStyle = command.glow ?? command.stroke ?? canvasPalette.fallback
   context.lineWidth = 1 + (command.intensity ?? 0.2) * 2
   context.globalAlpha = 0.3 + (command.intensity ?? 0.2) * 0.6
+  context.lineCap = "round"
+  context.lineJoin = "round"
   context.beginPath()
 
   switch (command.type) {
-    case "ambient":
-      context.globalAlpha = command.coverage ?? 0.2
+    case "ambient": {
+      const coverage = command.coverage ?? 0.2
+      const sky = context.createLinearGradient(0, 0, 0, height)
+      sky.addColorStop(0, withAlpha(commandTint(command), coverage))
+      sky.addColorStop(0.62, withAlpha(commandTint(command), coverage * 0.42))
+      sky.addColorStop(1, withAlpha(commandTint(command), 0))
+      context.globalAlpha = 1
+      context.fillStyle = sky
       context.fillRect(0, 0, width, height)
+      drawAuroraCurtains(context, command, width, height)
       break
-    case "memory-band":
-      context.globalAlpha = 0.07
+    }
+    case "memory-band": {
+      const shelf = context.createLinearGradient(0, command.y, 0, command.y + command.height)
+      shelf.addColorStop(0, withAlpha(commandTint(command), 0))
+      shelf.addColorStop(1, withAlpha(commandTint(command), 0.07))
+      context.globalAlpha = 1
+      context.fillStyle = shelf
       context.fillRect(command.x, command.y, command.width, command.height)
-      context.globalAlpha = 0.42
+      context.globalAlpha = 0.5
+      context.fillStyle = commandTint(command)
       context.fillText(command.label, command.x + 6, command.y + Math.max(10, command.height * 0.55))
       break
-    case "memory-trace":
-      context.globalAlpha = 0.24 + (command.intensity ?? 0.5) * 0.2
-      context.arc(command.x, command.y, 3 + (command.intensity ?? 0.5) * 4, 0, Math.PI * 2)
+    }
+    case "memory-trace": {
+      const strength = command.intensity ?? 0.5
+      const radius = 3 + strength * 4
+      context.globalCompositeOperation = "lighter"
+      context.globalAlpha = 1
+      context.fillStyle = radialBloom(
+        context, command.x, command.y, radius * 2.6, commandTint(command), 0.18,
+      )
+      context.arc(command.x, command.y, radius * 2.6, 0, Math.PI * 2)
+      context.fill()
+      context.globalCompositeOperation = "source-over"
+      context.beginPath()
+      context.globalAlpha = 0.4 + strength * 0.25
+      context.fillStyle = commandTint(command)
+      context.arc(command.x, command.y, radius * 0.72, 0, Math.PI * 2)
       context.fill()
       break
-    case "ripple":
-    case "knot":
-    case "glow":
-      context.arc(command.x, command.y, command.radius, 0, Math.PI * 2)
-      command.type === "glow" ? context.fill() : context.stroke()
+    }
+    case "ripple": {
+      const radius = Math.max(1, command.radius)
+      const strength = command.intensity ?? 0.5
+      context.globalCompositeOperation = "lighter"
+      context.globalAlpha = 1
+      context.fillStyle = radialBloom(
+        context, command.x, command.y, radius, commandTint(command), 0.1 + strength * 0.14,
+      )
+      context.arc(command.x, command.y, radius, 0, Math.PI * 2)
+      context.fill()
+      context.globalCompositeOperation = "source-over"
+      context.beginPath()
+      context.globalAlpha = 0.5 + strength * 0.3
+      context.lineWidth = 1 + strength * 1.4
+      context.arc(command.x, command.y, radius, 0, Math.PI * 2)
+      context.stroke()
+      context.beginPath()
+      context.globalAlpha = 0.26 + strength * 0.2
+      context.lineWidth = 1
+      context.arc(command.x, command.y, radius * 0.62, 0, Math.PI * 2)
+      context.stroke()
+      context.beginPath()
+      context.globalAlpha = 0.14 + strength * 0.12
+      context.arc(command.x, command.y, radius * 1.24, 0, Math.PI * 2)
+      context.stroke()
+      drawStar(context, command.x, command.y, 2.4 + strength * 2, commandTint(command))
       break
+    }
+    case "knot":
+      drawKnotNode(context, command)
+      break
+    case "glow": {
+      const strength = command.intensity ?? 0.5
+      context.globalCompositeOperation = "lighter"
+      context.globalAlpha = 1
+      context.fillStyle = radialBloom(
+        context, command.x, command.y, command.radius, commandTint(command),
+        0.3 + strength * 0.3,
+      )
+      context.arc(command.x, command.y, command.radius, 0, Math.PI * 2)
+      context.fill()
+      context.globalCompositeOperation = "source-over"
+      context.beginPath()
+      context.globalAlpha = 0.9
+      context.arc(command.x, command.y, Math.max(2, command.radius * 0.14), 0, Math.PI * 2)
+      context.fill()
+      break
+    }
     case "tug-response": {
       const points = command.after ?? []
       if (points.length < 2) break
@@ -1177,6 +1310,10 @@ function drawCommand(context, command, width, height) {
       const last = points.at(-1)
       context.quadraticCurveTo(penultimate.x, penultimate.y, last.x, last.y)
       context.stroke()
+      drawStar(
+        context, last.x, last.y,
+        2.6 + (command.intensity ?? 0.5) * 2.2, commandTint(command),
+      )
       break
     }
     case "knot-connector":
@@ -1190,12 +1327,7 @@ function drawCommand(context, command, width, height) {
         command.curve.to.y,
       )
       context.stroke()
-      context.beginPath()
-      context.arc(command.x, command.y, command.radius, 0, Math.PI * 2)
-      context.stroke()
-      context.beginPath()
-      context.arc(command.x, command.y, command.radius * 0.3, 0, Math.PI * 2)
-      context.fill()
+      drawKnotNode(context, command)
       break
     case "knot-transition":
       for (const curve of command.curves) {
@@ -1210,12 +1342,7 @@ function drawCommand(context, command, width, height) {
         )
       }
       context.stroke()
-      context.beginPath()
-      context.arc(command.x, command.y, command.radius, 0, Math.PI * 2)
-      context.stroke()
-      context.beginPath()
-      context.arc(command.x, command.y, command.radius * 0.3, 0, Math.PI * 2)
-      context.fill()
+      drawKnotNode(context, command)
       break
     case "illuminate-transition":
       context.globalAlpha = 0.35 + (command.intensity ?? 0.5) * 0.35
@@ -1231,23 +1358,10 @@ function drawCommand(context, command, width, height) {
         )
       }
       context.stroke()
-      context.beginPath()
-      context.globalAlpha = 0.12 + (command.intensity ?? 0.5) * 0.18
-      context.arc(command.x, command.y, command.radius, 0, Math.PI * 2)
-      context.fill()
-      context.beginPath()
-      context.globalAlpha = 0.7
-      context.arc(command.x, command.y, Math.max(2.5, command.radius * 0.16), 0, Math.PI * 2)
-      context.fill()
+      drawIlluminateBloom(context, command)
       break
     case "illuminate-bloom":
-      context.globalAlpha = 0.12 + (command.intensity ?? 0.5) * 0.18
-      context.arc(command.x, command.y, command.radius, 0, Math.PI * 2)
-      context.fill()
-      context.beginPath()
-      context.globalAlpha = 0.7
-      context.arc(command.x, command.y, Math.max(2.5, command.radius * 0.16), 0, Math.PI * 2)
-      context.fill()
+      drawIlluminateBloom(context, command)
       break
     case "anchor-hit":
       break
@@ -1264,18 +1378,105 @@ function drawCommand(context, command, width, height) {
       )
       context.stroke()
       break
-    case "seam":
+    case "seam": {
+      const seam = context.createLinearGradient(0, 0, 0, height)
+      seam.addColorStop(0, withAlpha(command.stroke ?? canvasPalette.fallback, 0))
+      seam.addColorStop(0.5, withAlpha(command.stroke ?? canvasPalette.fallback, 0.36))
+      seam.addColorStop(1, withAlpha(command.stroke ?? canvasPalette.fallback, 0))
+      context.globalAlpha = 1
+      context.lineWidth = 1
+      context.strokeStyle = seam
       context.moveTo(command.x, 0)
       context.lineTo(command.x, height)
       context.stroke()
       break
+    }
     default:
       context.moveTo(command.x - 8, command.y)
       context.lineTo(command.x + 8, command.y)
       context.stroke()
+      drawStar(
+        context, command.x, command.y,
+        2 + (command.intensity ?? 0.5) * 1.6, commandTint(command),
+      )
   }
 
   context.restore()
+}
+
+function drawAuroraCurtains(context, command, width, height) {
+  const random = xorshift32(command.sequence)
+  const coverage = command.coverage ?? 0.2
+  context.globalCompositeOperation = "lighter"
+  context.lineCap = "round"
+  for (let index = 0; index < 3; index++) {
+    const x = width * (0.12 + random.nextFloat() * 0.76)
+    const sway = (random.nextFloat() - 0.5) * width * 0.06
+    const drop = height * (0.3 + random.nextFloat() * 0.18)
+    const band = context.createLinearGradient(0, 0, 0, drop)
+    band.addColorStop(0, withAlpha(commandTint(command), coverage * 0.85))
+    band.addColorStop(1, withAlpha(commandTint(command), 0))
+    context.strokeStyle = band
+    context.lineWidth = 34 + random.nextFloat() * 44
+    context.globalAlpha = 1
+    context.beginPath()
+    context.moveTo(x, 0)
+    context.quadraticCurveTo(x + sway, drop * 0.55, x + sway * 1.6, drop)
+    context.stroke()
+  }
+  context.globalCompositeOperation = "source-over"
+}
+
+function drawKnotNode(context, command) {
+  const strength = command.intensity ?? 0.5
+  const separation = Math.max(2.4, command.radius * 0.42)
+  const angle = (command.visual?.bend ?? 0) * Math.PI
+  const offsetX = Math.cos(angle) * separation
+  const offsetY = Math.sin(angle) * separation
+  context.globalCompositeOperation = "lighter"
+  context.globalAlpha = 1
+  context.fillStyle = radialBloom(
+    context, command.x, command.y, command.radius * 2.1, commandTint(command),
+    0.16 + strength * 0.14,
+  )
+  context.beginPath()
+  context.arc(command.x, command.y, command.radius * 2.1, 0, Math.PI * 2)
+  context.fill()
+  context.globalCompositeOperation = "source-over"
+  context.beginPath()
+  context.globalAlpha = 0.4 + strength * 0.25
+  context.lineWidth = 1
+  context.strokeStyle = command.stroke ?? canvasPalette.fallback
+  context.arc(command.x, command.y, separation * 1.7, 0, Math.PI * 2)
+  context.stroke()
+  drawStar(
+    context, command.x - offsetX, command.y - offsetY,
+    2.2 + strength * 1.8, commandTint(command),
+  )
+  drawStar(
+    context, command.x + offsetX, command.y + offsetY,
+    1.7 + strength * 1.4, commandTint(command),
+  )
+}
+
+function drawIlluminateBloom(context, command) {
+  const strength = command.intensity ?? 0.5
+  const radius = Math.max(1, command.radius)
+  context.globalCompositeOperation = "lighter"
+  context.globalAlpha = 1
+  context.fillStyle = radialBloom(
+    context, command.x, command.y, radius, commandTint(command), 0.26 + strength * 0.3,
+  )
+  context.beginPath()
+  context.arc(command.x, command.y, radius, 0, Math.PI * 2)
+  context.fill()
+  drawDiffractionSpikes(context, command.x, command.y, radius * 1.6, commandTint(command))
+  context.globalCompositeOperation = "source-over"
+  context.beginPath()
+  context.globalAlpha = 0.92
+  context.fillStyle = canvasPalette.starCore
+  context.arc(command.x, command.y, Math.max(2.5, radius * 0.16), 0, Math.PI * 2)
+  context.fill()
 }
 
 function drawSourceMaterial(context, command) {
@@ -1296,84 +1497,88 @@ function drawSourceMaterial(context, command) {
 }
 
 function drawConversationFan(context, command) {
-  paintMaterialLayers(context, command, () => {
-    traceMaterialAttachment(context, command)
-    for (const branch of command.branches) {
-      const {curve} = branch
-      context.moveTo(curve.from.x, curve.from.y)
-      context.bezierCurveTo(
-        curve.control1.x,
-        curve.control1.y,
-        curve.control2.x,
-        curve.control2.y,
-        curve.to.x,
-        curve.to.y,
-      )
-      if (branch.returns && branch.returnPoint) {
-        context.lineTo(branch.returnPoint.x, branch.returnPoint.y)
-      }
+  drawMaterialAttachment(context, command)
+  context.lineCap = "round"
+  context.lineJoin = "round"
+  context.setLineDash([1, 4])
+  context.beginPath()
+  context.lineWidth = 1
+  context.globalAlpha = 0.38 + command.intensity * 0.22
+  context.strokeStyle = command.stroke
+  for (const branch of command.branches) {
+    const {curve} = branch
+    context.moveTo(curve.from.x, curve.from.y)
+    context.bezierCurveTo(
+      curve.control1.x,
+      curve.control1.y,
+      curve.control2.x,
+      curve.control2.y,
+      curve.to.x,
+      curve.to.y,
+    )
+    if (branch.returns && branch.returnPoint) {
+      context.lineTo(branch.returnPoint.x, branch.returnPoint.y)
     }
-  }, {dash: [1, 5], lineCap: "round", lineJoin: "round"})
+  }
+  context.stroke()
+  context.setLineDash([])
 
-  context.fillStyle = command.stroke
-  context.globalAlpha = 0.78
   for (const branch of command.branches) {
     const point = branch.curve.to
-    context.beginPath()
-    context.moveTo(point.x, point.y - 2.8)
-    context.lineTo(point.x + 3.5, point.y + 2.8)
-    context.lineTo(point.x - 3.5, point.y + 2.8)
-    context.lineTo(point.x, point.y - 2.8)
-    context.fill()
+    drawStar(context, point.x, point.y, 2.2 + command.intensity * 1.8, command.glow)
   }
+  drawStar(context, command.x, command.y, 3.6 + command.intensity * 3, command.glow, {
+    spikes: command.intensity > 0.55,
+  })
 }
 
 function drawRouteFork(context, command) {
-  paintMaterialLayers(context, command, () => {
-    traceMaterialAttachment(context, command)
-    for (const segment of command.segments) {
-      const [origin, elbow, endpoint] = segment.points
-      context.moveTo(origin.x, origin.y)
-      context.lineTo(elbow.x, elbow.y)
-      context.lineTo(endpoint.x, endpoint.y)
-    }
-  }, {dash: [7, 3], lineCap: "square", lineJoin: "miter"})
-
+  drawMaterialAttachment(context, command)
+  context.lineCap = "round"
+  context.lineJoin = "miter"
+  context.setLineDash([])
+  context.beginPath()
+  context.lineWidth = 1
+  context.globalAlpha = 0.42 + command.intensity * 0.22
   context.strokeStyle = command.stroke
-  context.globalAlpha = 0.82
-  context.lineWidth = Math.max(1, command.width * 0.5)
   for (const segment of command.segments) {
-    const endpoint = segment.points.at(-1)
-    context.beginPath()
-    context.moveTo(endpoint.x - 3.5, endpoint.y - 3.5)
-    context.lineTo(endpoint.x + 3.5, endpoint.y)
-    context.lineTo(endpoint.x - 3.5, endpoint.y + 3.5)
-    context.stroke()
+    const [origin, elbow, endpoint] = segment.points
+    context.moveTo(origin.x, origin.y)
+    context.lineTo(elbow.x, elbow.y)
+    context.lineTo(endpoint.x, endpoint.y)
   }
+  context.stroke()
+
+  for (const segment of command.segments) {
+    const [, elbow, endpoint] = segment.points
+    drawStar(context, elbow.x, elbow.y, 1.5 + command.intensity, command.glow)
+    drawStar(context, endpoint.x, endpoint.y, 2 + command.intensity * 1.6, command.glow)
+  }
+  drawStar(context, command.x, command.y, 3.2 + command.intensity * 2.4, command.glow)
 }
 
 function drawSlotBraid(context, command) {
   const gaps = new Set(command.gapMarkers.map(marker => marker.afterSlotOrder))
-  paintMaterialLayers(context, command, () => {
-    traceMaterialAttachment(context, command)
-    for (const strand of command.strands) {
-      for (let index = 0; index < strand.length - 1; index++) {
-        if (gaps.has(index)) continue
-        context.moveTo(strand[index].x, strand[index].y)
-        context.lineTo(strand[index + 1].x, strand[index + 1].y)
-      }
-    }
-  }, {dash: [], lineCap: "butt", lineJoin: "round"})
+  drawMaterialAttachment(context, command)
+  context.lineCap = "round"
+  context.lineJoin = "round"
+  context.setLineDash([])
+  context.beginPath()
+  context.lineWidth = 1
+  context.globalAlpha = 0.3 + command.intensity * 0.16
+  context.strokeStyle = command.stroke
+  for (let index = 0; index < command.beads.length - 1; index++) {
+    if (gaps.has(index)) continue
+    context.moveTo(command.beads[index].x, command.beads[index].y)
+    context.lineTo(command.beads[index + 1].x, command.beads[index + 1].y)
+  }
+  context.stroke()
 
-  context.fillStyle = command.stroke
-  context.globalAlpha = 0.86
   for (const bead of command.beads) {
-    context.beginPath()
-    context.arc(bead.x, bead.y, bead.radius, 0, Math.PI * 2)
-    context.fill()
+    drawStar(context, bead.x, bead.y, bead.radius + 1.2, command.glow)
   }
   context.strokeStyle = command.glow
-  context.globalAlpha = 0.72
+  context.globalAlpha = 0.55
   context.lineWidth = 1
   for (const marker of command.gapMarkers) {
     context.beginPath()
@@ -1386,46 +1591,28 @@ function drawSlotBraid(context, command) {
 }
 
 function drawPublicPulse(context, command) {
-  paintMaterialLayers(context, command, () => {
-    traceMaterialAttachment(context, command)
-    for (const crystal of command.crystals) tracePolyline(context, crystal.points)
-  }, {dash: [2, 3], lineCap: "square", lineJoin: "miter"})
-
-  context.fillStyle = command.stroke
-  context.globalAlpha = 0.74
-  for (const crystal of command.crystals) {
-    context.beginPath()
-    context.arc(
-      command.x,
-      command.y,
-      2.1 + command.intensity * 1.6,
-      0,
-      Math.PI * 2,
-    )
-    context.fill()
-  }
-}
-
-function paintMaterialLayers(context, command, trace, {dash, lineCap, lineJoin}) {
-  const material = command.material ?? {
-    glow: {width: 5, alpha: 0.08},
-    body: {width: 2, alpha: 0.42},
-    core: {width: 1, alpha: 0.82},
-  }
-  context.lineCap = lineCap
-  context.lineJoin = lineJoin
-  context.setLineDash(dash)
-
-  for (const [layer, style] of Object.entries(material)) {
-    context.beginPath()
-    context.lineWidth = style.width
-    context.globalAlpha = style.alpha
-    context.strokeStyle = layer === "glow" ? command.glow : command.stroke
-    trace()
-    context.stroke()
-  }
-
+  drawMaterialAttachment(context, command)
+  context.lineCap = "round"
+  context.lineJoin = "miter"
   context.setLineDash([])
+  context.beginPath()
+  context.lineWidth = 1
+  context.globalAlpha = 0.55
+  context.strokeStyle = command.stroke
+  for (const crystal of command.crystals) tracePolyline(context, crystal.points)
+  context.stroke()
+
+  const ringRadius = (8 + command.intensity * 8) * 1.15
+  context.globalCompositeOperation = "lighter"
+  context.beginPath()
+  context.globalAlpha = 0.2
+  context.strokeStyle = command.glow
+  context.arc(command.x, command.y, ringRadius, 0, Math.PI * 2)
+  context.stroke()
+  context.globalCompositeOperation = "source-over"
+  drawStar(context, command.x, command.y, 2.8 + command.intensity * 2.2, command.glow, {
+    spikes: true,
+  })
 }
 
 function tracePolyline(context, points) {
@@ -1434,26 +1621,96 @@ function tracePolyline(context, points) {
   for (const point of points.slice(1)) context.lineTo(point.x, point.y)
 }
 
-function traceMaterialAttachment(context, command) {
+function drawMaterialAttachment(context, command) {
   if (!command.attachment) return
+  context.beginPath()
+  context.lineCap = "round"
+  context.setLineDash([1, 6])
+  context.lineWidth = 1
+  context.globalAlpha = 0.2 + (command.intensity ?? 0.5) * 0.12
+  context.strokeStyle = command.glow ?? command.stroke ?? canvasPalette.fallback
   context.moveTo(command.attachment.x, command.attachment.y)
   context.lineTo(command.x, command.y)
+  context.stroke()
+  context.setLineDash([])
 }
 
 function drawFiberPath(context, command) {
-  const material = command.material ?? {
-    glow: {width: 5, alpha: 0.08},
-    body: {width: 2, alpha: 0.42},
-    core: {width: 1, alpha: 0.82},
+  context.lineCap = "round"
+  context.lineJoin = "round"
+  if (command.role === "spine") {
+    drawNebulaPath(context, command)
+    return
   }
-  for (const [layer, style] of Object.entries(material)) {
+  drawFilamentPath(context, command)
+}
+
+function drawNebulaPath(context, command) {
+  const nebulaLayers = [
+    {width: 34, alpha: 0.045},
+    {width: 18, alpha: 0.075},
+    {width: 8, alpha: 0.11},
+  ]
+  context.globalCompositeOperation = "lighter"
+  for (const layer of nebulaLayers) {
     context.beginPath()
-    context.lineWidth = style.width
-    context.globalAlpha = style.alpha
-    context.strokeStyle = layer === "glow" ? command.glow : command.stroke
+    context.lineWidth = layer.width
+    context.globalAlpha = layer.alpha
+    context.strokeStyle = command.glow
     traceFiberSegments(context, command.segments)
     context.stroke()
   }
+  context.globalCompositeOperation = "source-over"
+  context.beginPath()
+  context.lineWidth = 1
+  context.globalAlpha = 0.5
+  context.strokeStyle = command.stroke
+  traceFiberSegments(context, command.segments)
+  context.stroke()
+  drawStarDust(context, command, {drift: 26, density: 16})
+}
+
+function drawFilamentPath(context, command) {
+  const chartLine = command.role === "connector" || command.role === "capillary"
+  context.setLineDash(chartLine ? [1, 5] : [])
+  context.beginPath()
+  context.lineWidth = 1
+  context.globalAlpha = 0.18 + (command.intensity ?? 0.5) * 0.16
+  context.strokeStyle = command.glow
+  traceFiberSegments(context, command.segments)
+  context.stroke()
+  context.setLineDash([])
+  drawStarDust(context, command, {drift: 8, density: 44})
+  for (const segment of command.segments) {
+    const tip = segment.curve.to
+    drawStar(
+      context,
+      tip.x,
+      tip.y,
+      1.7 + (segment.intensity ?? 0.5) * 1.9,
+      command.glow ?? command.stroke ?? canvasPalette.fallback,
+    )
+  }
+}
+
+function drawStarDust(context, command, {drift, density}) {
+  context.globalCompositeOperation = "lighter"
+  for (const segment of command.segments) {
+    const random = xorshift32(segment.transitionSequence ?? command.sequence)
+    const count = Math.max(1, Math.min(9, Math.round((segment.length ?? 30) / density)))
+    for (let index = 0; index < count; index++) {
+      const along = cubicPrefix(segment.curve, random.nextFloat()).to
+      const scatter = (random.nextFloat() - 0.5) * drift
+      const radius = 0.5 + random.nextFloat() * 1.1
+      context.globalAlpha = 0.2 + random.nextFloat() * 0.4
+      context.fillStyle = command.glow ?? canvasPalette.starCore
+      context.beginPath()
+      context.arc(along.x, along.y + scatter, radius, 0, Math.PI * 2)
+      context.fill()
+    }
+  }
+  context.globalCompositeOperation = "source-over"
+  context.globalAlpha = 1
 }
 
 function traceFiberSegments(context, segments) {
@@ -1470,11 +1727,20 @@ function traceFiberSegments(context, segments) {
 function drawTargetSeed(context, lane, viewport, atLiveEdge) {
   if (!atLiveEdge) return
 
+  const x = viewport.width - 14
+  const y = laneToY(lane, viewport)
   context.save()
+  context.globalCompositeOperation = "lighter"
+  context.globalAlpha = 1
+  context.fillStyle = radialBloom(context, x, y, 16, canvasPalette.targetSeed, 0.34)
+  context.beginPath()
+  context.arc(x, y, 16, 0, Math.PI * 2)
+  context.fill()
+  context.globalCompositeOperation = "source-over"
   context.fillStyle = canvasPalette.targetSeed
   context.globalAlpha = 0.92
   context.beginPath()
-  context.arc(viewport.width - 14, laneToY(lane, viewport), 3.5, 0, Math.PI * 2)
+  context.arc(x, y, 3.5, 0, Math.PI * 2)
   context.fill()
   context.restore()
 }
@@ -1485,18 +1751,26 @@ function drawSelectionHalo(context, commands, selectedSequence) {
   if (!command) return
 
   const {hit} = command
+  const centerX = hit.x + hit.width / 2
+  const centerY = hit.y + hit.height / 2
+  const radius = Math.max(hit.width, hit.height) * 0.62
   context.save()
+  context.globalCompositeOperation = "lighter"
+  context.globalAlpha = 1
+  context.fillStyle = radialBloom(context, centerX, centerY, radius * 1.7, canvasPalette.selectionHalo, 0.16)
+  context.beginPath()
+  context.arc(centerX, centerY, radius * 1.7, 0, Math.PI * 2)
+  context.fill()
+  context.globalCompositeOperation = "source-over"
   context.strokeStyle = canvasPalette.selectionHalo
-  context.globalAlpha = 0.54
+  context.globalAlpha = 0.66
   context.lineWidth = 1
   context.beginPath()
-  context.arc(
-    hit.x + hit.width / 2,
-    hit.y + hit.height / 2,
-    Math.max(hit.width, hit.height) * 0.62,
-    0,
-    Math.PI * 2,
-  )
+  context.arc(centerX, centerY, radius, 0, Math.PI * 2)
+  context.stroke()
+  context.globalAlpha = 0.3
+  context.beginPath()
+  context.arc(centerX, centerY, radius + 4, 0, Math.PI * 2)
   context.stroke()
   context.restore()
 }
@@ -1511,10 +1785,17 @@ function drawViewerPulses(context, count, width, height, animationTime) {
     const y = ((index + 1) / (count + 1)) * height
     const radius = 2.5 + (Math.sin(phase) + 1) * 1.5
     context.save()
-    context.globalAlpha = 0.16
+    context.globalCompositeOperation = "lighter"
+    context.globalAlpha = 1
+    context.fillStyle = radialBloom(context, width - 14, y, radius * 3, canvasPalette.viewerPulse, 0.14)
+    context.beginPath()
+    context.arc(width - 14, y, radius * 3, 0, Math.PI * 2)
+    context.fill()
+    context.globalCompositeOperation = "source-over"
+    context.globalAlpha = 0.3
     context.fillStyle = canvasPalette.viewerPulse
     context.beginPath()
-    context.arc(width - 14, y, radius, 0, Math.PI * 2)
+    context.arc(width - 14, y, radius * 0.9, 0, Math.PI * 2)
     context.fill()
     context.restore()
   }
